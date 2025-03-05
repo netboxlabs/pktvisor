@@ -57,12 +57,14 @@ size_t IDnsResource::decodeName(const char *encodedName, char *result, int itera
     char *resultPtr = result;
     resultPtr[0] = 0;
 
-    size_t curOffsetInLayer = (uint8_t *)encodedName - m_DnsLayer->m_Data;
-    if (curOffsetInLayer + 1 > m_DnsLayer->m_DataLen)
-        return encodedNameLength;
+    if (curOffsetInLayer >= m_DnsLayer->m_DataLen) {
+        PCPP_LOG_ERROR("decodeName: curOffsetInLayer (%zu) >= m_DnsLayer->m_DataLen (%zu)", curOffsetInLayer, m_DnsLayer->m_DataLen);
+        return 0;
+    }
 
     if (iteration > 20) {
-        return encodedNameLength;
+        PCPP_LOG_ERROR("decodeName: recursion depth (%d) exceeded limit", iteration);
+        return 0;
     }
 
     uint8_t wordLength = encodedName[0];
@@ -71,17 +73,25 @@ size_t IDnsResource::decodeName(const char *encodedName, char *result, int itera
     while (wordLength != 0) {
         // A pointer to another place in the packet
         if ((wordLength & 0xc0) == 0xc0) {
-            if (curOffsetInLayer + 2 > m_DnsLayer->m_DataLen || encodedNameLength > 255)
-                return encodedNameLength;
+            if (curOffsetInLayer + 2 > m_DnsLayer->m_DataLen || encodedNameLength >= 255) {
+                PCPP_LOG_ERROR("decodeName pointer case: out-of-bounds: curOffsetInLayer (%zu) + 2 > m_DnsLayer->m_DataLen (%zu) or encodedNameLength (%zu) >= 255", curOffsetInLayer, m_DnsLayer->m_DataLen, encodedNameLength);
+                return 0;
+            }
 
             uint16_t offsetInLayer = (wordLength & 0x3f) * 256 + (0xFF & encodedName[1]);
             if (offsetInLayer < sizeof(dnshdr) || offsetInLayer >= m_DnsLayer->m_DataLen) {
-                PCPP_LOG_ERROR("DNS parsing error: name pointer is illegal");
+                PCPP_LOG_ERROR("DNS parsing error: name pointer is illegal, offsetInLayer = %u", offsetInLayer);
                 return 0;
             }
 
             char tempResult[256];
             memset(tempResult, 0, 256);
+            size_t ret = decodeName((const char *)(m_DnsLayer->m_Data + offsetInLayer), tempResult, iteration + 1);
+            if (ret == 0) {
+                PCPP_LOG_ERROR("decodeName: recursive call failed at offset %u", offsetInLayer);
+                return 0;
+            }
+
             int i = 0;
             decodeName((const char *)(m_DnsLayer->m_Data + offsetInLayer), tempResult, iteration + 1);
             while (tempResult[i] != 0 && decodedNameLength < 255) {
@@ -93,20 +103,12 @@ size_t IDnsResource::decodeName(const char *encodedName, char *result, int itera
             resultPtr[0] = 0;
 
             // in this case the length of the pointer is: 1 byte for 0xc0 + 1 byte for the offset itself
-            return encodedNameLength + sizeof(uint16_t);
+            return encodedNameLength + sizeof(uint16_t); // note - just hard code to 2 for simplicity?
         } else {
             // return if next word would be outside of the DNS layer or overflow the buffer behind resultPtr
-            if (curOffsetInLayer + wordLength + 1 > m_DnsLayer->m_DataLen || encodedNameLength + wordLength > 255) {
-                // add the last '\0' to the decoded string
-                if (encodedNameLength == 256) {
-                    resultPtr--;
-                    decodedNameLength--;
-                } else {
-                    encodedNameLength++;
-                }
-
-                resultPtr[0] = 0;
-                return encodedNameLength;
+            if (curOffsetInLayer + wordLength + 1 > m_DnsLayer->m_DataLen || encodedNameLength + wordLength => 255) {
+                PCPP_LOG_ERROR("decodeName: label out-of-bounds: curOffsetInLayer (%zu) + wordLength (%u) + 1 > m_DnsLayer->m_DataLen (%zu) or encodedNameLength (%zu) + wordLength (%u) >= 255",curOffsetInLayer, wordLength, m_DnsLayer->m_DataLen, encodedNameLength, wordLength);
+                return 0;
             }
 
             memcpy(resultPtr, encodedName + 1, wordLength);
@@ -118,17 +120,9 @@ size_t IDnsResource::decodeName(const char *encodedName, char *result, int itera
             encodedNameLength += wordLength + 1;
 
             curOffsetInLayer = (uint8_t *)encodedName - m_DnsLayer->m_Data;
-            if (curOffsetInLayer + 1 > m_DnsLayer->m_DataLen) {
-                // add the last '\0' to the decoded string
-                if (encodedNameLength == 256) {
-                    decodedNameLength--;
-                    resultPtr--;
-                } else {
-                    encodedNameLength++;
-                }
-
-                resultPtr[0] = 0;
-                return encodedNameLength;
+            if (curOffsetInLayer >= m_DnsLayer->m_DataLen) {
+                PCPP_LOG_ERROR("decodeName: after label, curOffsetInLayer (%zu) >= m_DnsLayer->m_DataLen (%zu)", curOffsetInLayer, m_DnsLayer->m_DataLen);
+                return 0;
             }
 
             wordLength = encodedName[0];
