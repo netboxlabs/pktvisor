@@ -57,6 +57,7 @@ size_t IDnsResource::decodeName(const char *encodedName, char *result, int itera
     char *resultPtr = result;
     resultPtr[0] = 0;
 
+    size_t curOffsetInLayer = (uint8_t *)encodedName - m_DnsLayer->m_Data;
     if (curOffsetInLayer >= m_DnsLayer->m_DataLen) {
         PCPP_LOG_ERROR("decodeName: curOffsetInLayer (%zu) >= m_DnsLayer->m_DataLen (%zu)", curOffsetInLayer, m_DnsLayer->m_DataLen);
         return 0;
