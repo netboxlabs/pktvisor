@@ -36,8 +36,8 @@ jobs:
         id: conan
         uses: turtlebrowser/get-conan@c171f295f3f507360ee018736a6608731aa2109d #v1.2
 
-      - name: Setup OSX Environment
-        run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> $GITHUB_ENV
+   #   - name: Setup OSX Environment
+   #     run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> $GITHUB_ENV
          
       - name: Setup Conan Cache
         uses: actions/cache@v4
