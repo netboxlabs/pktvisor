@@ -27,6 +27,7 @@ class Pktvisor(ConanFile):
         self.requires("fmt/10.2.1", force=True)
         self.requires("spdlog/1.15.0")
         self.requires("uvw/3.4.0")
+        self.requires("libnghttp2/1.61.0")
         self.requires("yaml-cpp/0.8.0")
         self.requires("robin-hood-hashing/3.11.5")
         self.requires("libcurl/8.11.1")

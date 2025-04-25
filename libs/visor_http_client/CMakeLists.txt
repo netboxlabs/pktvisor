@@ -13,12 +13,16 @@ target_include_directories(VisorLibHttpClient
         ${CONAN_LIBS_LIBNGHTTP2}
         )
 
+find_package(libnghttp2 REQUIRED)
+find_package(uvw REQUIRED)
+find_package(OpenSSL REQUIRED)
+
 target_link_libraries(VisorLibHttpClient
         PUBLIC
-        ${CONAN_LIBS_LIBNGHTTP2}
-        ${CONAN_LIBS_LIBUV}
-        ${CONAN_LIBS_UVW}
         ${CONAN_LIBS_OPENSSL}
+        OpenSSL::SSL
+        uvw::uvw
+        libnghttp2::libnghttp2
         )
 
 ## TEST SUITE
