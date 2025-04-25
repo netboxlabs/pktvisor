@@ -11,14 +11,16 @@
 #include "UnixFrameSession.h"
 #endif
 #include "InputStream.h"
-#include "pb/dnstap.pb.h"
 #include "utils.h"
 #ifdef __GNUC__
 #pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#pragma GCC diagnostic ignored "-Woverflow"
 #pragma GCC diagnostic ignored "-Wold-style-cast"
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #pragma GCC diagnostic ignored "-Wzero-as-null-pointer-constant"
 #endif
+#include "pb/dnstap.pb.h"
 #include <pcapplusplus/DnsLayer.h>
 #ifdef __GNUC__
 #pragma GCC diagnostic pop

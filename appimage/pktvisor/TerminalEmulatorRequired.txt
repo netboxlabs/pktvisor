@@ -1,1 +1,1 @@
-This app needs to be run from a terminal to function correctly. See the docs at https://github.com/orb-community/pktvisor for more details.
+This app needs to be run from a terminal to function correctly. See the docs at https://github.com/netboxlabs/pktvisor for more details.

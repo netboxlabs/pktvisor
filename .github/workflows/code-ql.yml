@@ -2,7 +2,6 @@
 name: "CodeQL"
 
 on:
-
   schedule:
   #run 5 minutes after midnight daily
     - cron: '5 0 * * *'
@@ -18,23 +17,28 @@ jobs:
 
     strategy:
       fail-fast: false
-      #matrix:
-      #  language: [ 'cpp', 'go', 'python' ]
-        # CodeQL supports [ 'cpp', 'csharp', 'go', 'java', 'javascript', 'python', 'ruby' ]
-        # Learn more about CodeQL language support at https://aka.ms/codeql-docs/language-support
 
     env:
-      CC: gcc-10
-      CXX: g++-10
-      CONAN_USER_HOME: "${{github.workspace}}"
+      CC: gcc
+      CXX: g++
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
+
+    - name: Free disk space
+      run: | 
+        sudo swapoff -a
+        sudo rm -f /swapfile
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo apt clean
+        df -h
 
     # Initializes the CodeQL tools for scanning.
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v2
+      uses: github/codeql-action/init@v3
       with:
         languages: 'cpp'
         # If you wish to specify custom queries, you can do so here or in a config file.
@@ -43,8 +47,8 @@ jobs:
         
         # Details on CodeQL's query packs refer to : https://docs.github.com/en/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-code-scanning#using-queries-in-ql-packs
         # queries: security-extended,security-and-quality
-        queries: ns1/NS1QLPacks/codeql/cpp/NS1-security.qls@main
-        config-file: ns1/NS1QLPacks/codeql/NS1-codeql-config.yml@main
+        queries: ./.github/codeql/security.qls
+        config-file: ./.github/codeql/config.yml
         
     # Autobuild attempts to build any compiled languages  (C/C++, C#, or Java).
     # If this step fails, then you should remove it and run the build manually (see below)
@@ -60,40 +64,41 @@ jobs:
     - run: |
         # Run Build - set up dependencies, env vars, compile, and make test
         #install conan
-        pip install --no-cache-dir 'conan==1.61.0' --force-reinstall
-        # create conan config
-        CONAN_V2_MODE=1 conan config init
-        conan config set general.revisions_enabled=1
-        # add custom compiler settings for libc
-        python3 -c 'import yaml; p = "${{env.CONAN_USER_HOME}}/.conan/settings.yml"; d = yaml.safe_load(open(p)); d["compiler"]["gcc"]["libc"] = ["None", "glibc", "musl"]; yaml.safe_dump(d, open(p, "w"))'
-        # Create Conan host profile
-        cat > "${{env.CONAN_USER_HOME}}/.conan/profiles/host" << "EOF"
-        [settings]
-        os=Linux
-        os_build=Linux
-        arch=${{matrix.conan_arch}}
-        arch_build=x86_64
-        compiler=gcc
-        compiler.version=11
-        compiler.libcxx=libstdc++11
-        compiler.libc=musl
-        build_type=Release
-        [options]
-        pcapplusplus:with_musl=True
-        [build_requires]
-        [env]
-        CC=${{github.workspace}}/toolchain/bin/${{matrix.cc}}
-        CXX=${{github.workspace}}/toolchain/bin/${{matrix.cxx}}
-        LDFLAGS=${{matrix.ldflags}}
-        EOF
+        pip install --no-cache-dir conan --force-reinstall
         # clone the repository, not sure if this needs to be done
-        git clone https://github.com/orb-community/pktvisor.git
+        git clone https://github.com/netboxlabs/pktvisor.git
         cd pktvisor
         mkdir build && cd build
         # configure and handle dependencies
-        cmake -DCMAKE_BUILD_TYPE=Release ..
+        cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=./cmake/conan_provider.cmake ..
         # build and run tests
-        make all test
+        sudo make all test
+        #remove conan files
+        rm -rf p/
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v2
+      uses: github/codeql-action/analyze@v3
+      with:
+        category: "/language:cpp"
+        output: sarif-results
+        upload: failure-only
+
+    - name: filter-sarif
+      uses: advanced-security/filter-sarif@v1
+      with:
+        patterns: |
+          -pktvisor/build/p/**/*
+        input: sarif-results/cpp.sarif
+        output: sarif-results/cpp.sarif
+
+    - name: Upload SARIF
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: sarif-results/cpp.sarif
+
+    - name: Upload loc as a Build Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: sarif-results
+        path: sarif-results
+        retention-days: 1

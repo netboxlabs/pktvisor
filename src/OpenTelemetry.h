@@ -5,9 +5,18 @@
 #pragma once
 
 #include "HttpServer.h"
-#include "opentelemetry/proto/collector/metrics/v1/metrics_service.pb.h"
 #include <functional>
 #include <timer.hpp>
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#pragma GCC diagnostic ignored "-Woverflow"
+#pragma GCC diagnostic ignored "-Wzero-as-null-pointer-constant"
+#endif
+#include "opentelemetry/proto/collector/metrics/v1/metrics_service.pb.h"
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
 
 namespace visor {
 

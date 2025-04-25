@@ -31,14 +31,14 @@ if(NOT WIN32)
     set(DNSTAP_ADDITIONAL_LIBS fstrm)
 endif()
 
+find_package(uvw REQUIRED)
+
 target_link_libraries(VisorInputDnstap
         PUBLIC
         ${DNSTAP_ADDITIONAL_LIBS}
         Visor::Core
         Visor::Lib::Utils
-        ${CONAN_LIBS_PROTOBUF}
-        ${CONAN_LIBS_LIBUV}
-        ${CONAN_LIBS_UVW}
+        uvw::uvw
         )
 
 set(VISOR_STATIC_PLUGINS ${VISOR_STATIC_PLUGINS} Visor::Input::Dnstap PARENT_SCOPE)

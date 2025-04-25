@@ -24,10 +24,12 @@ set(VISOR_STATIC_PLUGINS ${VISOR_STATIC_PLUGINS} Visor::Input::Mock PARENT_SCOPE
 ## TEST SUITE
 add_executable(unit-tests-input-mock test_mock.cpp)
 
+find_package(Catch2 REQUIRED)
+
 target_link_libraries(unit-tests-input-mock
         PRIVATE
         Visor::Input::Mock
-        ${CONAN_LIBS_CATCH2})
+        Catch2::Catch2WithMain)
 
 add_test(NAME unit-tests-input-mock
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/src

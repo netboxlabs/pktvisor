@@ -1,5 +1,9 @@
 message(STATUS "Visor Lib DNS Helper")
 
+find_package(PcapPlusPlus REQUIRED)
+find_package(Catch2 REQUIRED)
+find_package(fmt REQUIRED)
+
 add_library(VisorLibDns
         dns.cpp
         DnsLayer.cpp
@@ -16,12 +20,8 @@ target_include_directories(VisorLibDns
 target_link_libraries(VisorLibDns
         PUBLIC
         Visor::Lib::Tcp
-        ${CONAN_LIBS_PCAPPLUSPLUS}
-        ${CONAN_LIBS_PTHREADS4W}
-        ${CONAN_LIBS_LIBPCAP}
-        ${CONAN_LIBS_NPCAP}
-        ${CONAN_LIBS_SPDLOG}
-        ${CONAN_LIBS_FMT}
+        PcapPlusPlus::PcapPlusPlus
+        fmt::fmt
         )
 
 ## TEST SUITE
@@ -32,7 +32,7 @@ add_executable(unit-tests-visor-dns
 target_link_libraries(unit-tests-visor-dns
         PRIVATE
         Visor::Lib::Dns
-        ${CONAN_LIBS_CATCH2})
+        Catch2::Catch2WithMain)
 
 add_test(NAME unit-tests-visor-dns
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/libs/visor_dns

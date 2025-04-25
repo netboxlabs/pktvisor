@@ -99,7 +99,7 @@ void kll_helper::randomly_halve_down(T* buf, uint32_t start, uint32_t length) {
 #ifdef KLL_VALIDATION
   const uint32_t offset = deterministic_offset();
 #else
-  const uint32_t offset = random_bit();
+  const uint32_t offset = random_utils::random_bit();
 #endif
   uint32_t j = start + offset;
   for (uint32_t i = start; i < (start + half_length); i++) {
@@ -115,7 +115,7 @@ void kll_helper::randomly_halve_up(T* buf, uint32_t start, uint32_t length) {
 #ifdef KLL_VALIDATION
   const uint32_t offset = deterministic_offset();
 #else
-  const uint32_t offset = random_bit();
+  const uint32_t offset = random_utils::random_bit();
 #endif
   uint32_t j = (start + length) - 1 - offset;
   for (uint32_t i = (start + length) - 1; i >= (start + half_length); i--) {
@@ -230,7 +230,8 @@ kll_helper::compress_result kll_helper::general_compress(uint16_t k, uint8_t m, 
       // move level over as is
       // make sure we are not moving data upwards
       if (raw_beg < out_levels[current_level]) throw std::logic_error("wrong move");
-      std::move(items + raw_beg, items + raw_lim, items + out_levels[current_level]);
+      if (raw_beg != out_levels[current_level])
+        std::move(items + raw_beg, items + raw_lim, items + out_levels[current_level]);
       out_levels[current_level + 1] = out_levels[current_level] + raw_pop;
     } else {
       // The sketch is too full AND this level is too full, so we compact it
@@ -243,7 +244,8 @@ kll_helper::compress_result kll_helper::general_compress(uint16_t k, uint8_t m, 
       const auto half_adj_pop = adj_pop / 2;
 
       if (odd_pop) { // move one guy over
-        items[out_levels[current_level]] = std::move(items[raw_beg]);
+        if (out_levels[current_level] != raw_beg)
+          items[out_levels[current_level]] = std::move(items[raw_beg]);
         out_levels[current_level + 1] = out_levels[current_level] + 1;
       } else { // even number of items
         out_levels[current_level + 1] = out_levels[current_level];

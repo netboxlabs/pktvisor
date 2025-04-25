@@ -44,9 +44,16 @@ template<typename A> class cpc_compressor;
 template<typename A>
 inline cpc_compressor<A>& get_compressor();
 
+// function called atexit to clean up compression tables
+template<typename A>
+void destroy_compressor();
+
 template<typename A>
 class cpc_compressor {
 public:
+  using vector_bytes = std::vector<uint8_t, typename std::allocator_traits<A>::template rebind_alloc<uint8_t>>;
+  using vector_u32 = std::vector<uint32_t, typename std::allocator_traits<A>::template rebind_alloc<uint32_t>>;
+
   void compress(const cpc_sketch_alloc<A>& source, compressed_state<A>& target) const;
   void uncompress(const compressed_state<A>& source, uncompressed_state<A>& target, uint8_t lg_k, uint32_t num_coupons) const;
 
@@ -106,8 +113,10 @@ private:
   };
 
   cpc_compressor();
-  template<typename T> friend cpc_compressor<T>& get_compressor();
+  friend cpc_compressor& get_compressor<A>();
+  
   ~cpc_compressor();
+  friend void destroy_compressor<A>();
 
   void make_decoding_tables(); // call this at startup
   void free_decoding_tables(); // call this at the end
@@ -126,17 +135,17 @@ private:
   uint16_t* make_decoding_table(const uint16_t* encoding_table, unsigned num_byte_values);
   void validate_decoding_table(const uint16_t* decoding_table, const uint16_t* encoding_table) const;
 
-  void compress_surprising_values(const vector_u32<A>& pairs, uint8_t lg_k, compressed_state<A>& result) const;
+  void compress_surprising_values(const vector_u32& pairs, uint8_t lg_k, compressed_state<A>& result) const;
   void compress_sliding_window(const uint8_t* window, uint8_t lg_k, uint32_t num_coupons, compressed_state<A>& target) const;
 
-  vector_u32<A> uncompress_surprising_values(const uint32_t* data, uint32_t data_words, uint32_t num_pairs, uint8_t lg_k, const A& allocator) const;
-  void uncompress_sliding_window(const uint32_t* data, uint32_t data_words, vector_u8<A>& window, uint8_t lg_k, uint32_t num_coupons) const;
+  vector_u32 uncompress_surprising_values(const uint32_t* data, uint32_t data_words, uint32_t num_pairs, uint8_t lg_k, const A& allocator) const;
+  void uncompress_sliding_window(const uint32_t* data, uint32_t data_words, vector_bytes& window, uint8_t lg_k, uint32_t num_coupons) const;
 
   static size_t safe_length_for_compressed_pair_buf(uint32_t k, uint32_t num_pairs, uint8_t num_base_bits);
   static size_t safe_length_for_compressed_window_buf(uint32_t k);
   static uint8_t determine_pseudo_phase(uint8_t lg_k, uint32_t c);
 
-  static inline vector_u32<A> tricky_get_pairs_from_window(const uint8_t* window, uint32_t k, uint32_t num_pairs_to_get, uint32_t empty_space, const A& allocator);
+  static inline vector_u32 tricky_get_pairs_from_window(const uint8_t* window, uint32_t k, uint32_t num_pairs_to_get, uint32_t empty_space, const A& allocator);
   static inline uint8_t golomb_choose_number_of_base_bits(uint32_t k, uint64_t count);
 };
 

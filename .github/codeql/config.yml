@@ -1,0 +1,3 @@
+name: "CodeQL code scanning custom configuration"
+
+disable-default-queries: true

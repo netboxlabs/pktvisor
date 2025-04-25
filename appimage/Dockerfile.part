@@ -1,7 +1,7 @@
 # file is needed for appimagetool when its run with --appimage-extract-and-run
 # binutil is needed for strip
 RUN apt-get update && apt-get install -yqq --no-install-recommends python3-pip binutils file dietlibc-dev gcc musl musl-tools \
-	&& pip3 install --user exodus-bundler --no-warn-script-location \
+	&& pip3 install --user exodus-bundler --no-warn-script-location --break-system-packages \
 	&& /root/.local/bin/exodus --verbose --tarball --output=/tmp/pktvisor.tgz $(which pktvisord) $(which pktvisor-reader) \
 	&& mkdir pktvisor \
 	&& tar --strip=1 -xf /tmp/pktvisor.tgz -C pktvisor/ \

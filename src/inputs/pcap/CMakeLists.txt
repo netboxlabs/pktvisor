@@ -17,10 +17,6 @@ target_include_directories(VisorInputPcap
 
 target_link_libraries(VisorInputPcap
         PUBLIC
-        ${CONAN_LIBS_PCAPPLUSPLUS}
-        ${CONAN_LIBS_PTHREADS4W}
-        ${CONAN_LIBS_LIBPCAP}
-        ${CONAN_LIBS_NPCAP}
         Visor::Core
         Visor::Lib::Utils
         )
@@ -32,9 +28,11 @@ add_executable(unit-tests-input-pcap
         tests/test_mock_traffic.cpp
         tests/test_parse_pcap.cpp)
 
+find_package(Catch2 REQUIRED)
+
 target_link_libraries(unit-tests-input-pcap
         PRIVATE Visor::Input::Pcap
-        ${CONAN_LIBS_CATCH2})
+        Catch2::Catch2WithMain)
 
 add_test(NAME unit-tests-input-pcap
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/src

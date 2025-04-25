@@ -71,10 +71,10 @@ typedef struct {
 // Block read - if your platform needs to do endian-swapping or can only
 // handle aligned reads, do the conversion here
 
-MURMUR3_FORCE_INLINE uint64_t getblock64 ( const uint64_t * p, size_t i )
+MURMUR3_FORCE_INLINE uint64_t getblock64 ( const uint8_t * p, size_t i )
 {
   uint64_t res;
-  memcpy(&res, p + i, sizeof(res));
+  memcpy(&res, p + i * sizeof(uint64_t), sizeof(res));
   return res;
 }
 
@@ -104,13 +104,12 @@ MURMUR3_FORCE_INLINE void MurmurHash3_x64_128(const void* key, size_t lenBytes,
 
   // Number of full 128-bit blocks of 16 bytes.
   // Possible exclusion of a remainder of up to 15 bytes.
-  const size_t nblocks = lenBytes >> 4; // bytes / 16 
+  const size_t nblocks = lenBytes >> 4; // bytes / 16
 
   // Process the 128-bit blocks (the body) into the hash
-  const uint64_t* blocks = (const uint64_t*)(data);
   for (size_t i = 0; i < nblocks; ++i) { // 16 bytes per block
-    uint64_t k1 = getblock64(blocks, i * 2 + 0);
-    uint64_t k2 = getblock64(blocks, i * 2 + 1);
+    uint64_t k1 = getblock64(data, i * 2 + 0);
+    uint64_t k2 = getblock64(data, i * 2 + 1);
 
     k1 *= c1; k1  = MURMUR3_ROTL64(k1,31); k1 *= c2; out.h1 ^= k1;
     out.h1 = MURMUR3_ROTL64(out.h1,27);

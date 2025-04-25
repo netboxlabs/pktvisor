@@ -91,13 +91,15 @@ TEST_CASE("Quantiles", "[kll]")
 
         const double fractions[3]{0.0, 0.5, 1.0};
         // inclusive (default)
-        auto quantiles = sketch.get_quantiles(fractions, 3);
+        auto quantiles = std::vector<float>{sketch.get_quantile(fractions[0]),
+            sketch.get_quantile(fractions[1]), sketch.get_quantile(fractions[2])};
         CHECK(3ul == quantiles.size());
         CHECK(0.0f == quantiles[0]);
         CHECK(static_cast<float>((n - 1) / 2) == quantiles[1]);
         CHECK(static_cast<float>(n - 1) == quantiles[2]);
         // exclusive
-        quantiles = sketch.get_quantiles(fractions, 3, false);
+        quantiles = std::vector<float>{sketch.get_quantile(fractions[0], false),
+            sketch.get_quantile(fractions[1], false), sketch.get_quantile(fractions[2], false)};
         CHECK(3ul == quantiles.size());
         CHECK(0.0f == quantiles[0]);
         CHECK(static_cast<float>(n) / 2 == quantiles[1]);

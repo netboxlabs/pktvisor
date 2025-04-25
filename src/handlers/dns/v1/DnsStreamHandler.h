@@ -5,13 +5,13 @@
 #pragma once
 
 #include "AbstractMetricsManager.h"
+#include "DnstapInputStream.h"
 #include "GeoDB.h"
 #include "MockInputStream.h"
 #include "PcapInputStream.h"
 #include "StreamHandler.h"
 #include "TransactionManager.h"
 #include "dns.h"
-#include "pb/dnstap.pb.h"
 #include <Corrade/Utility/Debug.h>
 #include <bitset>
 #include <limits>

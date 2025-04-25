@@ -34,7 +34,7 @@ enum DIRECTION {
     OUT_DIR = 4
 };
 
-enum IP_PROTOCOL {
+enum FLOW_IP_PROTOCOL {
     UNKNOWN_IP = 0,
     ICMP = 1,
     TCP = 6,
@@ -468,14 +468,14 @@ static void decodeIPLayer4(SFSample *sample, uint8_t *ptr)
         return;
     }
     switch (sample->s.dcd_ipProtocol) {
-    case ICMP: {
+    case FLOW_IP_PROTOCOL::ICMP: {
         struct myicmphdr icmp;
         memcpy(&icmp, ptr, sizeof(icmp));
         sample->s.dcd_sport = icmp.type;
         sample->s.dcd_dport = icmp.code;
         sample->s.offsetToPayload = ptr + sizeof(icmp) - sample->s.header;
     } break;
-    case TCP: {
+    case FLOW_IP_PROTOCOL::TCP: {
         struct mytcphdr tcp;
         int headerBytes;
         memcpy(&tcp, ptr, sizeof(tcp));
@@ -486,7 +486,7 @@ static void decodeIPLayer4(SFSample *sample, uint8_t *ptr)
         ptr += headerBytes;
         sample->s.offsetToPayload = ptr - sample->s.header;
     } break;
-    case UDP: {
+    case FLOW_IP_PROTOCOL::UDP: {
         struct myudphdr udp;
         memcpy(&udp, ptr, sizeof(udp));
         sample->s.dcd_sport = ntohs(udp.uh_sport);

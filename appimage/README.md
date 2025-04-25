@@ -14,7 +14,7 @@ Because the build can take a while you may want to build the appimage from the l
 
 You may also specify a custom image in dev mode by setting the env file `DEV_IMAGE=` to the image you wish to build on. Example:
 
-`DEV_IMAGE="orbcommunity/pktvisor:develop" DEV_MODE=t make pktvisor-x86_64.AppImage`
+`DEV_IMAGE="netboxlabs/pktvisor:develop" DEV_MODE=t make pktvisor-x86_64.AppImage`
 
 
 ## Usage:

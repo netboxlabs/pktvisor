@@ -6,6 +6,7 @@
 
 #include "DnstapException.h"
 #include <arpa/inet.h>
+#include <cstdint>
 #include <cstring>
 #include <fstrm/fstrm.h>
 #include <functional>

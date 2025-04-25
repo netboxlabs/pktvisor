@@ -1,11 +1,11 @@
-cmake_minimum_required(VERSION 3.13)
+cmake_minimum_required(VERSION 3.24)
 
 #######################################################
 # VERSION
 #######################################################
 
 # this is the source of truth for semver version
-project(visor VERSION 4.4.0)
+project(visor VERSION 4.5.0)
 
 # for main line release, this is empty
 # for development release, this is "-develop"
@@ -52,48 +52,16 @@ list(APPEND CMAKE_PREFIX_PATH ${CMAKE_BINARY_DIR})
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 ")
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-#set(CMAKE_VERBOSE_MAKEFILE ON)
 if(NOT MSVC)
     add_compile_options(-Wall -pedantic -W -Wextra -Wno-unknown-pragmas)
-endif()
-
-# Conan setup
-
-include(conan)
-conan_cmake_autodetect(CONAN_SETTINGS)
-message(STATUS "Detected conan settings: ${CONAN_SETTINGS}")
-
-set(PKTVISOR_CONAN_INIT ON CACHE BOOL "Create new Conan environment for the build.")
-set(PKTVISOR_CONAN_BUILD "missing" CACHE STRING "Specify conan packages to build from source. Values are separated by semicolon.")
-set(PKTVISOR_CONAN_BUILD_PROFILE "" CACHE STRING "Profile for the build environment.")
-set(PKTVISOR_CONAN_HOST_PROFILE "" CACHE STRING "Profile for the host environment.")
-
-if(PKTVISOR_CONAN_INIT)
-    message(STATUS "Using new Conan environment")
-    set(ENV{CONAN_USER_HOME} ${CMAKE_BINARY_DIR}/conan_home)
-    set(ENV{CONAN_REVISIONS_ENABLED} 1)
 endif()
 
 if(WIN32)
     set(CUSTOM_CMAKE_OPTIONS docopt.cpp:boost_regex=True)
 endif()
 
-conan_cmake_install(
-        PATH_OR_REFERENCE ${PROJECT_SOURCE_DIR}
-        BUILD ${PKTVISOR_CONAN_BUILD}
-        PROFILE_BUILD ${PKTVISOR_CONAN_BUILD_PROFILE}
-        PROFILE_HOST ${PKTVISOR_CONAN_HOST_PROFILE}
-        GENERATOR cmake
-        SETTINGS ${CONAN_SETTINGS}
-        OPTIONS ${CUSTOM_CMAKE_OPTIONS}
-        INSTALL_FOLDER ${CMAKE_BINARY_DIR})
-
-include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
-conan_basic_setup()
-
-find_package(Corrade REQUIRED PluginManager)
+find_package(Corrade REQUIRED)
 include(sanitizer)
 if(CODE_COVERAGE)
     include(CodeCoverage)

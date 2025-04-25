@@ -30,23 +30,56 @@
 
 namespace datasketches {
 
-// serialize and deserialize
+/// Interface for serializing and deserializing items
 template<typename T, typename Enable = void> struct serde {
-  // stream serialization
+  /**
+   * Stream serialization
+   * @param os output stream
+   * @param items pointer to array of items
+   * @param num number of items
+   */
   void serialize(std::ostream& os, const T* items, unsigned num) const;
-  void deserialize(std::istream& is, T* items, unsigned num) const; // items allocated but not initialized
 
-  // raw bytes serialization
-  size_t size_of_item(const T& item) const;
+  /**
+   * Stream deserialization
+   * @param is input stream
+   * @param items pointer to array of items (items in the array are allocated but not initialized)
+   * @param num number of items
+   */
+  void deserialize(std::istream& is, T* items, unsigned num) const;
+
+  /**
+   * Raw bytes serialization
+   * @param ptr pointer to output buffer
+   * @param capacity size of the buffer in bytes
+   * @param items pointer to array of items
+   * @param num number of items
+   */
   size_t serialize(void* ptr, size_t capacity, const T* items, unsigned num) const;
-  size_t deserialize(const void* ptr, size_t capacity, T* items, unsigned num) const; // items allocated but not initialized
+
+  /**
+   * Raw bytes deserialization
+   * @param ptr pointer to input buffer
+   * @param capacity size of the buffer in bytes
+   * @param items pointer to array of items (items in the array are allocated but not initialized)
+   * @param num number of items
+   */
+  size_t deserialize(const void* ptr, size_t capacity, T* items, unsigned num) const;
+
+  /**
+   * Size of the given item
+   * @param item to be sized
+   * @return size of the given item in bytes
+   */
+  size_t size_of_item(const T& item) const;
 };
 
-// serde for all fixed-size arithmetic types (int and float of different sizes)
-// in particular, kll_sketch<int64_t> should produce sketches binary-compatible
-// with LongsSketch and ItemsSketch<Long> with ArrayOfLongsSerDe in Java
+/// serde for all fixed-size arithmetic types (int and float of different sizes).
+/// in particular, kll_sketch<int64_t> should produce sketches binary-compatible
+/// with LongsSketch and ItemsSketch<Long> with ArrayOfLongsSerDe in Java
 template<typename T>
 struct serde<T, typename std::enable_if<std::is_arithmetic<T>::value>::type> {
+  /// @copydoc serde::serialize
   void serialize(std::ostream& os, const T* items, unsigned num) const {
     bool failure = false;
     try {
@@ -58,6 +91,7 @@ struct serde<T, typename std::enable_if<std::is_arithmetic<T>::value>::type> {
       throw std::runtime_error("error writing to std::ostream with " + std::to_string(num) + " items");
     }
   }
+
   void deserialize(std::istream& is, T* items, unsigned num) const {
     bool failure = false;
     try {
@@ -70,30 +104,37 @@ struct serde<T, typename std::enable_if<std::is_arithmetic<T>::value>::type> {
     }
   }
 
-  size_t size_of_item(const T&) const {
-    return sizeof(T);
-  }
+  /// @copydoc serde::serialize(void*,size_t,const T*,unsigned) const
   size_t serialize(void* ptr, size_t capacity, const T* items, unsigned num) const {
     const size_t bytes_written = sizeof(T) * num;
     check_memory_size(bytes_written, capacity);
     memcpy(ptr, items, bytes_written);
     return bytes_written;
   }
+
+  /// @copydoc serde::deserialize(const void*,size_t,T*,unsigned) const
   size_t deserialize(const void* ptr, size_t capacity, T* items, unsigned num) const {
     const size_t bytes_read = sizeof(T) * num;
     check_memory_size(bytes_read, capacity);
     memcpy(items, ptr, bytes_read);
     return bytes_read;
   }
+
+  /// @copydoc serde::size_of_item
+  size_t size_of_item(const T& item) const {
+    unused(item);
+    return sizeof(T);
+  }
 };
 
-// serde for std::string items
-// This should produce sketches binary-compatible with
-// ItemsSketch<String> with ArrayOfStringsSerDe in Java.
-// The length of each string is stored as a 32-bit integer (historically),
-// which may be too wasteful. Treat this as an example.
+/// serde for std::string items.
+/// This should produce sketches binary-compatible with
+/// ItemsSketch<String> with ArrayOfStringsSerDe in Java.
+/// The length of each string is stored as a 32-bit integer (historically),
+/// which may be too wasteful. Treat this as an example.
 template<>
 struct serde<std::string> {
+  /// @copydoc serde::serialize
   void serialize(std::ostream& os, const std::string* items, unsigned num) const {
     unsigned i = 0;
     bool failure = false;
@@ -110,6 +151,8 @@ struct serde<std::string> {
       throw std::runtime_error("error writing to std::ostream at item " + std::to_string(i));
     }
   }
+
+  /// @copydoc serde::deserialize
   void deserialize(std::istream& is, std::string* items, unsigned num) const {
     unsigned i = 0;
     bool failure = false;
@@ -137,9 +180,8 @@ struct serde<std::string> {
       throw std::runtime_error("error reading from std::istream at item " + std::to_string(i)); 
     }
   }
-  size_t size_of_item(const std::string& item) const {
-    return sizeof(uint32_t) + item.size();
-  }
+
+  /// @copydoc serde::serialize(void*,size_t,const T*,unsigned) const
   size_t serialize(void* ptr, size_t capacity, const std::string* items, unsigned num) const {
     size_t bytes_written = 0;
     for (unsigned i = 0; i < num; ++i) {
@@ -154,6 +196,8 @@ struct serde<std::string> {
     }
     return bytes_written;
   }
+
+  /// @copydoc serde::deserialize(const void*,size_t,T*,unsigned) const
   size_t deserialize(const void* ptr, size_t capacity, std::string* items, unsigned num) const {
     size_t bytes_read = 0;
     unsigned i = 0;
@@ -188,6 +232,11 @@ struct serde<std::string> {
     }
 
     return bytes_read;
+  }
+
+  /// @copydoc serde::size_of_item
+  size_t size_of_item(const std::string& item) const {
+    return sizeof(uint32_t) + item.size();
   }
 };
 

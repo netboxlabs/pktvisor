@@ -1,7 +1,7 @@
 ARG PKTVISOR_TAG=latest
 FROM telegraf:1.16.2 as telegraf
 
-FROM orbcommunity/pktvisor:${PKTVISOR_TAG}
+FROM netboxlabs/pktvisor:${PKTVISOR_TAG}
 
 COPY --from=telegraf /usr/bin/telegraf /usr/local/bin/telegraf
 

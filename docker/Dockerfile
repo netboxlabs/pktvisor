@@ -1,12 +1,12 @@
-FROM debian:bullseye-slim AS cppbuild
+FROM ubuntu:noble AS cppbuild
 
-ENV BUILD_DEPS "g++ cmake make git pkgconf jq python3-pip python3-setuptools python ca-certificates"
+ENV BUILD_DEPS "g++ cmake make automake autoconf git pkgconf jq python3 libasan8 python3-pip python3-setuptools ca-certificates"
 
 RUN \
     apt-get update && \
-    apt-get upgrade --yes --force-yes && \
-    apt-get install --yes --force-yes --no-install-recommends ${BUILD_DEPS} && \
-    pip3 install "conan==1.61.0"
+    apt-get upgrade --yes && \
+    apt-get install --yes --no-install-recommends ${BUILD_DEPS} && \
+    pip3 install conan --break-system-packages
 
 # need git for current hash for VERSION
 COPY ./.git/ /pktvisor-src/.git/
@@ -19,17 +19,15 @@ COPY ./golang/ /pktvisor-src/golang/
 COPY ./integration_tests/ /pktvisor-src/integration_tests/
 COPY ./cmake/ /pktvisor-src/cmake/
 COPY ./CMakeLists.txt /pktvisor-src/
-COPY ./conanfile.txt /pktvisor-src/
+COPY ./conanfile.py /pktvisor-src/
+COPY ./.conanrc /pktvisor-src/
 
-WORKDIR /tmp/build
-
-RUN \
-    conan profile new --detect default && \
-    conan profile update settings.compiler.libcxx=libstdc++11 default && \
-    conan config set general.revisions_enabled=1
+WORKDIR /pktvisor-src
 
 RUN \
-    PKG_CONFIG_PATH=/local/lib/pkgconfig cmake -DCMAKE_BUILD_TYPE=Release /pktvisor-src && \
+    conan profile detect -f && \
+    cd build/ && \
+    PKG_CONFIG_PATH=/local/lib/pkgconfig cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=./cmake/conan_provider.cmake .. && \
     make all -j 4
 
 FROM golang:latest AS gobuild
@@ -38,14 +36,14 @@ WORKDIR /src/
 COPY --from=cppbuild /pktvisor-src/golang/pkg/client/version.go /src/pkg/client/version.go
 RUN go build -o pktvisor-cli cmd/pktvisor-cli/main.go
 
-FROM debian:bullseye-slim AS runtime
+FROM ubuntu:noble AS runtime
 
 ENV RUNTIME_DEPS "curl ca-certificates wget"
 
 RUN \
     apt-get update && \
-    apt-get upgrade --yes --force-yes && \
-    apt-get install --yes --force-yes --no-install-recommends ${RUNTIME_DEPS} && \
+    apt-get upgrade --yes && \
+    apt-get install --yes --no-install-recommends ${RUNTIME_DEPS} && \
     rm -rf /var/lib/apt
     
 #create dir and download geo db
@@ -56,9 +54,9 @@ RUN cd /geo-db && wget https://github.com/orb-community/geo-asn-database/raw/mai
 RUN mkdir /iana
 COPY --from=cppbuild /pktvisor-src/src/tests/fixtures/pktvisor-port-service-names.csv /iana/custom-iana.csv
 
-COPY --from=cppbuild /tmp/build/bin/pktvisord /usr/local/sbin/pktvisord
-COPY --from=cppbuild /tmp/build/bin/crashpad_handler /usr/local/sbin/crashpad_handler
-COPY --from=cppbuild /tmp/build/bin/pktvisor-reader /usr/local/sbin/pktvisor-reader
+COPY --from=cppbuild /pktvisor-src/build/bin/pktvisord /usr/local/sbin/pktvisord
+COPY --from=cppbuild /pktvisor-src/build/bin/crashpad_handler /usr/local/sbin/crashpad_handler
+COPY --from=cppbuild /pktvisor-src/build/bin/pktvisor-reader /usr/local/sbin/pktvisor-reader
 COPY --from=gobuild /src/pktvisor-cli /usr/local/bin/pktvisor-cli
 COPY ./docker/entry-cp.sh /entry-cp.sh
 COPY ./docker/run.sh /run.sh

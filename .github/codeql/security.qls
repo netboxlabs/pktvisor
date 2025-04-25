@@ -1,0 +1,3 @@
+- qlpack: codeql-cpp
+- apply: codeql-suites/cpp-security-extended.qls
+  from: codeql-cpp

@@ -315,7 +315,7 @@ void cpc_sketch_alloc<A>::move_window() {
   const uint32_t k = 1 << lg_k;
 
   // Construct the full-sized bit matrix that corresponds to the sketch
-  vector_u64<A> bit_matrix = build_bit_matrix();
+  vector_u64 bit_matrix = build_bit_matrix();
 
   // refresh the KXP register on every 8th window shift.
   if ((new_offset & 0x7) == 0) refresh_kxp(bit_matrix.data());
@@ -458,7 +458,7 @@ void cpc_sketch_alloc<A>::serialize(std::ostream& os) const {
 }
 
 template<typename A>
-vector_u8<A> cpc_sketch_alloc<A>::serialize(unsigned header_size_bytes) const {
+auto cpc_sketch_alloc<A>::serialize(unsigned header_size_bytes) const -> vector_bytes {
   compressed_state<A> compressed(sliding_window.get_allocator());
   compressed.table_data_words = 0;
   compressed.table_num_entries = 0;
@@ -469,7 +469,7 @@ vector_u8<A> cpc_sketch_alloc<A>::serialize(unsigned header_size_bytes) const {
   const bool has_window = compressed.window_data.size() > 0;
   const uint8_t preamble_ints = get_preamble_ints(num_coupons, has_hip, has_table, has_window);
   const size_t size = header_size_bytes + (preamble_ints + compressed.table_data_words + compressed.window_data_words) * sizeof(uint32_t);
-  vector_u8<A> bytes(size, 0, sliding_window.get_allocator());
+  vector_bytes bytes(size, 0, sliding_window.get_allocator());
   uint8_t* ptr = bytes.data() + header_size_bytes;
   ptr += copy_to_mem(preamble_ints, ptr);
   const uint8_t serial_version = SERIAL_VERSION;
@@ -712,15 +712,18 @@ static const size_t CPC_MAX_PREAMBLE_SIZE_BYTES = 40;
 template<typename A>
 size_t cpc_sketch_alloc<A>::get_max_serialized_size_bytes(uint8_t lg_k) {
   check_lg_k(lg_k);
-  if (lg_k <= CPC_EMPIRICAL_SIZE_MAX_LGK) return CPC_EMPIRICAL_MAX_SIZE_BYTES[lg_k - CPC_MIN_LG_K] + CPC_MAX_PREAMBLE_SIZE_BYTES;
+  if (lg_k <= CPC_EMPIRICAL_SIZE_MAX_LGK) {
+    return CPC_EMPIRICAL_MAX_SIZE_BYTES[lg_k - cpc_constants::MIN_LG_K] + CPC_MAX_PREAMBLE_SIZE_BYTES;
+  }
   const uint32_t k = 1 << lg_k;
   return (int) (CPC_EMPIRICAL_MAX_SIZE_FACTOR * k) + CPC_MAX_PREAMBLE_SIZE_BYTES;
 }
 
 template<typename A>
 void cpc_sketch_alloc<A>::check_lg_k(uint8_t lg_k) {
-  if (lg_k < CPC_MIN_LG_K || lg_k > CPC_MAX_LG_K) {
-    throw std::invalid_argument("lg_k must be >= " + std::to_string(CPC_MIN_LG_K) + " and <= " + std::to_string(CPC_MAX_LG_K) + ": " + std::to_string(lg_k));
+  if (lg_k < cpc_constants::MIN_LG_K || lg_k > cpc_constants::MAX_LG_K) {
+    throw std::invalid_argument("lg_k must be >= " + std::to_string(cpc_constants::MIN_LG_K) + " and <= "
+        + std::to_string(cpc_constants::MAX_LG_K) + ": " + std::to_string(lg_k));
   }
 }
 
@@ -731,14 +734,14 @@ uint32_t cpc_sketch_alloc<A>::get_num_coupons() const {
 
 template<typename A>
 bool cpc_sketch_alloc<A>::validate() const {
-  vector_u64<A> bit_matrix = build_bit_matrix();
+  vector_u64 bit_matrix = build_bit_matrix();
   const uint64_t num_bits_set = count_bits_set_in_matrix(bit_matrix.data(), 1ULL << lg_k);
   return num_bits_set == num_coupons;
 }
 
 template<typename A>
 cpc_sketch_alloc<A>::cpc_sketch_alloc(uint8_t lg_k, uint32_t num_coupons, uint8_t first_interesting_column,
-    u32_table<A>&& table, vector_u8<A>&& window, bool has_hip, double kxp, double hip_est_accum, uint64_t seed):
+    u32_table<A>&& table, vector_bytes&& window, bool has_hip, double kxp, double hip_est_accum, uint64_t seed):
 lg_k(lg_k),
 seed(seed),
 was_merged(!has_hip),
@@ -800,14 +803,14 @@ uint8_t cpc_sketch_alloc<A>::determine_correct_offset(uint8_t lg_k, uint64_t c) 
 }
 
 template<typename A>
-vector_u64<A> cpc_sketch_alloc<A>::build_bit_matrix() const {
+auto cpc_sketch_alloc<A>::build_bit_matrix() const -> vector_u64 {
   const uint32_t k = 1 << lg_k;
   if (window_offset > 56) throw std::logic_error("offset > 56");
 
   // Fill the matrix with default rows in which the "early zone" is filled with ones.
   // This is essential for the routine's O(k) time cost (as opposed to O(C)).
   const uint64_t default_row = (static_cast<uint64_t>(1) << window_offset) - 1;
-  vector_u64<A> matrix(k, default_row, sliding_window.get_allocator());
+  vector_u64 matrix(k, default_row, sliding_window.get_allocator());
 
   if (num_coupons == 0) return matrix;
 

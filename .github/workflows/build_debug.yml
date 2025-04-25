@@ -11,36 +11,25 @@ env:
 
 jobs:
   code-coverage:
-    # The CMake configure and build commands are platform agnostic and should work equally
-    # well on Windows or Mac.  You can convert this to a matrix build if you need
-    # cross-platform coverage.
-    # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
-
     runs-on: ubuntu-latest
     outputs:
       version_number: ${{ steps.build.outputs.version }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Create Build Environment
-        # Some projects don't allow in-source building, so create a separate build directory
-        # We'll use this as our working directory for all subsequent commands
         run: cmake -E make_directory ${{github.workspace}}/build
 
       - name: Get Conan
-        # You may pin to the exact commit or the version.
-        # uses: turtlebrowser/get-conan@4dc7e6dd45c8b1e02e909979d7cfc5ebba6ddbe2
         id: conan
-        uses: turtlebrowser/get-conan@main
-        with:
-          version: 1.61.0
+        uses: turtlebrowser/get-conan@c171f295f3f507360ee018736a6608731aa2109d #v1.2
 
       - name: Setup Conan Cache
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
-          path: ${{github.workspace}}/build/conan_home/
-          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.txt', '*/conanfile.txt') }}
-          restore-keys: conan-${{ runner.os }}-
+          path: ${{github.workspace}}/build/p/
+          key: conan-${{ runner.os }}-amd64-${{ hashFiles('conanfile.py', '*/conanfile.py') }}
+          restore-keys: conan-${{ runner.os }}-amd64-
 
       - name: linux package install
         run: |
@@ -48,38 +37,28 @@ jobs:
           sudo apt-get install --yes --no-install-recommends jq lcov
 
       - name: Configure CMake
-        # Use a bash shell so we can use the same syntax for environment variable
-        # access regardless of the host operating system
         shell: bash
         working-directory: ${{github.workspace}}/build
-        # Note the current convention is to use the -S and -B options here to specify source
-        # and build directories, but this is only available with CMake 3.13 and higher.
-        # The CMake binaries on the Github Actions machines are (as of this writing) 3.12
-        run: PKG_CONFIG_PATH=${{github.workspace}}/local/lib/pkgconfig cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=Debug -DCODE_COVERAGE=ON
+        run: PKG_CONFIG_PATH=${{github.workspace}}/local/lib/pkgconfig cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=./cmake/conan_provider.cmake -DCODE_COVERAGE=ON
 
       - name: Get VERSION
         id: build
-        run: |
-          echo "VERSION=`cat ${{github.workspace}}/build/VERSION`" >> $GITHUB_ENV
-          echo "::set-output name=version::$(cat ${{github.workspace}}/build/VERSION)"
+        run: echo "VERSION=`cat ${{github.workspace}}/build/VERSION`" >> $GITHUB_ENV
 
       - name: Build
         working-directory: ${{github.workspace}}/build
         shell: bash
-        # Execute the build.  You can specify a specific target with "--target <NAME>"
-        run: cmake --build . --config Debug -- -j 2
+        run: cmake --build . --config Debug -- -j 4
 
       - name: Test
         working-directory: ${{github.workspace}}/build
         shell: bash
-        # Execute tests defined by the CMake configuration.
-        # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
-        run: ctest -C $BUILD_TYPE
+        run: sudo ctest --output-on-failure
         
       - name: Build Coverage
         working-directory: ${{github.workspace}}/build
         shell: bash
-        run: cmake --build . --target coverage -- -j 2
+        run: sudo cmake --build . --target coverage -- -j 4
 
       - name: Codecov
         uses: codecov/codecov-action@v3
@@ -91,17 +70,17 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Create Build Environment
         run: cmake -E make_directory ${{github.workspace}}/build
 
       - name: Setup Conan Cache
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
-          path: ${{github.workspace}}/build/conan_home/
-          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.txt', '*/conanfile.txt') }}
-          restore-keys: conan-${{ runner.os }}-
+          path: ${{github.workspace}}/build/p/
+          key: conan-${{ runner.os }}-amd64-${{ hashFiles('conanfile.py', '*/conanfile.py') }}
+          restore-keys: conan-${{ runner.os }}-amd64-
 
       - name: Build pktvisord + push symbol to backtrace.io
         uses: ./.github/actions/build-cpp
@@ -109,11 +88,11 @@ jobs:
           context: "."
           build_type: "Debug"
           asan: "ON"
-          symbol_url: ${{secrets.SYMBOL_URL}}
           bugsplat_key: ${{secrets.BUGSPLAT_KEY}}
           bugsplat_symbol_url: ${{secrets.BUGSPLAT_SYMBOL_URL}}
           bugsplat: "true"
           file: "./Dockerfile"
+          arch: "amd64"
 
       - name: Build pktvisor-cli
         uses: ./.github/actions/build-go
@@ -125,7 +104,7 @@ jobs:
         run: ls -lha .
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: pktvisor-artifacts
           path: ./
@@ -136,7 +115,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download to workspace
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4
         with:
           name: pktvisor-artifacts
 
@@ -148,26 +127,22 @@ jobs:
         run: echo ${{ env.BRANCH_NAME }}
 
       - name: Get VERSION
-        run: |
-          echo "VERSION=`cat ${{github.workspace}}/build/VERSION`" >> $GITHUB_ENV
+        run: echo "VERSION=`cat ${{github.workspace}}/VERSION`" >> $GITHUB_ENV
 
       - name: Debug version
         run: echo ${{ env.VERSION }}
 
       - name: Generate ref tag (master)
         if: ${{ env.BRANCH_NAME == 'master' }}
-        run: |
-          echo "REF_TAG=latest-debug" >> $GITHUB_ENV
+        run: echo "REF_TAG=latest-debug" >> $GITHUB_ENV
 
       - name: Generate ref tag (develop)
         if: ${{ env.BRANCH_NAME == 'develop' }}
-        run: |
-          echo "REF_TAG=latest-develop-debug" >> $GITHUB_ENV
+        run: echo "REF_TAG=latest-develop-debug" >> $GITHUB_ENV
 
       - name: Generate ref tag (release candidate)
         if: ${{ env.BRANCH_NAME == 'release' }}
-        run: |
-          echo "REF_TAG=latest-rc-debug" >> $GITHUB_ENV
+        run: echo "REF_TAG=latest-rc-debug" >> $GITHUB_ENV
 
       - name: Debug ref tag
         run: echo ${{ env.REF_TAG }}
@@ -183,14 +158,14 @@ jobs:
           sed -i -e "s/CP_URL/$ESCAPED_REPLACE/g" docker/run.sh
 
       - name: Login to Docker Hub
-        uses: docker/login-action@v1
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 #v3.3.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build, push debug image + crashhandler
         env:
-          IMAGE_NAME: orbcommunity/pktvisor
+          IMAGE_NAME: netboxlabs/pktvisor
         run: |
           docker build . --file docker/Dockerfile.crashhandler --tag ${{ env.IMAGE_NAME }}:${{ env.REF_TAG }}
           docker push -a ${{ env.IMAGE_NAME }}

@@ -174,7 +174,8 @@ void frequent_items_sketch<T, W, H, E, A>::serialize(std::ostream& os, const Ser
   const uint8_t lg_cur_size = map.get_lg_cur_size();
   write(os, lg_cur_size);
   const uint8_t flags_byte(
-    (is_empty() ? 1 << flags::IS_EMPTY : 0)
+      (is_empty() ? 1 << flags::IS_EMPTY_1 : 0)
+    | (is_empty() ? 1 << flags::IS_EMPTY_2 : 0)
   );
   write(os, flags_byte);
   const uint16_t unused16 = 0;
@@ -234,7 +235,8 @@ auto frequent_items_sketch<T, W, H, E, A>::serialize(unsigned header_size_bytes,
   const uint8_t lg_cur_size = map.get_lg_cur_size();
   ptr += copy_to_mem(lg_cur_size, ptr);
   const uint8_t flags_byte(
-    (is_empty() ? 1 << flags::IS_EMPTY : 0)
+      (is_empty() ? 1 << flags::IS_EMPTY_1 : 0)
+    | (is_empty() ? 1 << flags::IS_EMPTY_2 : 0)
   );
   ptr += copy_to_mem(flags_byte, ptr);
   ptr += sizeof(uint16_t); // unused
@@ -298,7 +300,7 @@ frequent_items_sketch<T, W, H, E, A> frequent_items_sketch<T, W, H, E, A>::deser
   const auto flags_byte = read<uint8_t>(is);
   read<uint16_t>(is); // unused
 
-  const bool is_empty = flags_byte & (1 << flags::IS_EMPTY);
+  const bool is_empty = (flags_byte & (1 << flags::IS_EMPTY_1)) | (flags_byte & (1 << flags::IS_EMPTY_2));
 
   check_preamble_longs(preamble_longs, is_empty);
   check_serial_version(serial_version);
@@ -352,7 +354,7 @@ frequent_items_sketch<T, W, H, E, A> frequent_items_sketch<T, W, H, E, A>::deser
   ptr += copy_from_mem(ptr, flags_byte);
   ptr += sizeof(uint16_t); // unused
 
-  const bool is_empty = flags_byte & (1 << flags::IS_EMPTY);
+  const bool is_empty = (flags_byte & (1 << flags::IS_EMPTY_1)) | (flags_byte & (1 << flags::IS_EMPTY_2));
 
   check_preamble_longs(preamble_longs, is_empty);
   check_serial_version(serial_version);

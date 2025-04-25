@@ -24,9 +24,11 @@ add_executable(unit-tests-handler-bgp
         tests/test_bgp_layer.cpp
         tests/test_json_schema.cpp)
 
+find_package(nlohmann_json_schema_validator REQUIRED)
+
 target_link_libraries(unit-tests-handler-bgp
         PRIVATE
-        ${CONAN_LIBS_JSON-SCHEMA-VALIDATOR}
+        nlohmann_json_schema_validator
         Visor::Handler::Bgp
         Visor::Lib::Test)
 

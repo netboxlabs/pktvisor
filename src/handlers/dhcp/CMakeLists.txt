@@ -26,9 +26,11 @@ add_executable(unit-tests-handler-dhcp
         tests/test_dhcp_layer.cpp
         tests/test_json_schema.cpp)
 
+find_package(nlohmann_json_schema_validator REQUIRED)
+
 target_link_libraries(unit-tests-handler-dhcp
         PRIVATE
-        ${CONAN_LIBS_JSON-SCHEMA-VALIDATOR}
+        nlohmann_json_schema_validator
         Visor::Handler::Dhcp
         Visor::Lib::Test)
 

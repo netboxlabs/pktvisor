@@ -33,8 +33,8 @@ seed(seed),
 accumulator(nullptr),
 bit_matrix(allocator)
 {
-  if (lg_k < CPC_MIN_LG_K || lg_k > CPC_MAX_LG_K) {
-    throw std::invalid_argument("lg_k must be >= " + std::to_string(CPC_MIN_LG_K) + " and <= " + std::to_string(CPC_MAX_LG_K) + ": " + std::to_string(lg_k));
+  if (lg_k < cpc_constants::MIN_LG_K || lg_k > cpc_constants::MAX_LG_K) {
+    throw std::invalid_argument("lg_k must be >= " + std::to_string(cpc_constants::MIN_LG_K) + " and <= " + std::to_string(cpc_constants::MAX_LG_K) + ": " + std::to_string(lg_k));
   }
   accumulator = new (AllocCpc(allocator).allocate(1)) cpc_sketch_alloc<A>(lg_k, seed, allocator);
 }
@@ -166,7 +166,7 @@ void cpc_union_alloc<A>::internal_update(S&& sketch) {
   // SLIDING mode involves inverted logic, so we can't just walk the source sketch.
   // Instead, we convert it to a bitMatrix that can be OR'ed into the destination.
   if (cpc_sketch_alloc<A>::flavor::SLIDING != src_flavor) throw std::logic_error("wrong flavor"); // Case D
-  vector_u64<A> src_matrix = sketch.build_bit_matrix();
+  vector_u64 src_matrix = sketch.build_bit_matrix();
   or_matrix_into_matrix(src_matrix, sketch.get_lg_k());
 }
 
@@ -203,7 +203,7 @@ cpc_sketch_alloc<A> cpc_union_alloc<A>::get_result_from_bit_matrix() const {
 
   const uint8_t offset = cpc_sketch_alloc<A>::determine_correct_offset(lg_k, num_coupons);
 
-  vector_u8<A> sliding_window(k, 0, bit_matrix.get_allocator());
+  vector_bytes sliding_window(k, 0, bit_matrix.get_allocator());
   // don't need to zero the window's memory
 
   // dynamically growing caused snowplow effect
@@ -289,7 +289,7 @@ void cpc_union_alloc<A>::or_table_into_matrix(const u32_table<A>& table) {
 }
 
 template<typename A>
-void cpc_union_alloc<A>::or_window_into_matrix(const vector_u8<A>& sliding_window, uint8_t offset, uint8_t src_lg_k) {
+void cpc_union_alloc<A>::or_window_into_matrix(const vector_bytes& sliding_window, uint8_t offset, uint8_t src_lg_k) {
   if (lg_k > src_lg_k) throw std::logic_error("dst LgK > src LgK");
   const uint64_t dst_mask = (1 << lg_k) - 1; // downsamples when dst lgK < src LgK
   const uint32_t src_k = 1 << src_lg_k;
@@ -299,7 +299,7 @@ void cpc_union_alloc<A>::or_window_into_matrix(const vector_u8<A>& sliding_windo
 }
 
 template<typename A>
-void cpc_union_alloc<A>::or_matrix_into_matrix(const vector_u64<A>& src_matrix, uint8_t src_lg_k) {
+void cpc_union_alloc<A>::or_matrix_into_matrix(const vector_u64& src_matrix, uint8_t src_lg_k) {
   if (lg_k > src_lg_k) throw std::logic_error("dst LgK > src LgK");
   const uint64_t dst_mask = (1 << lg_k) - 1; // downsamples when dst lgK < src LgK
   const uint32_t src_k = 1 << src_lg_k;
@@ -315,10 +315,10 @@ void cpc_union_alloc<A>::reduce_k(uint8_t new_lg_k) {
 
   if (bit_matrix.size() > 0) { // downsample the unioner's bit matrix
     if (accumulator != nullptr) throw std::logic_error("accumulator is not null");
-    vector_u64<A> old_matrix = std::move(bit_matrix);
+    vector_u64 old_matrix = std::move(bit_matrix);
     const uint8_t old_lg_k = lg_k;
     const uint32_t new_k = 1 << new_lg_k;
-    bit_matrix = vector_u64<A>(new_k, 0, old_matrix.get_allocator());
+    bit_matrix = vector_u64(new_k, 0, old_matrix.get_allocator());
     lg_k = new_lg_k;
     or_matrix_into_matrix(old_matrix, old_lg_k);
     return;

@@ -50,7 +50,7 @@ static bool start_crashpad_handler(std::string token, std::string url, std::stri
     /* Enable automated uploads. */
     database->GetSettings()->SetUploadsEnabled(true);
 
-    rc = client.StartHandler(handler, db, db, url, annotations, arguments, true, false);
+    rc = client.StartHandler(handler, db, db, url, "", annotations, arguments, true, false);
     if (rc == false) {
         return false;
     }

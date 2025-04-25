@@ -1,6 +1,5 @@
 name: 'docker'
-author: 'Everton Haise Taques <everton.taques@encora.com>'
-description: 'NS1 Labs'
+description: 'NetBox Labs Docker build go action'
 
 inputs:
   context:

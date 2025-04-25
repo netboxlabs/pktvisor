@@ -1,7 +1,7 @@
 # Centralized Prometheus Collection
 
 This directory contains resources for building a docker container aiding centralized prometheus collection. It is
-published to Docker hub at https://hub.docker.com/r/orbcommunity/pktvisor-prom-write
+published to Docker hub at https://hub.docker.com/r/netboxlabs/pktvisor-prom-write
 
 It combines pktvisord with the [Grafana Agent](https://github.com/grafana/agent) for collecting and sending metrics to
 Prometheus through
@@ -16,19 +16,19 @@ Grafana installation (ID 14221).
 Example:
 
 ```shell
-docker pull orbcommunity/pktvisor-prom-write
+docker pull netboxlabs/pktvisor-prom-write
 docker run -d --net=host --env PKTVISORD_ARGS="--prom-instance <INSTANCE> <INTERFACE>" \
 --env REMOTE_URL="https://<REMOTEHOST>/api/prom/push" --env USERNAME="<USERNAME>" \
---env PASSWORD="<PASSWORD>" orbcommunity/pktvisor-prom-write
+--env PASSWORD="<PASSWORD>" netboxlabs/pktvisor-prom-write
 ```
 
 Example with Geo enabled (assuming files are located in `/usr/local/geo`):
 
 ```shell
-docker pull orbcommunity/pktvisor-prom-write
+docker pull netboxlabs/pktvisor-prom-write
 docker run -d --mount type=bind,source=/usr/local/geo,target=/geo --net=host --env \
 PKTVISORD_ARGS="--prom-instance <INSTANCE> --geo-city /geo/GeoIP2-City.mmdb --geo-asn /geo/GeoIP2-ISP.mmdb <INTERFACE>" \
---env REMOTE_URL="https://<REMOTEHOST>/api/prom/push" --env USERNAME="<USERNAME>" --env PASSWORD="<PASSWORD>" orbcommunity/pktvisor-prom-write
+--env REMOTE_URL="https://<REMOTEHOST>/api/prom/push" --env USERNAME="<USERNAME>" --env PASSWORD="<PASSWORD>" netboxlabs/pktvisor-prom-write
 ```
 
 **PKTVISORD_ARGS optionally allows a semicolon delimited list of arguments to handle arguments such as bpf filters that may contain whitespace*
@@ -36,10 +36,10 @@ PKTVISORD_ARGS="--prom-instance <INSTANCE> --geo-city /geo/GeoIP2-City.mmdb --ge
 Example with Geo enabled and bpf filter (assuming files are located in `/usr/local/geo`):
 
 ```shell
-docker pull orbcommunity/pktvisor-prom-write
+docker pull netboxlabs/pktvisor-prom-write
 docker run -d --mount type=bind,source=/usr/local/geo,target=/geo --net=host --env \
 PKTVISORD_ARGS="-b; port 53; --prom-instance; <INSTANCE>; --geo-city; /geo/GeoIP2-City.mmdb; --geo-asn; /geo/GeoIP2-ISP.mmdb; <INTERFACE>" \
---env REMOTE_URL="https://<REMOTEHOST>/api/prom/push" --env USERNAME="<USERNAME>" --env PASSWORD="<PASSWORD>" orbcommunity/pktvisor-prom-write
+--env REMOTE_URL="https://<REMOTEHOST>/api/prom/push" --env USERNAME="<USERNAME>" --env PASSWORD="<PASSWORD>" netboxlabs/pktvisor-prom-write
 ```
 
 There are a several pieces of information you need to substitute above:

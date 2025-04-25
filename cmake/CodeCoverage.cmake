@@ -126,7 +126,7 @@
 #    runs your test executable and produces a code coverage report.
 #
 # 6. Build a Debug build:
-#      cmake -DCMAKE_BUILD_TYPE=Debug ..
+#      cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=./cmake/conan_provider.cmake ..
 #      make
 #      make my_coverage_target
 #

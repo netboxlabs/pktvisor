@@ -32,15 +32,19 @@
 
 namespace datasketches {
 
-/*
+/// Frequent items error type
+enum frequent_items_error_type {
+  NO_FALSE_POSITIVES, ///< include an item in the result list if get_lower_bound(item) &gt; threshold
+  NO_FALSE_NEGATIVES ///< include an item in the result list if get_upper_bound(item) &gt; threshold
+};
+
+/**
+ * Frequent Items sketch.
+ *
  * Based on Java implementation here:
  * https://github.com/apache/datasketches-java/blob/master/src/main/java/org/apache/datasketches/frequencies/ItemsSketch.java
- * author Alexander Saydakov
+ * @author Alexander Saydakov
  */
-
-enum frequent_items_error_type { NO_FALSE_POSITIVES, NO_FALSE_NEGATIVES };
-
-// type W for weight must be an arithmetic type (integral or floating point)
 template<
   typename T,
   typename W = uint64_t,
@@ -49,6 +53,7 @@ template<
   typename A = std::allocator<T>
 >
 class frequent_items_sketch {
+  static_assert(std::is_arithmetic<W>::value, "Arithmetic type expected");
 public:
 
   static const uint8_t LG_MIN_MAP_SIZE = 3;
@@ -194,7 +199,7 @@ public:
    * There may be items omitted from the set with true frequencies greater than the
    * threshold (false negatives).</p>
    *
-   * @param error_type determines whether no false positives or no false negatives are desired.
+   * @param err_type determines whether no false positives or no false negatives are desired.
    * @return an array of frequent items
    */
   vector_row get_frequent_items(frequent_items_error_type err_type) const;
@@ -217,7 +222,7 @@ public:
    * There may be items omitted from the set with true frequencies greater than the
    * threshold (false negatives).</p>
    *
-   * @param error_type determines whether no false positives or no false negatives are desired.
+   * @param err_type determines whether no false positives or no false negatives are desired.
    * @param threshold to include items in the result list
    * @return an array of frequent items
    */
@@ -293,7 +298,9 @@ private:
   static const uint8_t PREAMBLE_LONGS_EMPTY = 1;
   static const uint8_t PREAMBLE_LONGS_NONEMPTY = 4;
   static constexpr double EPSILON_FACTOR = 3.5;
-  enum flags { IS_EMPTY };
+  // due to a mistake different bits were used in C++ and Java to indicate empty sketch
+  // therefore both are set and checked for compatibility with historical binary format
+  enum flags { IS_EMPTY_1 = 0, IS_EMPTY_2 = 2 };
   W total_weight;
   W offset;
   reverse_purge_hash_map<T, W, H, E, A> map;
@@ -318,14 +325,19 @@ private:
   class items_deleter;
 };
 
+/// Row in the output from #get_frequent_items
 template<typename T, typename W, typename H, typename E, typename A>
 class frequent_items_sketch<T, W, H, E, A>::row {
 public:
   row(const T* item, W weight, W offset):
     item(item), weight(weight), offset(offset) {}
+  /// @return item
   const T& get_item() const { return *item; }
+  /// @return frequency (weight) estimate
   W get_estimate() const { return weight + offset; }
+  /// @return estimate lower bound
   W get_lower_bound() const { return weight; }
+  /// @return estimate upper bound
   W get_upper_bound() const { return weight + offset; }
 private:
   const T* item;

@@ -14,17 +14,16 @@ target_include_directories(VisorInputFlow
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         )
 
+find_package(PcapPlusPlus REQUIRED)
+find_package(uvw REQUIRED)
+
 target_link_libraries(VisorInputFlow
         PUBLIC
         netflow
         sflow
         Visor::Core
-        ${CONAN_LIBS_LIBUV}
-        ${CONAN_LIBS_UVW}
-        ${CONAN_LIBS_PCAPPLUSPLUS}
-        ${CONAN_LIBS_PTHREADS4W}
-        ${CONAN_LIBS_LIBPCAP}
-        ${CONAN_LIBS_NPCAP}
+        PcapPlusPlus::PcapPlusPlus
+        uvw::uvw
         )
 
 set(VISOR_STATIC_PLUGINS ${VISOR_STATIC_PLUGINS} Visor::Input::Flow PARENT_SCOPE)

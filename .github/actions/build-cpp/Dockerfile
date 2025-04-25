@@ -1,10 +1,6 @@
-FROM debian:bullseye-slim
+FROM ubuntu:noble
 
-LABEL author="Everton Haise Taques <everton.taques@encora.com>"
-LABEL maintainer="Orb Community"
-LABEL version="1.0.0"
-
-ENV BUILD_DEPS "g++ cmake make git pkgconf jq python3-pip python3-setuptools ca-certificates libasan6 zip curl python wget"
+ENV BUILD_DEPS "g++ cmake make git pkgconf jq python3 python3-pip python3-setuptools ca-certificates zip curl wget gcc-aarch64-linux-gnu g++-aarch64-linux-gnu"
 
 COPY ./entrypoint.sh /entrypoint.sh
 
@@ -13,9 +9,9 @@ RUN mkdir -p /pktvisor-src
 WORKDIR /pktvisor-src
 
 RUN apt-get update && \
-    apt-get upgrade --yes --force-yes && \
-    apt-get install --yes --force-yes --no-install-recommends ${BUILD_DEPS} && \
-    pip3 install 'conan==1.61.0' --force-reinstall
+    apt-get upgrade --yes && \
+    apt-get install --yes --no-install-recommends ${BUILD_DEPS} && \
+    pip3 install conan --force-reinstall --break-system-packages
     
 RUN chmod +x /entrypoint.sh
 

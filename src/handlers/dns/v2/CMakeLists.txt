@@ -31,9 +31,11 @@ add_executable(unit-tests-handler-dns-v2
         tests/test_dns_layer.cpp
         tests/test_dnstap.cpp)
 
+find_package(nlohmann_json_schema_validator REQUIRED)
+
 target_link_libraries(unit-tests-handler-dns-v2
         PRIVATE
-        ${CONAN_LIBS_JSON-SCHEMA-VALIDATOR}
+        nlohmann_json_schema_validator
         Visor::Handler::Dns::V2
         Visor::Lib::Test)
 

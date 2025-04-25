@@ -38,6 +38,7 @@ static const uint32_t U32_TABLE_DOWNSIZE_DENOM = 4LL;
 template<typename A>
 class u32_table {
 public:
+  using vector_u32 = std::vector<uint32_t, typename std::allocator_traits<A>::template rebind_alloc<uint32_t>>;
 
   u32_table(const A& allocator);
   u32_table(uint8_t lg_size, uint8_t num_valid_bits, const A& allocator);
@@ -54,7 +55,7 @@ public:
 
   static u32_table make_from_pairs(const uint32_t* pairs, uint32_t num_pairs, uint8_t lg_k, const A& allocator);
 
-  vector_u32<A> unwrapping_get_items() const;
+  vector_u32 unwrapping_get_items() const;
 
   static void merge(
     const uint32_t* arr_a, size_t start_a, size_t length_a, // input
@@ -70,7 +71,7 @@ private:
   uint8_t lg_size; // log2 of number of slots
   uint8_t num_valid_bits;
   uint32_t num_items;
-  vector_u32<A> slots;
+  vector_u32 slots;
 
   inline uint32_t lookup(uint32_t item) const;
   inline void must_insert(uint32_t item);

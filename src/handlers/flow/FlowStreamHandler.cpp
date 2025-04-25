@@ -339,13 +339,13 @@ void FlowStreamHandler::process_sflow_cb(const SFSample &payload, [[maybe_unused
             flow.is_ipv6 = true;
         }
 
-        flow.l4 = IP_PROTOCOL::UNKNOWN_IP;
+        flow.l4 = FLOW_IP_PROTOCOL::UNKNOWN_IP;
         switch (sample.dcd_ipProtocol) {
-        case IP_PROTOCOL::TCP:
-            flow.l4 = IP_PROTOCOL::TCP;
+        case FLOW_IP_PROTOCOL::TCP:
+            flow.l4 = FLOW_IP_PROTOCOL::TCP;
             break;
-        case IP_PROTOCOL::UDP:
-            flow.l4 = IP_PROTOCOL::UDP;
+        case FLOW_IP_PROTOCOL::UDP:
+            flow.l4 = FLOW_IP_PROTOCOL::UDP;
             break;
         }
 
@@ -422,13 +422,13 @@ void FlowStreamHandler::process_netflow_cb(const std::string &senderIP, const NF
             flow.is_ipv6 = true;
         }
 
-        flow.l4 = IP_PROTOCOL::UNKNOWN_IP;
+        flow.l4 = FLOW_IP_PROTOCOL::UNKNOWN_IP;
         switch (sample.protocol) {
-        case IP_PROTOCOL::TCP:
-            flow.l4 = IP_PROTOCOL::TCP;
+        case FLOW_IP_PROTOCOL::TCP:
+            flow.l4 = FLOW_IP_PROTOCOL::TCP;
             break;
-        case IP_PROTOCOL::UDP:
-            flow.l4 = IP_PROTOCOL::UDP;
+        case FLOW_IP_PROTOCOL::UDP:
+            flow.l4 = FLOW_IP_PROTOCOL::UDP;
             break;
         }
 
@@ -1302,10 +1302,10 @@ void FlowMetricsBucket::process_interface(bool deep, FlowInterface *iface, const
         }
 
         switch (flow.l4) {
-        case IP_PROTOCOL::UDP:
+        case FLOW_IP_PROTOCOL::UDP:
             iface->counters.at(type).UDP += aggregator;
             break;
-        case IP_PROTOCOL::TCP:
+        case FLOW_IP_PROTOCOL::TCP:
             iface->counters.at(type).TCP += aggregator;
             break;
         default:
@@ -1319,7 +1319,7 @@ void FlowMetricsBucket::process_interface(bool deep, FlowInterface *iface, const
     }
 
     auto proto = network::Protocol::TCP;
-    if (flow.l4 == IP_PROTOCOL::UDP) {
+    if (flow.l4 == FLOW_IP_PROTOCOL::UDP) {
         proto = network::Protocol::UDP;
     }
 

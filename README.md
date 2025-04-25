@@ -1,8 +1,8 @@
 ![pktvisor](docs/images/pktvisor-header.png)
 
-[![Build status](https://github.com/orb-community/pktvisor/workflows/Build/badge.svg)](https://github.com/orb-community/pktvisor/actions)
-[![CodeQL](https://github.com/orb-community/pktvisor/workflows/CodeQL/badge.svg)](https://github.com/orb-community/pktvisor/security/code-scanning)
-[![CodeCov](https://codecov.io/gh/orb-community/pktvisor/branch/develop/graph/badge.svg)](https://app.codecov.io/gh/orb-community/pktvisor/tree/develop)
+[![Build status](https://github.com/netboxlabs/pktvisor/workflows/Build/badge.svg)](https://github.com/netboxlabs/pktvisor/actions)
+[![CodeQL](https://github.com/netboxlabs/pktvisor/workflows/CodeQL/badge.svg)](https://github.com/netboxlabs/pktvisor/security/code-scanning)
+[![CodeCov](https://codecov.io/gh/netboxlabs/pktvisor/branch/develop/graph/badge.svg)](https://app.codecov.io/gh/netboxlabs/pktvisor/tree/develop)
 
 <p align="left">
   <strong>
@@ -38,7 +38,7 @@ The [stream analyzer system](src/handlers) includes full application layer analy
 * Set Cardinality
 * GeoIP/ASN
 
-Please see the list of [current metrics](https://github.com/orb-community/pktvisor/wiki/Current-Metrics) or the [sample metric output](https://github.com/orb-community/pktvisor/wiki/Sample-pktvisor-Output-Data).
+Please see the list of [current metrics](https://github.com/netboxlabs/pktvisor/wiki/Current-Metrics) or the [sample metric output](https://github.com/netboxlabs/pktvisor/wiki/Sample-pktvisor-Output-Data).
 
 pktvisor has its origins in observability of critical internet infrastructure in support of DDoS protection, traffic
 engineering, and ongoing operations.
@@ -55,17 +55,17 @@ the [Network](src/handlers/net) and [DNS](src/handlers/dns) stream processors, a
 ### Docker
 
 One of the easiest ways to get started with pktvisor is to use
-the [public docker image](https://hub.docker.com/r/orbcommunity/pktvisor). The image contains the collector
+the [public docker image](https://hub.docker.com/r/netboxlabs/pktvisor). The image contains the collector
 agent (`pktvisord`), the command line UI (`pktvisor-cli`) and the pcap and dnstap file analyzer (`pktvisor-reader`). When running
 the container, you specify which tool to run.
 
 1. *Pull the container*
 
 ```
-docker pull orbcommunity/pktvisor
+docker pull netboxlabs/pktvisor
 ``` 
 
-or use `orbcommunity/pktvisor:latest-develop` to get the latest development version.
+or use `netboxlabs/pktvisor:latest-develop` to get the latest development version.
 
 2. *Start the collector agent*
 
@@ -75,7 +75,7 @@ _Note that this step requires docker host networking_ to observe traffic outside
 that [currently only Linux supports host networking](https://docs.docker.com/network/host/):
 
 ```
-docker run --net=host -d orbcommunity/pktvisor pktvisord eth0
+docker run --net=host -d netboxlabs/pktvisor pktvisord eth0
 ```
 
 If the container does not stay running, check the `docker logs` output.
@@ -87,13 +87,13 @@ UI (`pktvisor-cli`) in the foreground, and exit when Ctrl-C is pressed. It conne
 the built in REST API.
 
 ```
-docker run -it --rm --net=host orbcommunity/pktvisor pktvisor-cli
+docker run -it --rm --net=host netboxlabs/pktvisor pktvisor-cli
 ```
 
 ### Linux Static Binary (AppImage, x86_64)
 
 You may also use the Linux all-in-one binary, built with [AppImage](https://appimage.org/), which is available for
-download [on the Releases page](https://github.com/orb-community/pktvisor/releases). It is designed to work on all modern
+download [on the Releases page](https://github.com/netboxlabs/pktvisor/releases). It is designed to work on all modern
 Linux distributions and does not require installation or any other dependencies.
 
 ```shell
@@ -168,7 +168,7 @@ sudo setcap cap_net_raw,cap_net_admin=eip /<full_path>/pktvisord-x86_64
 Current command line options are described with:
 
 ```
-docker run --rm orbcommunity/pktvisor pktvisord --help
+docker run --rm netboxlabs/pktvisor pktvisord --help
 ```
 
 or
@@ -302,7 +302,7 @@ visor:
             config:
               only_qname_suffix:
                 - ".google.com"
-                - ".ns1.com"
+                - ".netboxlabs.com"
     mytcp:
       kind: collection
       input:
@@ -320,7 +320,7 @@ If running in a Docker container, you must mount the configuration file into the
 is on the host at `/local/pktvisor/agent.yaml`, you can mount it into the container and use it with this command:
 
 ```shell
-docker run -v /local/pktvisor:/usr/local/pktvisor/ --net=host orbcommunity/pktvisor pktvisord --config /usr/local/pktvisor/agent.yaml --admin-api
+docker run -v /local/pktvisor:/usr/local/pktvisor/ --net=host netboxlabs/pktvisor pktvisord --config /usr/local/pktvisor/agent.yaml --admin-api
 ```
 
 
@@ -331,7 +331,7 @@ summarization, which is by default a sliding 5 minute time window. It can also c
 host.
 
 ```
-docker run --rm orbcommunity/pktvisor pktvisor-cli -h
+docker run --rm netboxlabs/pktvisor pktvisor-cli -h
 ```
 
 ```shell
@@ -367,7 +367,7 @@ using a tool such as [golang-dnstap](https://github.com/dnstap/golang-dnstap).
 Both take many of the same options, and do all of the same analysis, as `pktvisord` for live capture. pcap files may include Flow capture data.
 
 ```
-docker run --rm orbcommunity/pktvisor pktvisor-reader --help
+docker run --rm netboxlabs/pktvisor pktvisor-reader --help
 ```
 
 ```shell
@@ -404,7 +404,7 @@ You can use the docker container by passing in a volume referencing the director
 output will contain the JSON summarization output, which you can capture or pipe into other tools, for example:
 ```
 
-$ docker run --rm -v /pktvisor/src/tests/fixtures:/pcaps orbcommunity/pktvisor pktvisor-reader /pcaps/dns_ipv4_udp.pcap | jq .
+$ docker run --rm -v /pktvisor/src/tests/fixtures:/pcaps netboxlabs/pktvisor pktvisor-reader /pcaps/dns_ipv4_udp.pcap | jq .
 
 [2021-03-11 18:45:04.572] [pktvisor] [info] Load input plugin: PcapInputModulePlugin dev.visor.module.input/1.0
 [2021-03-11 18:45:04.573] [pktvisor] [info] Load handler plugin: DnsHandler dev.visor.module.handler/1.0
@@ -524,14 +524,14 @@ You can set the `instance` label by passing `--prom-instance ID`
 
 If you are interested in centralized collection
 using [remote write](https://prometheus.io/docs/operating/integrations/#remote-endpoints-and-storage), including to
-cloud providers, there is a [docker image available](https://hub.docker.com/r/orbcommunity/pktvisor-prom-write) to make this
+cloud providers, there is a [docker image available](https://hub.docker.com/r/netboxlabs/pktvisor-prom-write) to make this
 easy. See [centralized_collection/prometheus](centralized_collection/prometheus) for more.
 
 Also see [getorb.io](https://getorb.io) for information on connecting pktvisor agents to the Orb observability platform.
 
 ### REST API
 
-REST API documentation is available in [OpenAPI Format](https://app.swaggerhub.com/apis/orb-community/pktvisor/3.0.0-oas3)
+REST API documentation is available in [OpenAPI Format](https://app.swaggerhub.com/apis/netboxlabs/pktvisor/3.0.0-oas3)
 
 Please note that the administration control plane API (`--admin-api`) is currently undergoing heavy iteration and so is
 not yet documented. If you have a use case that requires the administration API, please [contact us](#contact-us) to
@@ -545,7 +545,7 @@ ingress and egress traffic:
 ```
 docker run --rm --net=host -d \
     --mount type=bind,source=/opt/geo,target=/geo \
-    orbcommunity/pktvisor pktvisord \
+    netboxlabs/pktvisor pktvisord \
     --geo-city /geo/GeoIP2-City.mmdb \
     --geo-asn /geo/GeoIP2-ISP.mmdb \
     -H 192.168.0.54/32,127.0.0.1/32 \
@@ -574,10 +574,10 @@ Please [contact us](#contact-us) if you have any questions on installation, use,
 
 We are very interested in hearing about your use cases, feature requests, and other feedback!
 
-* [File an issue](https://github.com/orb-community/pktvisor/issues/new)
-* See existing [issues](https://github.com/orb-community/pktvisor/issues)
-* Start a [Discussion](https://github.com/orb-community/pktvisor/discussions)
-* [Join us on Slack](https://join.slack.com/t/orb-community/shared_invite/zt-qqsm5cb4-9fsq1xa~R3h~nX6W0sJzmA)
+* [File an issue](https://github.com/netboxlabs/pktvisor/issues/new)
+* See existing [issues](https://github.com/netboxlabs/pktvisor/issues)
+* Start a [Discussion](https://github.com/netboxlabs/pktvisor/discussions)
+* [Join us on Slack](https://join.slack.com/t/netboxlabs/shared_invite/zt-qqsm5cb4-9fsq1xa~R3h~nX6W0sJzmA)
 * Send mail to [info@pktvisor.dev](mailto:info@pktvisor.dev)
 
 ## Build
@@ -591,11 +591,11 @@ pktvisor is developed and tested on Linux and OSX. A Windows port is in progress
 
 #### Dependencies
 
-* [Conan](https://conan.io/) 1.X C++ package manager
-* CMake >= 3.13 (`cmake`)
+* [Conan](https://conan.io/) 2.X C++ package manager
+* CMake >= 3.24 (`cmake`)
 * C++ compiler supporting C++17
 
-For the list of packages included by conan, see [conanfile.txt](conanfile.txt)
+For the list of packages included by conan, see [conanfile.py](conanfile.py)
 
 #### Building
 
@@ -603,12 +603,12 @@ The general build steps are:
 
 ```
 # clone the repository
-git clone https://github.com/orb-community/pktvisor.git
-cd pktvisor
-mkdir build && cd build
-
+git clone https://github.com/netboxlabs/pktvisor.git
+cd pktvisor/
+conan profile detect -f
+cd build/
 # configure and handle dependencies 
-cmake -DCMAKE_BUILD_TYPE=Release ..
+cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=./cmake/conan_provider.cmake ..
 
 # build and run tests
 make all test
@@ -618,8 +618,8 @@ bin/pktvisord --help
 ```
 
 As development environments can vary widely, please see
-the [Dockerfile](https://github.com/orb-community/pktvisor/blob/master/docker/Dockerfile)
-and [Continuous Integration build file](https://github.com/orb-community/pktvisor/blob/master/.github/workflows/build.yml) for
+the [Dockerfile](https://github.com/netboxlabs/pktvisor/blob/master/docker/Dockerfile)
+and [Continuous Integration build file](https://github.com/netboxlabs/pktvisor/blob/master/.github/workflows/build.yml) for
 reference.
 
 ## Contribute

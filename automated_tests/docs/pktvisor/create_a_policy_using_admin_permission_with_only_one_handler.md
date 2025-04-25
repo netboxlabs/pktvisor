@@ -5,7 +5,7 @@
 DNS:
 
 ## Steps:
-- Provide a pktvisor instance using `docker run --net=host -d orbcommunity/pktvisor pktvisord --admin-api <net_interface>`
+- Provide a pktvisor instance using `docker run --net=host -d netboxlabs/pktvisor pktvisord --admin-api <net_interface>`
 - Create a policy with dns handler through a post request on the endpoint: `/api/v1/policies`
 - Make a get request to the same endpoint
 
@@ -19,7 +19,7 @@ DNS:
 NET:
 
 ## Steps:
-- Provide a pktvisor instance using `docker run --net=host -d orbcommunity/pktvisor pktvisord --admin-api <net_interface>`
+- Provide a pktvisor instance using `docker run --net=host -d netboxlabs/pktvisor pktvisord --admin-api <net_interface>`
 - Create a policy with net handler through a post request on the endpoint: `/api/v1/policies`
 - Make a get request to the same endpoint
 
@@ -34,7 +34,7 @@ DHCP:
 
 
 ## Steps:
-- Provide a pktvisor instance using `docker run --net=host -d orbcommunity/pktvisor pktvisord --admin-api <net_interface>`
+- Provide a pktvisor instance using `docker run --net=host -d netboxlabs/pktvisor pktvisord --admin-api <net_interface>`
 - Create a policy with dhcp handler through a post request on the endpoint: `/api/v1/policies`
 - Make a get request to the same endpoint
 
@@ -48,7 +48,7 @@ PCAP:
 
 
 ## Steps:
-- Provide a pktvisor instance using `docker run --net=host -d orbcommunity/pktvisor pktvisord --admin-api <net_interface>`
+- Provide a pktvisor instance using `docker run --net=host -d netboxlabs/pktvisor pktvisord --admin-api <net_interface>`
 - Create a policy with pcap handler through a post request on the endpoint: `/api/v1/policies`
 - Make a get request to the same endpoint
 

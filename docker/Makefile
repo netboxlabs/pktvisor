@@ -4,4 +4,4 @@
 # for developer environments (e.g. clion docker toolchain)
 # note does not require/include the source base
 pktvisor:
-	docker build -t orbcommunity/pktvisor -f ./Dockerfile ..
+	docker build -t netboxlabs/pktvisor -f ./Dockerfile ..

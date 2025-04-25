@@ -22,8 +22,6 @@
 
 #include <cstdint>
 
-#include <stdio.h>
-
 namespace datasketches {
 
 static const uint8_t byte_leading_zeros_table[256] = {

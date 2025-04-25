@@ -30,7 +30,7 @@ def _read_configs():
         configs['sudo'] = "True"
         assert_that(configs.get('sudo_password'), not_none(), 'Sudo password was not provided!')
     client = docker.from_env()
-    configs['pktvisor_docker_image'] = f"orbcommunity/pktvisor:{configs.get('pktvisor_docker_image_tag', 'latest')}"
+    configs['pktvisor_docker_image'] = f"netboxlabs/pktvisor:{configs.get('pktvisor_docker_image_tag', 'latest')}"
     try:
         client.images.get(configs['pktvisor_docker_image'])
     except ImageNotFound:

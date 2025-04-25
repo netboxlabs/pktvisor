@@ -1,7 +1,7 @@
 ## Scenario: Remove a policy without admin permission
 
 ## Steps:
-- Provide a pktvisor instance using `docker run --net=host -d orbcommunity/pktvisor pktvisord <net_interface>`
+- Provide a pktvisor instance using `docker run --net=host -d netboxlabs/pktvisor pktvisord <net_interface>`
 - Try to remove the default policy through a DELETE request on the endpoint: `/api/v1/policies/{name_of_the_policy}`
 - Make a get request to the same endpoint
 

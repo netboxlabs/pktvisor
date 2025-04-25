@@ -29,9 +29,11 @@ set(VISOR_STATIC_PLUGINS ${VISOR_STATIC_PLUGINS} Visor::Handler::Net::V2 PARENT_
 if (NOT WIN32)
     add_executable(unit-tests-handler-net-v2 tests/test_net_layer.cpp)
 
+    find_package(nlohmann_json_schema_validator REQUIRED)
+
     target_link_libraries(unit-tests-handler-net-v2
         PRIVATE
-        ${CONAN_LIBS_JSON-SCHEMA-VALIDATOR}
+        nlohmann_json_schema_validator
         Visor::Handler::Net::V2
         Visor::Handler::Dns::V2
         Visor::Lib::Test)

@@ -8,10 +8,13 @@
 #include <timer.hpp>
 #ifdef __GNUC__
 #pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#pragma GCC diagnostic ignored "-Woverflow"
 #pragma GCC diagnostic ignored "-Wold-style-cast"
 #pragma GCC diagnostic ignored "-Wunused-function"
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #pragma clang diagnostic ignored "-Wrange-loop-analysis"
+#pragma GCC diagnostic ignored "-Wzero-as-null-pointer-constant"
 #endif
 #include <cpc_sketch.hpp>
 #include <frequent_items_sketch.hpp>
@@ -53,6 +56,12 @@ struct comparator {
 static inline uint64_t timespec_to_uint64(timespec &stamp)
 {
     return stamp.tv_sec * 1000000000ULL + stamp.tv_nsec;
+}
+
+template <typename T>
+static inline std::vector<T> get_quantiles(const datasketches::kll_sketch<T> &quatile)
+{
+    return {quatile.get_quantile(0.50), quatile.get_quantile(0.90), quatile.get_quantile(0.95), quatile.get_quantile(0.99)};
 }
 
 class Metric
@@ -350,10 +359,9 @@ public:
             if (other._quantile.is_empty()) {
                 return;
             }
-            const double fractions[4]{0.50, 0.90, 0.95, 0.99};
-            auto other_quantiles = other._quantile.get_quantiles(fractions, 4);
+            auto other_quantiles = get_quantiles(other._quantile);
             if (_quantiles_sum.empty()) {
-                _quantiles_sum = _quantile.get_quantiles(fractions, 4);
+                _quantiles_sum = get_quantiles(_quantile);
             }
             for (uint8_t i = 0; i < 4; i++) {
                 _quantiles_sum[i] += other_quantiles[i];
@@ -392,8 +400,7 @@ public:
 
         std::vector<T> quantiles;
         if (_quantiles_sum.empty()) {
-            const double fractions[4]{0.50, 0.90, 0.95, 0.99};
-            quantiles = _quantile.get_quantiles(fractions, 4);
+            quantiles = get_quantiles(_quantile);
         } else {
             quantiles = _quantiles_sum;
         }
@@ -414,8 +421,7 @@ public:
 
         std::vector<T> quantiles;
         if (_quantiles_sum.empty()) {
-            const double fractions[4]{0.50, 0.90, 0.95, 0.99};
-            quantiles = _quantile.get_quantiles(fractions, 4);
+            quantiles = get_quantiles(_quantile);
         } else {
             quantiles = _quantiles_sum;
         }
@@ -448,9 +454,8 @@ public:
         }
 
         std::vector<T> quantiles;
-        const double fractions[4]{0.50, 0.90, 0.95, 0.99};
         if (_quantiles_sum.empty()) {
-            quantiles = _quantile.get_quantiles(fractions, 4);
+            quantiles = get_quantiles(_quantile);
         } else {
             quantiles = _quantiles_sum;
         }
@@ -461,6 +466,7 @@ public:
         auto summary_data_point = metric->mutable_summary()->add_data_points();
         summary_data_point->set_start_time_unix_nano(timespec_to_uint64(start));
         summary_data_point->set_time_unix_nano(timespec_to_uint64(end));
+        const double fractions[4]{0.50, 0.90, 0.95, 0.99};
         for (auto it = quantiles.begin(); it != quantiles.end(); ++it) {
             auto quantile = summary_data_point->add_quantile_values();
             quantile->set_quantile(fractions[it - quantiles.begin()]);

@@ -37,9 +37,11 @@ target_sources(common
 		${CMAKE_CURRENT_SOURCE_DIR}/include/conditional_back_inserter.hpp
 		${CMAKE_CURRENT_SOURCE_DIR}/include/conditional_forward.hpp
 		${CMAKE_CURRENT_SOURCE_DIR}/include/ceiling_power_of_2.hpp
-                ${CMAKE_CURRENT_SOURCE_DIR}/include/kolmogorov_smirnov.hpp
+		${CMAKE_CURRENT_SOURCE_DIR}/include/kolmogorov_smirnov.hpp
 		${CMAKE_CURRENT_SOURCE_DIR}/include/kolmogorov_smirnov_impl.hpp
 		${CMAKE_CURRENT_SOURCE_DIR}/include/quantiles_sorted_view.hpp
   		${CMAKE_CURRENT_SOURCE_DIR}/include/quantiles_sorted_view_impl.hpp
-    		${CMAKE_CURRENT_SOURCE_DIR}/include/version.hpp.in
+		${CMAKE_CURRENT_SOURCE_DIR}/include/optional.hpp
+		${CMAKE_CURRENT_SOURCE_DIR}/include/version.hpp.in
+		${CMAKE_CURRENT_SOURCE_DIR}/include/xxhash64.h
 		)

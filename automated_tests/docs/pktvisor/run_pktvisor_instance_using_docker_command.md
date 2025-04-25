@@ -1,6 +1,6 @@
 ## Scenario: Run pktvisor instance using docker command 
 ## Steps: 
- - Run docker using `docker run --net=host -d orbcommunity/pktvisor pktvisord <net>`
+ - Run docker using `docker run --net=host -d netboxlabs/pktvisor pktvisord <net>`
  
 
 ## Expected Result:

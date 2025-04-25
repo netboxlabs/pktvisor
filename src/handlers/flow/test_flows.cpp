@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/catch_test_visor.hpp>
+#include <catch2/matchers/catch_matchers.hpp>
 
 #include "FlowInputStream.h"
 #include "FlowStreamHandler.h"
@@ -399,7 +399,49 @@ TEST_CASE("Parse sflow stream with interfaces filter", "[sflow][flow]")
     CHECK(j["devices"]["192.168.0.11"]["interfaces"]["37"]["top_out_src_ips_and_port_bytes"][0]["estimate"] == nullptr);
 }
 
-TEST_CASE("Parse netflow stream", "[netflow][flow]")
+TEST_CASE("Parse netflow v5 stream", "[netflow][flow]")
+{
+
+    FlowInputStream stream{"netflow-test"};
+    stream.config_set("flow_type", "netflow");
+    stream.config_set("pcap_file", "tests/fixtures/nf5.pcap");
+
+    visor::Config c;
+    auto stream_proxy = stream.add_event_proxy(c);
+    c.config_set<uint64_t>("num_periods", 1);
+    FlowStreamHandler flow_handler{"flow-test", stream_proxy, &c};
+    flow_handler.config_set<visor::Configurable::StringList>("enable", visor::Configurable::StringList({"top_tos"}));
+
+    flow_handler.start();
+    stream.start();
+    stream.stop();
+    flow_handler.stop();
+
+    auto event_data = flow_handler.metrics()->bucket(0)->event_data_locked();
+
+    // confirmed with wireshark
+    CHECK(event_data.num_events->value() == 2);
+    CHECK(event_data.num_samples->value() == 2);
+
+    nlohmann::json j;
+    flow_handler.metrics()->bucket(0)->to_json(j);
+
+    CHECK(j["devices"]["10.0.0.2"]["records_flows"] == 3);
+    CHECK(j["devices"]["10.0.0.2"]["interfaces"]["0"]["cardinality"]["dst_ips_out"] == 2);
+    CHECK(j["devices"]["10.0.0.2"]["interfaces"]["0"]["cardinality"]["src_ips_in"] == 1);
+    CHECK(j["devices"]["10.0.0.2"]["interfaces"]["0"]["cardinality"]["dst_ports_out"] == 3);
+    CHECK(j["devices"]["10.0.0.2"]["interfaces"]["0"]["cardinality"]["src_ports_in"] == 2);
+    CHECK(j["devices"]["10.0.0.2"]["interfaces"]["0"]["top_in_src_ips_bytes"][0]["estimate"] == 1720);
+    CHECK(j["devices"]["10.0.0.2"]["interfaces"]["0"]["top_in_src_ips_packets"][0]["estimate"] == 33);
+    CHECK(j["devices"]["10.0.0.2"]["interfaces"]["0"]["top_in_dscp_bytes"][0]["estimate"] == 1220);
+    CHECK(j["devices"]["10.0.0.2"]["interfaces"]["0"]["top_in_dscp_bytes"][0]["name"] == "CS6");
+    CHECK(j["devices"]["10.0.0.2"]["interfaces"]["0"]["top_in_ecn_packets"][0]["estimate"] == 33);
+    CHECK(j["devices"]["10.0.0.2"]["interfaces"]["0"]["top_in_ecn_packets"][0]["name"] == "Not-ECT");
+    CHECK(j["devices"]["10.0.0.2"]["interfaces"]["0"]["top_in_dst_ports_bytes"][0]["estimate"] == 1128);
+    CHECK(j["devices"]["10.0.0.2"]["interfaces"]["0"]["top_in_dst_ports_bytes"][0]["name"] == "telnet");
+}
+
+TEST_CASE("Parse netflow v9 stream", "[netflow][flow]")
 {
 
     FlowInputStream stream{"netflow-test"};

@@ -27,9 +27,11 @@ add_executable(unit-tests-handler-pcap
         tests/test_pcap_layer.cpp
         tests/test_json_schema.cpp)
 
+find_package(nlohmann_json_schema_validator REQUIRED)
+
 target_link_libraries(unit-tests-handler-pcap
         PRIVATE
-        ${CONAN_LIBS_JSON-SCHEMA-VALIDATOR}
+        nlohmann_json_schema_validator
         Visor::Handler::Pcap
         Visor::Lib::Test)
 

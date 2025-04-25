@@ -78,7 +78,7 @@ typedef std::unordered_map<std::string, DeviceEnrich> EnrichData;
 
 struct FlowData {
     bool is_ipv6;
-    IP_PROTOCOL l4;
+    FLOW_IP_PROTOCOL l4;
     size_t payload_size;
     uint32_t packets;
     uint8_t tos;

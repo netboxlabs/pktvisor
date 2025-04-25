@@ -22,13 +22,16 @@
 
 namespace datasketches {
 
+/**
+ * Kolmogorov-Smirnov test for KLL or Quantiles sketches
+ */
 class kolmogorov_smirnov {
 public:
   /**
    * Computes the raw delta area between two quantile sketches for the Kolmogorov-Smirnov Test.
    * Will work for a type-matched pair of KLL or Quantiles sketches of the same parameterized type T.
-   * @param sketch1 KLL sketch 1
-   * @param sketch2 KLL sketch 2
+   * @param sketch1 sketch 1
+   * @param sketch2 sketch 2
    * @return the raw delta between two KLL quantile sketches
    */
   template<typename Sketch>
@@ -39,8 +42,8 @@ public:
    * Adjusts the computed threshold by the error epsilons of the two given sketches.
    * See <a href="https://en.wikipedia.org/wiki/Kolmogorov-Smirnov_test">Kolmogorov–Smirnov Test</a>
    * Will work for a type-matched pair of KLL or Quantiles sketches of the same parameterized type T.
-   * @param sketch1 KLL sketch 1
-   * @param sketch2 KLL sketch 2
+   * @param sketch1 sketch 1
+   * @param sketch2 sketch 2
    * @param p Target p-value. Typically .001 to .1, e.g., .05.
    * @return the adjusted threshold to be compared with the raw delta
    */
@@ -52,8 +55,8 @@ public:
    * Will work for a type-matched pair of KLL or Quantiles sketches of the same parameterized type T.
    * Note: if the given sketches have insufficient data or if the sketch sizes are too small,
    * this will return false.
-   * @param sketch1 KLL sketch 1
-   * @param sketch2 KLL sketch 2
+   * @param sketch1 sketch 1
+   * @param sketch2 sketch 2
    * @param p Target p-value. Typically .001 to .1, e.g., .05.
    * @return Boolean indicating whether we can reject the null hypothesis (that the sketches
    * reflect the same underlying distribution) using the provided p-value.

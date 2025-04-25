@@ -14,9 +14,9 @@ trap trapeze SIGINT
 
 if [ $# -eq 0 ]; then
   echo "No arguments provided: specify either 'pktvisor-cli', 'pktvisor-reader' or 'pktvisord'. Try:"
-  echo "docker run orbcommunity/pktvisor pktvisor-cli -h"
-  echo "docker run orbcommunity/pktvisor pktvisor-reader --help"
-  echo "docker run orbcommunity/pktvisor pktvisord --help"
+  echo "docker run netboxlabs/pktvisor pktvisor-cli -h"
+  echo "docker run netboxlabs/pktvisor pktvisor-reader --help"
+  echo "docker run netboxlabs/pktvisor pktvisord --help"
   exit 1
 fi
 

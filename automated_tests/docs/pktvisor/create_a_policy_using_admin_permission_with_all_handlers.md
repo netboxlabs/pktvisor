@@ -1,6 +1,6 @@
 ## Scenario: Create a policy using admin permission with all handlers 
 ## Steps: 
-- Provide a pktvisor instance using `docker run --net=host -d orbcommunity/pktvisor pktvisord --admin-api <net_interface>`
+- Provide a pktvisor instance using `docker run --net=host -d netboxlabs/pktvisor pktvisord --admin-api <net_interface>`
 - Create a policy with all handlers through a post request on the endpoint: `/api/v1/policies`
   - Check our method `generate_pcap_policy_with_all_handlers` on [policies.py](../../features/steps/policies.py) in order to have examples of how to do it
 - Make a get request to the same endpoint
