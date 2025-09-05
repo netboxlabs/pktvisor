@@ -47,7 +47,9 @@ jobs:
           restore-keys: conan-${{ runner.os }}-
       
       - name: Detect Conan Profile
-        run: conan profile detect -f
+        run: |
+          conan profile detect -f
+          conan profile update 'conf.tools.build:cxxflags=["-include","vector"]' default
 
       - name: Configure CMake
         shell: bash
