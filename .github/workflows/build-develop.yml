@@ -49,8 +49,6 @@ jobs:
       - name: Detect Conan Profile
         run: |
           conan profile detect -f
-          #grep -qxF '[conf]' build/profiles/default || echo '[conf]' >> build/profiles/default
-          #echo 'corrade/*:tools.build:cxxflags=["-include","vector"]' >> build/profiles/default
 
       - name: Configure CMake
         shell: bash
