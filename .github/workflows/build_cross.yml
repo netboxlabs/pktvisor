@@ -125,7 +125,7 @@ jobs:
       - name: Install dependencies
         working-directory: ${{github.workspace}}/src
         run: |
-          conan install . -pr:b=default -pr:h="host" --build=missing
+          conan install . -pr:b=default -pr:h="host" --build=missing -c=opentelemetry-cpp/*:tools.build:cxxflags=['-include','cstdint']
 
       - name: Configure
         working-directory: ${{github.workspace}}/src/build
@@ -137,7 +137,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=./cmake/conan_provider.cmake \
             -DCONAN_HOST_PROFILE="host" \
-            -DCONAN_INSTALL_ARGS="--build=never;-c=opentelemetry-cpp/*:tools.build:cxxflags=['-include','cstdint']" \
+            -DCONAN_INSTALL_ARGS=--build=never \
             -DCRASHPAD_NOT_SUPPORTED=true \
             -DCMAKE_C_COMPILER_LAUNCHER="${{github.workspace}}/bin/sccache" -DCMAKE_CXX_COMPILER_LAUNCHER="${{github.workspace}}/bin/sccache" \
             -DCORRADE_RC_PROGRAM=$(command -v corrade-rc) \
