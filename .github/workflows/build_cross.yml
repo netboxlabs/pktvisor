@@ -21,18 +21,18 @@ jobs:
         include:
           - arch: x86_64
             conan_arch: x86_64
-            toolchain: https://musl.cc/x86_64-linux-musl-cross.tgz
+            toolchain: https://github.com/cross-tools/musl-cross/releases/download/20250815/x86_64-unknown-linux-musl.tar.xz
             cc: x86_64-linux-musl-gcc
             cxx: x86_64-linux-musl-g++
             ldflags: "-static"
           # - arch: armv7lh # ARMv7 little-endian hard-float
           #   conan_arch: armv7hf
-          #   toolchain: https://musl.cc/armv7l-linux-musleabihf-cross.tgz
+          #   toolchain: https://github.com/cross-tools/musl-cross/releases/download/20250815/armv7-unknown-linux-musleabihf.tar.xz
           #   cc: armv7l-linux-musleabihf-gcc
           #   cxx: armv7l-linux-musleabihf-g++
           - arch: aarch64
             conan_arch: armv8
-            toolchain: https://musl.cc/aarch64-linux-musl-cross.tgz
+            toolchain: https://github.com/cross-tools/musl-cross/releases/download/20250815/aarch64-unknown-linux-musl.tar.xz
             cc: aarch64-linux-musl-gcc
             cxx: aarch64-linux-musl-g++
             ldflags: "-static"
