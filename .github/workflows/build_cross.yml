@@ -67,7 +67,7 @@ jobs:
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
           mkdir -p toolchain
-          curl -L "${{matrix.toolchain}}" | tar -C toolchain -xz --strip-components=1
+          curl -L "${{matrix.toolchain}}" | tar -C toolchain -xJ --strip-components=1
 
       - name: Install Conan
         run: pip install --no-cache-dir conan --force-reinstall
