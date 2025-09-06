@@ -20,7 +20,7 @@ class Pktvisor(ConanFile):
             self.requires("libpcap/1.10.5", force=True)
         else:
             self.requires("npcap/1.70")
-        self.requires("opentelemetry-cpp/1.21.0")
+        self.requires("opentelemetry-cpp/1.17.0")
         self.requires("pcapplusplus/23.09")
         self.requires("protobuf/5.27.0")
         self.requires("sigslot/1.2.2")
