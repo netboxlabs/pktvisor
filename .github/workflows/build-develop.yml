@@ -49,13 +49,13 @@ jobs:
       - name: Detect Conan Profile
         run: |
           conan profile detect -f
-          grep -qxF '[conf]' build/profiles/default || echo '[conf]' >> build/profiles/default
-          echo 'corrade/*:tools.build:cxxflags=["-include","vector"]' >> build/profiles/default
+          #grep -qxF '[conf]' build/profiles/default || echo '[conf]' >> build/profiles/default
+          #echo 'corrade/*:tools.build:cxxflags=["-include","vector"]' >> build/profiles/default
 
       - name: Configure CMake
         shell: bash
         working-directory: ${{github.workspace}}/build
-        run: PKG_CONFIG_PATH=${{github.workspace}}/local/lib/pkgconfig cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=./cmake/conan_provider.cmake
+        run: PKG_CONFIG_PATH=${{github.workspace}}/local/lib/pkgconfig cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=./cmake/conan_provider.cmake -D"CONAN_CONF=corrade/*:tools.build:cxxflags=['-include','vector']"
 
       - name: Build
         working-directory: ${{github.workspace}}/build
