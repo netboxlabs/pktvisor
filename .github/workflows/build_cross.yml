@@ -125,7 +125,7 @@ jobs:
       - name: Install dependencies
         working-directory: ${{github.workspace}}/src
         run: |
-          conan install . -pr:b=default -pr:h="host" --build=missing -c=opentelemetry-cpp/*:tools.build:cxxflags=['-include','cstdint']
+          conan install . -pr:b=default -pr:h="host" --build=missing -c="opentelemetry-cpp/*:tools.build:cxxflags=['-include','cstdint']"
 
       - name: Configure
         working-directory: ${{github.workspace}}/src/build
