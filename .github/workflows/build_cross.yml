@@ -22,8 +22,8 @@ jobs:
           - arch: x86_64
             conan_arch: x86_64
             toolchain: https://github.com/cross-tools/musl-cross/releases/download/20250815/x86_64-unknown-linux-musl.tar.xz
-            cc: x86_64-linux-musl-gcc
-            cxx: x86_64-linux-musl-g++
+            cc: x86_64-unknown-linux-musl-gcc
+            cxx: x86_64-unknown-linux-musl-g++
             ldflags: "-static"
           # - arch: armv7lh # ARMv7 little-endian hard-float
           #   conan_arch: armv7hf
@@ -33,8 +33,8 @@ jobs:
           - arch: aarch64
             conan_arch: armv8
             toolchain: https://github.com/cross-tools/musl-cross/releases/download/20250815/aarch64-unknown-linux-musl.tar.xz
-            cc: aarch64-linux-musl-gcc
-            cxx: aarch64-linux-musl-g++
+            cc: aarch64-unknown-linux-musl-gcc
+            cxx: aarch64-unknown-linux-musl-g++
             ldflags: "-static"
     env:
       CC: gcc
