@@ -24,6 +24,7 @@ jobs:
             toolchain: https://github.com/netboxlabs/pktvisor/releases/download/toolchains/x86_64-linux-musl-cross.tgz
             cc: x86_64-linux-musl-gcc
             cxx: x86_64-linux-musl-g++
+            ldflags: "-static"
           # - arch: armv7lh # ARMv7 little-endian hard-float
           #   conan_arch: armv7hf
           #   toolchain: https://github.com/netboxlabs/pktvisor/releases/download/toolchains/armv7l-linux-musleabihf-cross.tgz
@@ -34,6 +35,7 @@ jobs:
             toolchain: https://github.com/netboxlabs/pktvisor/releases/download/toolchains/aarch64-linux-musl-cross.tgz
             cc: aarch64-linux-musl-gcc
             cxx: aarch64-linux-musl-g++
+            ldflags: "-static"
     env:
       CC: gcc
       CXX: g++
@@ -110,6 +112,7 @@ jobs:
           [buildenv]
           CC=${{github.workspace}}/toolchain/bin/${{matrix.cc}}
           CXX=${{github.workspace}}/toolchain/bin/${{matrix.cxx}}
+          LDFLAGS=${{matrix.ldflags}}
           EOF
 
       - name: Setup Conan Cache
@@ -122,12 +125,13 @@ jobs:
       - name: Install dependencies
         working-directory: ${{github.workspace}}/src
         run: |
-          conan install . -pr:b=default -pr:h="host" --build=missing -c="opentelemetry-cpp/*:tools.build:cxxflags=['-include','cstdint']"
+          conan install . -pr:b=default -pr:h="host" --build=missing
 
       - name: Configure
         working-directory: ${{github.workspace}}/src/build
         run: |
           export CC CXX
+          export LDFLAGS=-static
           source Release/generators/conanbuild.sh
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
@@ -135,8 +139,6 @@ jobs:
             -DCONAN_HOST_PROFILE="host" \
             -DCONAN_INSTALL_ARGS=--build=never \
             -DCRASHPAD_NOT_SUPPORTED=true \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DCMAKE_EXE_LINKER_FLAGS="-static" \
             -DCMAKE_C_COMPILER_LAUNCHER="${{github.workspace}}/bin/sccache" -DCMAKE_CXX_COMPILER_LAUNCHER="${{github.workspace}}/bin/sccache" \
             -DCORRADE_RC_PROGRAM=$(command -v corrade-rc) \
             -DCMAKE_CXX_STANDARD_LIBRARIES=-latomic
