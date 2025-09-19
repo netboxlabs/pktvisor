@@ -155,7 +155,7 @@ jobs:
           prerelease: false
           
   build-win64:
-    runs-on: windows-2019
+    runs-on: windows-latest
     outputs:
       version_number: ${{ env.VERSION }}
     steps:
