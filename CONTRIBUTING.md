@@ -1,5 +1,5 @@
 ## How to Contribute
-At NS1, it makes us very happy to get pull requests, and we appreciate the time
+At NetBox Labs, it makes us very happy to get pull requests, and we appreciate the time
 and effort it takes to put one together. Below are a few guidelines that can
 help get your pull request approved and merged quickly and easily.
 
@@ -68,11 +68,11 @@ help ensure that requests are resolved quickly and efficiently.
   and/or to modify the scope of the request. Please keep in mind that project
   status consideration or conflicting priorities may require us to close or
   defer work on the new or reopened issue. If that happens, feel free to reach
-  out of support@ns1.com for more information.
+  out of support@netboxlabs.com for more information.
 
 ## Tags on issues
 
-In some projects we (NS1) may apply basic tags on some issues, for
+In some projects we may apply basic tags on some issues, for
 organizational purposes. Note: we do not use tags to indicate timelines or
 priorities.
 
