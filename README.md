@@ -152,7 +152,7 @@ chmod +x pktvisor-reader-x86_64
 We are working on support for additional operating systems, CPU architectures and packaging systems. If you do not see your binary available, please see the [Build](#build) section below to build your own.
 
 If you have a preferred installation method that you would like to see support
-for, [please create an issue](https://github.com/ns1/pktvisor/issues/new).
+for, [please create an issue](https://github.com/netboxlabs/pktvisor/issues/new).
 
 ### Execute Pktvisord binary without root
 Pktvisord uses libpcap to capture PCAP from the desired interface. To do so, it needs system network capture permissions.
@@ -630,8 +630,11 @@ process.
 Please open Pull Requests against the `develop` branch. If you are considering a larger
 contribution, [please contact us](#contact-us) to discuss your design.
 
-See the [NS1 Contribution Guidelines](https://github.com/ns1/community) for more information.
+See the [Contribution Guidelines](CONTRIBUTING.md) for more information.
 
 ## License
 
 This code is released under Mozilla Public License 2.0. You can find terms and conditions in the LICENSE file.
+
+## Required Notice
+Copyright NetBox Labs, Inc.
