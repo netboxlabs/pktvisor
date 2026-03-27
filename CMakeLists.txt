@@ -62,6 +62,17 @@ if(WIN32)
 endif()
 
 find_package(Corrade REQUIRED)
+
+# After the first find_package() triggers conan install, load conan_toolchain.cmake to set
+# CMAKE_PROGRAM_PATH so that tool_requires (e.g. protoc) are preferred over system versions.
+# include_guard() in conan_toolchain.cmake makes this safe when -DCMAKE_TOOLCHAIN_FILE is also used.
+get_property(_conan_generators GLOBAL PROPERTY CONAN_GENERATORS_FOLDER)
+if(_conan_generators AND EXISTS "${_conan_generators}/conan_toolchain.cmake")
+    include("${_conan_generators}/conan_toolchain.cmake")
+    unset(PROTOC_PROGRAM CACHE)
+endif()
+unset(_conan_generators)
+
 include(sanitizer)
 if(CODE_COVERAGE)
     include(CodeCoverage)
