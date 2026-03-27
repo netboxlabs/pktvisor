@@ -5,7 +5,6 @@
 #include "PcapInputStream.h"
 #include "NetworkInterfaceScan.h"
 #include "ThreadName.h"
-#include <ifaddrs.h>
 #include <pcap.h>
 #include <timer.hpp>
 #ifdef __GNUC__
@@ -577,6 +576,7 @@ void PcapInputStream::_open_libpcap_iface(const std::string &bpfFilter)
 
 void PcapInputStream::_get_hosts_from_libpcap_iface()
 {
+#ifndef _WIN32
     ifaddrs *ifap = nullptr;
     if (getifaddrs(&ifap) != 0 || ifap == nullptr) {
         return;
@@ -613,6 +613,7 @@ void PcapInputStream::_get_hosts_from_libpcap_iface()
         }
     }
     freeifaddrs(ifap);
+#endif
 }
 
 void PcapInputStream::info_json(json &j) const
