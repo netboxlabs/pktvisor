@@ -14,7 +14,7 @@ class CorradeConan(ConanFile):
     name = "corrade"
     description = "Corrade is a multiplatform utility library written in C++11/C++14."
     license = "MIT"
-    url = "https://github.com/conan-io/conan-center-index"
+    url = "https://github.com/netboxlabs/pktvisor"
     homepage = "https://magnum.graphics/corrade"
     topics = ("magnum", "filesystem", "console", "environment", "os")
 
