@@ -38,7 +38,7 @@ TEST_CASE("Ensure we use only pktvisor DnsLayer", "[pcap][ipv4][dns]")
     pcpp::RawPacket rawPacket;
 
     while (reader->getNextPacket(rawPacket)) {
-        pcpp::Packet dnsRequest(&rawPacket, static_cast<pcpp::ProtocolTypeFamily>(0x0405)); // TCP(4)+UDP(5) family
+        pcpp::Packet dnsRequest(&rawPacket, pcpp::OsiModelTransportLayer);
         if (dnsRequest.isPacketOfType(pcpp::UDP)) {
             CHECK(dnsRequest.getLayerOfType<pcpp::UdpLayer>() != nullptr);
         } else {

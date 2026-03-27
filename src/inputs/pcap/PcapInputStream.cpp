@@ -5,6 +5,7 @@
 #include "PcapInputStream.h"
 #include "NetworkInterfaceScan.h"
 #include "ThreadName.h"
+#include <ifaddrs.h>
 #include <pcap.h>
 #include <timer.hpp>
 #ifdef __GNUC__
@@ -576,28 +577,42 @@ void PcapInputStream::_open_libpcap_iface(const std::string &bpfFilter)
 
 void PcapInputStream::_get_hosts_from_libpcap_iface()
 {
-    auto addrs = _pcapDevice->getIPAddresses();
-    for (const auto &addr : addrs) {
-        if (addr.isIPv4()) {
-            auto ipv4 = addr.getIPv4();
-            if (ipv4 == pcpp::IPv4Address::Zero) {
-                continue;
+    ifaddrs *ifap = nullptr;
+    if (getifaddrs(&ifap) != 0 || ifap == nullptr) {
+        return;
+    }
+    const std::string devName = _pcapDevice->getName();
+    for (ifaddrs *i = ifap; i != nullptr; i = i->ifa_next) {
+        if (i->ifa_addr == nullptr || i->ifa_name == nullptr || devName != i->ifa_name) {
+            continue;
+        }
+        char buf[INET6_ADDRSTRLEN];
+        if (i->ifa_addr->sa_family == AF_INET) {
+            auto ip4 = reinterpret_cast<sockaddr_in *>(i->ifa_addr);
+            inet_ntop(AF_INET, &ip4->sin_addr, buf, sizeof(buf));
+            uint8_t prefix = 32;
+            if (i->ifa_netmask) {
+                auto nm = reinterpret_cast<sockaddr_in *>(i->ifa_netmask);
+                prefix = static_cast<uint8_t>(__builtin_popcount(ntohl(nm->sin_addr.s_addr)));
             }
-            std::string ip = ipv4.toString();
-            in_addr a;
-            a.s_addr = ipv4.toInt();
-            _hostIPv4.push_back({a, 32, ip + "/32"});
-        } else {
-            auto ipv6 = addr.getIPv6();
-            if (ipv6 == pcpp::IPv6Address::Zero) {
-                continue;
+            std::string cidr = std::string(buf) + "/" + std::to_string(prefix);
+            _hostIPv4.push_back({ip4->sin_addr, prefix, cidr});
+        } else if (i->ifa_addr->sa_family == AF_INET6) {
+            auto ip6 = reinterpret_cast<sockaddr_in6 *>(i->ifa_addr);
+            inet_ntop(AF_INET6, &ip6->sin6_addr, buf, sizeof(buf));
+            uint8_t prefix = 128;
+            if (i->ifa_netmask) {
+                auto nm6 = reinterpret_cast<sockaddr_in6 *>(i->ifa_netmask);
+                prefix = 0;
+                for (int b = 0; b < 16; ++b) {
+                    prefix += static_cast<uint8_t>(__builtin_popcount(nm6->sin6_addr.s6_addr[b]));
+                }
             }
-            std::string ip = ipv6.toString();
-            in6_addr a;
-            memcpy(a.s6_addr, ipv6.toBytes(), 16);
-            _hostIPv6.push_back({a, 128, ip + "/128"});
+            std::string cidr = std::string(buf) + "/" + std::to_string(prefix);
+            _hostIPv6.push_back({ip6->sin6_addr, prefix, cidr});
         }
     }
+    freeifaddrs(ifap);
 }
 
 void PcapInputStream::info_json(json &j) const
