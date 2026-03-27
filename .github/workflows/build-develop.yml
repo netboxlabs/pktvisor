@@ -52,6 +52,9 @@ jobs:
       - name: Bootstrap local Corrade recipe
         run: conan create ${{github.workspace}}/recipes/corrade/all --version cci.20250327 --build=missing
 
+      - name: Bootstrap local pcapplusplus recipe
+        run: conan create ${{github.workspace}}/recipes/pcapplusplus/cmake --version 23.09 --build=missing
+
       - name: Configure CMake
         shell: bash
         working-directory: ${{github.workspace}}/build
