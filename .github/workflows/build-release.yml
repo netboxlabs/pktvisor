@@ -39,6 +39,9 @@ jobs:
           key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', '*/conanfile.py') }}
           restore-keys: conan-${{ runner.os }}-
 
+      - name: Bootstrap local Corrade recipe
+        run: conan create ${{github.workspace}}/recipes/corrade/all --version cci.20250327 --build=missing
+
       - name: Configure CMake
         shell: bash
         working-directory: ${{github.workspace}}/build
