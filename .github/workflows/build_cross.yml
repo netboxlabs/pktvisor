@@ -122,6 +122,10 @@ jobs:
           key: conan-${{ runner.os }}-${{matrix.arch}}-${{ hashFiles('**/conanfile.py') }}
           restore-keys: conan-${{ runner.os }}-${{matrix.arch}}-
 
+      - name: Bootstrap local Corrade recipe
+        working-directory: ${{github.workspace}}/src
+        run: conan create recipes/corrade/all --version cci.20250327 -pr:b=default --build=missing
+
       - name: Install dependencies
         working-directory: ${{github.workspace}}/src
         run: |
