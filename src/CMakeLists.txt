@@ -45,7 +45,7 @@ target_link_libraries(visor-core
         datasketches
         rng
         timer
-        opentelemetry-cpp::opentelemetry_proto
+        opentelemetry-cpp::proto
         protobuf::libprotobuf
         maxminddb::maxminddb
         Corrade::Corrade
