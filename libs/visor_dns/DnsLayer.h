@@ -1,5 +1,4 @@
-#ifndef PV_PACKETPP_DNS_LAYER
-#define PV_PACKETPP_DNS_LAYER
+#pragma once
 
 #ifdef __GNUC__
 #pragma GCC diagnostic push
@@ -501,4 +500,3 @@ struct dnshdr {
 
         } // namespace visor
 
-#endif /* PV_PACKETPP_DNS_LAYER */
