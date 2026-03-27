@@ -1113,7 +1113,7 @@ void DnsMetricsManager::process_dns_layer(DnsLayer &payload, PacketDirection dir
         auto xact = _pair_manager[xact_dir].xact_map->maybe_end_transaction(DnsXactID(flowkey, payload.getDnsHeader()->transactionID), stamp);
         live_bucket()->dir_setup(xact_dir);
         if (xact.first == Result::Valid && !xact.second.filtered) {
-            live_bucket()->new_dns_transaction(_deep_sampling_now, _pair_manager[xact_dir].per_90th, payload, xact_dir, xact.second, l3, static_cast<Protocol>(l4), port, suffix_size);
+            live_bucket()->new_dns_transaction(_deep_sampling_now, _pair_manager[xact_dir].per_90th, payload, xact_dir, xact.second, l3, pcpp_to_protocol(l4), port, suffix_size);
         } else if (xact.second.filtered) {
             // query was filtered out
             live_bucket()->process_filtered();

@@ -111,7 +111,7 @@ void FlowStreamHandler::start()
     if (config_exists("device_map")) {
         auto devices = config_get<std::shared_ptr<Configurable>>("device_map");
         for (const auto &device : devices->get_all_keys()) {
-            if (!pcpp::IPv4Address(device).isValid() && !pcpp::IPv6Address(device).isValid()) {
+            if (!pcpp::IPv4Address::isValidIPv4Address(device) && !pcpp::IPv6Address::isValidIPv6Address(device)) {
                 throw StreamHandlerException(fmt::format("FlowHandler: 'device_map' config has an invalid device IP: {}", device));
             }
             DeviceEnrich enrich_device;
@@ -217,9 +217,9 @@ void FlowStreamHandler::start()
     if (config_exists("only_device_interfaces")) {
         auto devices = config_get<std::shared_ptr<Configurable>>("only_device_interfaces");
         for (const auto &device : devices->get_all_keys()) {
-            if (pcpp::IPv4Address(device).isValid()) {
+            if (pcpp::IPv4Address::isValidIPv4Address(device)) {
                 _device_interfaces_list[device] = _parse_interfaces(devices->config_get<StringList>(device));
-            } else if (pcpp::IPv6Address(device).isValid()) {
+            } else if (pcpp::IPv6Address::isValidIPv6Address(device)) {
                 _device_interfaces_list[device] = _parse_interfaces(devices->config_get<StringList>(device));
             } else {
                 throw StreamHandlerException(fmt::format("FlowHandler: 'only_device_interfaces' filter has an invalid device IP: {}", device));
@@ -314,12 +314,12 @@ void FlowStreamHandler::process_sflow_cb(const SFSample &payload, [[maybe_unused
     FlowPacket packet(agentId, stamp);
 
     if (_f_enabled[Filters::OnlyDeviceInterfaces]) {
-        if (auto ipv4 = pcpp::IPv4Address(packet.device_id); ipv4.isValid() && std::none_of(_device_interfaces_list.begin(), _device_interfaces_list.end(), [packet](const auto &item) {
+        if (pcpp::IPv4Address::isValidIPv4Address(packet.device_id) && std::none_of(_device_interfaces_list.begin(), _device_interfaces_list.end(), [packet](const auto &item) {
                 return packet.device_id == item.first;
             })) {
             _metrics->process_filtered(stamp, payload.elements.size(), packet.device_id);
             return;
-        } else if (auto ipv6 = pcpp::IPv6Address(packet.device_id); ipv6.isValid() && std::none_of(_device_interfaces_list.begin(), _device_interfaces_list.end(), [packet](const auto &item) {
+        } else if (pcpp::IPv6Address::isValidIPv6Address(packet.device_id) && std::none_of(_device_interfaces_list.begin(), _device_interfaces_list.end(), [packet](const auto &item) {
                        return packet.device_id == item.first;
                    })) {
             _metrics->process_filtered(stamp, payload.elements.size(), packet.device_id);
@@ -403,12 +403,12 @@ void FlowStreamHandler::process_netflow_cb(const std::string &senderIP, const NF
     FlowPacket packet(senderIP, stamp);
 
     if (_f_enabled[Filters::OnlyDeviceInterfaces]) {
-        if (auto ipv4 = pcpp::IPv4Address(packet.device_id); ipv4.isValid() && std::none_of(_device_interfaces_list.begin(), _device_interfaces_list.end(), [packet](const auto &item) {
+        if (pcpp::IPv4Address::isValidIPv4Address(packet.device_id) && std::none_of(_device_interfaces_list.begin(), _device_interfaces_list.end(), [packet](const auto &item) {
                 return packet.device_id == item.first;
             })) {
             _metrics->process_filtered(stamp, payload.flows.size(), packet.device_id);
             return;
-        } else if (auto ipv6 = pcpp::IPv6Address(packet.device_id); ipv6.isValid() && std::none_of(_device_interfaces_list.begin(), _device_interfaces_list.end(), [packet](const auto &item) {
+        } else if (pcpp::IPv6Address::isValidIPv6Address(packet.device_id) && std::none_of(_device_interfaces_list.begin(), _device_interfaces_list.end(), [packet](const auto &item) {
                        return packet.device_id == item.first;
                    })) {
             _metrics->process_filtered(stamp, payload.flows.size(), packet.device_id);
@@ -1363,7 +1363,7 @@ void FlowMetricsBucket::process_interface(bool deep, FlowInterface *iface, const
     std::string application_src;
     std::string application_dst;
     std::string ip;
-    if (!flow.is_ipv6 && flow.ipv4_in.isValid()) {
+    if (!flow.is_ipv6 && flow.ipv4_in != pcpp::IPv4Address::Zero) {
         group_enabled(group::FlowMetrics::Cardinality) ? iface->srcIPCard.update(flow.ipv4_in.toInt()) : void();
         if (auto ipv4 = cache.lru_ipv4_list.getValue(flow.ipv4_in.toInt()); ipv4.has_value()) {
             ip = ipv4.value();
@@ -1379,7 +1379,7 @@ void FlowMetricsBucket::process_interface(bool deep, FlowInterface *iface, const
             iface->directionTopN.at(type).topSrcIPPort.update(application_src, aggregator);
         }
         _process_geo_metrics(iface, type, flow.ipv4_in, aggregator);
-    } else if (flow.is_ipv6 && flow.ipv6_in.isValid()) {
+    } else if (flow.is_ipv6 && flow.ipv6_in != pcpp::IPv6Address::Zero) {
         group_enabled(group::FlowMetrics::Cardinality) ? iface->srcIPCard.update(reinterpret_cast<const void *>(flow.ipv6_in.toBytes()), 16) : void();
         auto ipv6_str = flow.ipv6_in.toString();
         if (auto ipv6 = cache.lru_ipv6_list.getValue(ipv6_str); ipv6.has_value()) {
@@ -1397,7 +1397,7 @@ void FlowMetricsBucket::process_interface(bool deep, FlowInterface *iface, const
         }
         _process_geo_metrics(iface, type, flow.ipv6_in, aggregator);
     }
-    if (!flow.is_ipv6 && flow.ipv4_out.isValid()) {
+    if (!flow.is_ipv6 && flow.ipv4_out != pcpp::IPv4Address::Zero) {
         group_enabled(group::FlowMetrics::Cardinality) ? iface->dstIPCard.update(flow.ipv4_out.toInt()) : void();
         if (auto ipv4 = cache.lru_ipv4_list.getValue(flow.ipv4_out.toInt()); ipv4.has_value()) {
             ip = ipv4.value();
@@ -1413,7 +1413,7 @@ void FlowMetricsBucket::process_interface(bool deep, FlowInterface *iface, const
             iface->directionTopN.at(type).topDstIPPort.update(application_dst, aggregator);
         }
         _process_geo_metrics(iface, type, flow.ipv4_out, aggregator);
-    } else if (flow.is_ipv6 && flow.ipv6_out.isValid()) {
+    } else if (flow.is_ipv6 && flow.ipv6_out != pcpp::IPv6Address::Zero) {
         group_enabled(group::FlowMetrics::Cardinality) ? iface->dstIPCard.update(reinterpret_cast<const void *>(flow.ipv6_out.toBytes()), 16) : void();
         auto ipv6_str = flow.ipv6_out.toString();
         if (auto ipv6 = cache.lru_ipv6_list.getValue(ipv6_str); ipv6.has_value()) {

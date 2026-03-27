@@ -15,7 +15,7 @@
 namespace visor::input::netprobe {
 bool TcpProbe::start(std::shared_ptr<uvw::loop> io_loop)
 {
-    if (_init || (!_ip.isValid() && _dns.empty())) {
+    if (_init || ((_ip.isIPv4() ? _ip.getIPv4() == pcpp::IPv4Address::Zero : _ip.getIPv6() == pcpp::IPv6Address::Zero) && _dns.empty())) {
         return false;
     }
 

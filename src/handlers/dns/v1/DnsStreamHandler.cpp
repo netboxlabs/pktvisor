@@ -1352,7 +1352,7 @@ void DnsMetricsManager::process_dns_layer(DnsLayer &payload, PacketDirection dir
     // base event
     new_event(stamp);
     // process in the "live" bucket. this will parse the resources if we are deep sampling
-    live_bucket()->process_dns_layer(_deep_sampling_now, payload, l3, static_cast<Protocol>(l4), port, suffix_size);
+    live_bucket()->process_dns_layer(_deep_sampling_now, payload, l3, pcpp_to_protocol(l4), port, suffix_size);
 
     if (group_enabled(group::DnsMetrics::DnsTransactions)) {
         // handle dns transactions (query/response pairs)

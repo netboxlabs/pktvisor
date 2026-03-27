@@ -67,7 +67,7 @@ IPv4DnsResourceData::IPv4DnsResourceData(const uint8_t *dataPtr, size_t dataLen)
 
 bool IPv4DnsResourceData::toByteArr(uint8_t *arr, size_t &arrLength, IDnsResource *dnsResource) const
 {
-    if (!m_Data.isValid()) {
+    if (m_Data == pcpp::IPv4Address::Zero) {
         PCPP_LOG_ERROR("Cannot convert IPv4 address to byte array because address is not valid");
         return false;
     }
@@ -89,7 +89,7 @@ IPv6DnsResourceData::IPv6DnsResourceData(const uint8_t *dataPtr, size_t dataLen)
 
 bool IPv6DnsResourceData::toByteArr(uint8_t *arr, size_t &arrLength, IDnsResource *dnsResource) const
 {
-    if (!m_Data.isValid()) {
+    if (m_Data == pcpp::IPv6Address::Zero) {
         PCPP_LOG_ERROR("Cannot convert IPv6 address to byte array because address is not valid");
         return false;
     }

@@ -55,10 +55,21 @@ enum Protocol : uint64_t {
     DNSTAP_TCP = dnstap::SocketProtocol::TCP,
     DNSTAP_DOT = dnstap::SocketProtocol::DOT,
     DNSTAP_DOH = dnstap::SocketProtocol::DOH,
-    PCPP_TCP = pcpp::TCP,
-    PCPP_UDP = pcpp::UDP,
-    PCPP_UNKOWN = pcpp::UnknownProtocol
+    // PCPP values use explicit constants to avoid collisions with dnstap values (1-7)
+    // after pcaplusplus 24.09 renumbered pcpp::TCP=4, pcpp::UDP=5
+    PCPP_UNKOWN = 0x100,
+    PCPP_UDP = 0x101,
+    PCPP_TCP = 0x102,
 };
+
+inline Protocol pcpp_to_protocol(pcpp::ProtocolType t)
+{
+    if (t == pcpp::TCP)
+        return PCPP_TCP;
+    if (t == pcpp::UDP)
+        return PCPP_UDP;
+    return PCPP_UNKOWN;
+}
 
 class DnsMetricsBucket final : public visor::AbstractMetricsBucket
 {

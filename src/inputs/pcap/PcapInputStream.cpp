@@ -161,8 +161,8 @@ void PcapInputStream::start()
     if (_cur_pcap_source == PcapSource::libpcap) {
         pcpp::PcapLiveDevice *pcapDevice;
         // extract pcap live device by interface name or IP address
-        if (interfaceIP4.isValid() || interfaceIP6.isValid()) {
-            if (interfaceIP4.isValid()) {
+        if (interfaceIP4 != pcpp::IPv4Address::Zero || interfaceIP6 != pcpp::IPv6Address::Zero) {
+            if (interfaceIP4 != pcpp::IPv4Address::Zero) {
                 pcapDevice = pcpp::PcapLiveDeviceList::getInstance().getPcapLiveDeviceByIp(interfaceIP4);
             } else {
                 pcapDevice = pcpp::PcapLiveDeviceList::getInstance().getPcapLiveDeviceByIp(interfaceIP6);
@@ -311,7 +311,7 @@ void PcapInputStream::_generate_mock_traffic()
     pcpp::MacAddress host_mac("00:50:43:11:22:33");
     pcpp::IPv4Address host_ip("192.168.0.1");
 
-    pcpp::MacAddress other_mac("aa:bb:cc:dd:" + std::string('a' + std::rand() % 26, 2));
+    pcpp::MacAddress other_mac(fmt::format("aa:bb:cc:dd:{:02x}:{:02x}", std::rand() % 256, std::rand() % 256));
     pcpp::IPv4Address other_ip("10.0.0." + std::to_string(std::rand() % 255));
 
     // create a new Ethernet layer
@@ -384,7 +384,7 @@ void PcapInputStream::process_raw_packet(pcpp::RawPacket *rawPacket)
         return true;
     }();
     pcpp::ProtocolType l3(pcpp::UnknownProtocol), l4(pcpp::UnknownProtocol);
-    pcpp::Packet packet(rawPacket, pcpp::TCP | pcpp::UDP);
+    pcpp::Packet packet(rawPacket, pcpp::OsiModelTransportLayer);
     if (packet.isPacketOfType(pcpp::IPv4)) {
         l3 = pcpp::IPv4;
     } else if (packet.isPacketOfType(pcpp::IPv6)) {
@@ -576,36 +576,26 @@ void PcapInputStream::_open_libpcap_iface(const std::string &bpfFilter)
 
 void PcapInputStream::_get_hosts_from_libpcap_iface()
 {
-    auto addrs = _pcapDevice->getAddresses();
-    for (auto i : addrs) {
-        if (!i.addr) {
-            continue;
-        }
-        char buf[INET6_ADDRSTRLEN];
-        pcpp::internal::sockaddr2string(i.addr, buf);
-        std::string ip(buf);
-        if (i.addr->sa_family == AF_INET) {
-            auto adrcvt = pcpp::internal::sockaddr2in_addr(i.addr);
-            if (!adrcvt) {
-                throw PcapException("couldn't parse IPv4 address on device");
+    auto addrs = _pcapDevice->getIPAddresses();
+    for (const auto &addr : addrs) {
+        if (addr.isIPv4()) {
+            auto ipv4 = addr.getIPv4();
+            if (ipv4 == pcpp::IPv4Address::Zero) {
+                continue;
             }
-            auto nmcvt = pcpp::internal::sockaddr2in_addr(i.netmask);
-            if (!nmcvt) {
-                throw PcapException("couldn't parse IPv4 netmask address on device");
+            std::string ip = ipv4.toString();
+            in_addr a;
+            a.s_addr = ipv4.toInt();
+            _hostIPv4.push_back({a, 32, ip + "/32"});
+        } else {
+            auto ipv6 = addr.getIPv6();
+            if (ipv6 == pcpp::IPv6Address::Zero) {
+                continue;
             }
-            uint8_t cidr = lib::utils::get_cidr(nmcvt->s_addr);
-            _hostIPv4.push_back({*adrcvt, cidr, ip + "/" + std::to_string(cidr)});
-        } else if (i.addr->sa_family == AF_INET6) {
-            auto adrcvt = pcpp::internal::sockaddr2in6_addr(i.addr);
-            if (!adrcvt) {
-                throw PcapException("couldn't parse IPv6 address on device");
-            }
-            auto nmcvt = pcpp::internal::sockaddr2in6_addr(i.netmask);
-            if (!nmcvt) {
-                throw PcapException("couldn't parse IPv6 netmask address on device");
-            }
-            uint8_t cidr = lib::utils::get_cidr(nmcvt->s6_addr, 16);
-            _hostIPv6.push_back({*adrcvt, cidr, ip + "/" + std::to_string(cidr)});
+            std::string ip = ipv6.toString();
+            in6_addr a;
+            memcpy(a.s6_addr, ipv6.toBytes(), 16);
+            _hostIPv6.push_back({a, 128, ip + "/128"});
         }
     }
 }

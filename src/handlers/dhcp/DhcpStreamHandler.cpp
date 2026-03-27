@@ -272,7 +272,7 @@ void DhcpMetricsBucket::new_dhcp_transaction(bool deep, pcpp::DhcpLayer *payload
     // lock for write
     std::unique_lock lock(_mutex);
 
-    if (auto client_ip = payload->getYourIpAddress(); client_ip.isValid()) {
+    if (auto client_ip = payload->getYourIpAddress(); client_ip != pcpp::IPv4Address::Zero) {
         _dhcp_topClients.update(xact.mac_address + "/" + xact.hostname + "/" + client_ip.toString());
     }
 }
@@ -307,7 +307,7 @@ void DhcpMetricsBucket::process_dhcp_v6_layer(bool deep, pcpp::DhcpV6Layer *dhcp
             pcpp::EthLayer *ethLayer = payload->getLayerOfType<pcpp::EthLayer>();
             pcpp::IPv6Layer *ipv6Layer = payload->getLayerOfType<pcpp::IPv6Layer>();
             if (ethLayer && ipv6Layer) {
-                if (auto ipv6 = ipv6Layer->getSrcIPv6Address(); ipv6.isValid()) {
+                if (auto ipv6 = ipv6Layer->getSrcIPv6Address(); ipv6 != pcpp::IPv6Address::Zero) {
                     _dhcp_topServers.update(ethLayer->getSourceMac().toString() + "/" + ipv6.toString());
                 }
             }

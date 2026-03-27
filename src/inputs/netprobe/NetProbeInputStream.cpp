@@ -109,9 +109,8 @@ void NetProbeInputStream::start()
                 port = static_cast<uint32_t>(config->config_get<uint64_t>("port"));
             }
             auto target = config->config_get<std::string>("target");
-            auto ip = pcpp::IPAddress(target);
-            if (ip.isValid()) {
-                _ip_list[key] = {ip, port};
+            if (pcpp::IPv4Address::isValidIPv4Address(target) || pcpp::IPv6Address::isValidIPv6Address(target)) {
+                _ip_list[key] = {pcpp::IPAddress(target), port};
                 continue;
             }
             auto dot = target.find(".");
