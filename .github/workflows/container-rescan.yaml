@@ -48,11 +48,12 @@ jobs:
             if (vulns.length === 0) {
               summary += '_No vulnerabilities found._\n';
             } else {
-              summary += '| Library | CVE | Severity | Installed | Fixed | Title |\n|---|---|---|---|---|---|\n';
+              summary += '| Source | Library | CVE | Severity | Installed | Fixed | Title |\n|---|---|---|---|---|---|---|\n';
               for (const v of vulns) {
                 const title = (v.Title || '').replace(/\|/g, '\\|').substring(0, 80);
                 const cve = v.PrimaryURL ? `[${v.VulnerabilityID}](${v.PrimaryURL})` : v.VulnerabilityID;
-                summary += `| ${v.PkgName} | ${cve} | ${SEVERITY_LABEL[v.Severity] || v.Severity} | ${v.InstalledVersion} | ${v.FixedVersion || 'N/A'} | ${title} |\n`;
+                const source = (v.target || '').replace(/\|/g, '\|');
+                summary += `| ${source} | ${v.PkgName} | ${cve} | ${SEVERITY_LABEL[v.Severity] || v.Severity} | ${v.InstalledVersion} | ${v.FixedVersion || 'N/A'} | ${title} |\n`;
               }
             }
             fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
