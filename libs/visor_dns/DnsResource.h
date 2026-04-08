@@ -1,5 +1,4 @@
-#ifndef PV_PACKETPP_DNS_RESOURCE
-#define PV_PACKETPP_DNS_RESOURCE
+#pragma once
 
 #include "DnsLayer.h"
 #include "DnsLayerEnums.h"
@@ -47,7 +46,7 @@ class IDnsResource
 		void encodeName(const std::string& decodedName, char* result, size_t& resultLen);
 
 		IDnsResource* getNextResource() const { return m_NextResource; }
-		void setNexResource(IDnsResource* next) { m_NextResource = next; }
+		void setNextResource(IDnsResource* next) { m_NextResource = next; }
 
 		uint8_t* getRawData() const;
 
@@ -140,7 +139,7 @@ class IDnsResource
 	private:
 		DnsQuery(DnsLayer* dnsLayer, size_t offsetInLayer) : IDnsResource(dnsLayer, offsetInLayer) {}
 
-		DnsQuery(uint8_t* emptyRawData) : IDnsResource(emptyRawData) {}
+		explicit DnsQuery(uint8_t* emptyRawData) : IDnsResource(emptyRawData) {}
 
 	public:
 		virtual ~DnsQuery() {}
@@ -242,4 +241,3 @@ class IDnsResource
 
 }
 
-#endif // PV_PACKETPP_DNS_RESOURCE

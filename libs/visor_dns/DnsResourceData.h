@@ -1,5 +1,4 @@
-#ifndef PV_PACKETPP_DNS_RESOURCE_DATA
-#define PV_PACKETPP_DNS_RESOURCE_DATA
+#pragma once
 
 #include "DnsResource.h"
 #include <pcapplusplus/IpAddress.h>
@@ -387,10 +386,6 @@ namespace visor::lib::dns {
 		 */
 		bool operator==(const GenericDnsResourceData& other) const;
 
-                const uint8_t* getData() const { return m_Data; }
-
-                size_t getDataLen() const { return m_DataLen; }
-
 		// implement abstract methods
 
 		std::string toString() const;
@@ -399,4 +394,3 @@ namespace visor::lib::dns {
 
 }
 
-#endif // PV_PACKETPP_DNS_RESOURCE_DATA

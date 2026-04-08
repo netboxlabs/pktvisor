@@ -742,21 +742,21 @@ void NetworkMetricsBucket::process_net_layer(NetworkPacket &packet)
 
     _payload_size.update(packet.payload_size);
 
-    if (packet.l3 == pcpp::IPv4 && packet.ipv4_in.isValid()) {
+    if (packet.l3 == pcpp::IPv4 && packet.ipv4_in != pcpp::IPv4Address::Zero) {
         group_enabled(group::NetMetrics::Cardinality) ? _srcIPCard.update(packet.ipv4_in.toInt()) : void();
         group_enabled(group::NetMetrics::TopIps) ? _topIPv4.update(packet.ipv4_in.toInt()) : void();
         _process_geo_metrics(packet.ipv4_in);
-    } else if (packet.l3 == pcpp::IPv6 && packet.ipv6_in.isValid()) {
+    } else if (packet.l3 == pcpp::IPv6 && packet.ipv6_in != pcpp::IPv6Address::Zero) {
         group_enabled(group::NetMetrics::Cardinality) ? _srcIPCard.update(reinterpret_cast<const void *>(packet.ipv6_in.toBytes()), 16) : void();
         group_enabled(group::NetMetrics::TopIps) ? _topIPv6.update(packet.ipv6_in.toString()) : void();
         _process_geo_metrics(packet.ipv6_in);
     }
 
-    if (packet.l3 == pcpp::IPv4 && packet.ipv4_out.isValid()) {
+    if (packet.l3 == pcpp::IPv4 && packet.ipv4_out != pcpp::IPv4Address::Zero) {
         group_enabled(group::NetMetrics::Cardinality) ? _dstIPCard.update(packet.ipv4_out.toInt()) : void();
         group_enabled(group::NetMetrics::TopIps) ? _topIPv4.update(packet.ipv4_out.toInt()) : void();
         _process_geo_metrics(packet.ipv4_out);
-    } else if (packet.l3 == pcpp::IPv6 && packet.ipv6_out.isValid()) {
+    } else if (packet.l3 == pcpp::IPv6 && packet.ipv6_out != pcpp::IPv6Address::Zero) {
         group_enabled(group::NetMetrics::Cardinality) ? _dstIPCard.update(reinterpret_cast<const void *>(packet.ipv6_out.toBytes()), 16) : void();
         group_enabled(group::NetMetrics::TopIps) ? _topIPv6.update(packet.ipv6_out.toString()) : void();
         _process_geo_metrics(packet.ipv6_out);

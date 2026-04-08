@@ -182,7 +182,7 @@ bool DnsLayer::parseResources(bool queryOnly, bool additionalOnly, bool forcePar
             m_ResourceList = newGenResource;
             curResource = m_ResourceList;
         } else {
-            curResource->setNexResource(newGenResource);
+            curResource->setNextResource(newGenResource);
             curResource = curResource->getNextResource();
         }
 
@@ -458,11 +458,11 @@ DnsResource *DnsLayer::addResource(DnsResourceType resType, const std::string &n
     // set next resource for new resource. This must happen here for extendLayer to succeed
     if (curResource != NULL) {
         if (curResource->getType() > newResource->getType())
-            newResource->setNexResource(m_ResourceList);
+            newResource->setNextResource(m_ResourceList);
         else
-            newResource->setNexResource(curResource->getNextResource());
+            newResource->setNextResource(curResource->getNextResource());
     } else // curResource != NULL
-        newResource->setNexResource(m_ResourceList);
+        newResource->setNextResource(m_ResourceList);
 
     // extend layer to make room for the new resource
     if (!extendLayer(newResourceOffsetInLayer, newResource->getSize(), newResource)) {
@@ -476,7 +476,7 @@ DnsResource *DnsLayer::addResource(DnsResourceType resType, const std::string &n
 
     // connect the new resource to the layer's resource list
     if (curResource != NULL) {
-        curResource->setNexResource(newResource);
+        curResource->setNextResource(newResource);
         // this means the new resource is the first of it's type
         if (curResource->getType() < newResource->getType()) {
             setFirstResource(resType, newResource);
@@ -522,9 +522,9 @@ DnsQuery *DnsLayer::addQuery(const std::string &name, DnsType dnsType, DnsClass 
 
     // set next resource for new query. This must happen here for extendLayer to succeed
     if (curQuery != NULL)
-        newQuery->setNexResource(curQuery->getNextResource());
+        newQuery->setNextResource(curQuery->getNextResource());
     else
-        newQuery->setNexResource(m_ResourceList);
+        newQuery->setNextResource(m_ResourceList);
 
     // extend layer to make room for the new query
     if (!extendLayer(newQueryOffsetInLayer, newQuery->getSize(), newQuery)) {
@@ -538,7 +538,7 @@ DnsQuery *DnsLayer::addQuery(const std::string &name, DnsType dnsType, DnsClass 
 
     // connect the new query to the layer's resource list
     if (curQuery != NULL)
-        curQuery->setNexResource(newQuery);
+        curQuery->setNextResource(newQuery);
     else // curQuery == NULL, meaning this is the first query
     {
         m_ResourceList = newQuery;
@@ -747,7 +747,7 @@ bool DnsLayer::removeResource(IDnsResource *resourceToRemove)
 
     // remove resourceToRemove from the resources linked list
     if (m_ResourceList != resourceToRemove) {
-        prevResource->setNexResource(resourceToRemove->getNextResource());
+        prevResource->setNextResource(resourceToRemove->getNextResource());
     } else {
         m_ResourceList = resourceToRemove->getNextResource();
     }

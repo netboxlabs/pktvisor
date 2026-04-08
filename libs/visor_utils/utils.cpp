@@ -1,5 +1,6 @@
 #include "utils.h"
 #include "EndianPortable.h"
+#include <pcapplusplus/IpAddress.h>
 #include <pcapplusplus/IpUtils.h>
 #include <fmt/format.h>
 #include <sstream>
@@ -70,12 +71,10 @@ std::optional<IPv6subnetList::const_iterator> match_subnet(IPv6subnetList &ipv6_
 
 bool match_subnet(IPv4subnetList &ipv4_list, IPv6subnetList &ipv6_list, const std::string &ip_val)
 {
-    pcpp::IPv4Address ipv4;
-    pcpp::IPv6Address ipv6;
-    if (ipv4 = pcpp::IPv4Address(ip_val); ipv4.isValid()) {
-        return match_subnet(ipv4_list, ipv4.toInt()).has_value();
-    } else if (ipv6 = pcpp::IPv6Address(ip_val); ipv6.isValid()) {
-        return match_subnet(ipv6_list, ipv6.toBytes()).has_value();
+    if (pcpp::IPv4Address::isValidIPv4Address(ip_val)) {
+        return match_subnet(ipv4_list, pcpp::IPv4Address(ip_val).toInt()).has_value();
+    } else if (pcpp::IPv6Address::isValidIPv6Address(ip_val)) {
+        return match_subnet(ipv6_list, pcpp::IPv6Address(ip_val).toBytes()).has_value();
     }
     return false;
 }
