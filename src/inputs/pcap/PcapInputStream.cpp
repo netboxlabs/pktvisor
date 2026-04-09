@@ -111,7 +111,7 @@ void PcapInputStream::start()
     }
 
     if (config_exists("debug") && config_get<bool>("debug")) {
-        pcpp::Logger::getInstance().setAllModulesToLogLevel(pcpp::Logger::LogLevel::Debug);
+        pcpp::Logger::getInstance().setAllModulesToLogLevel(pcpp::LogLevel::Debug);
     }
 
     _cur_pcap_source = PcapInputStream::DefaultPcapSource;
@@ -163,15 +163,15 @@ void PcapInputStream::start()
         // extract pcap live device by interface name or IP address
         if (interfaceIP4 != pcpp::IPv4Address::Zero || interfaceIP6 != pcpp::IPv6Address::Zero) {
             if (interfaceIP4 != pcpp::IPv4Address::Zero) {
-                pcapDevice = pcpp::PcapLiveDeviceList::getInstance().getPcapLiveDeviceByIp(interfaceIP4);
+                pcapDevice = pcpp::PcapLiveDeviceList::getInstance().getDeviceByIp(interfaceIP4);
             } else {
-                pcapDevice = pcpp::PcapLiveDeviceList::getInstance().getPcapLiveDeviceByIp(interfaceIP6);
+                pcapDevice = pcpp::PcapLiveDeviceList::getInstance().getDeviceByIp(interfaceIP6);
             }
             if (pcapDevice == nullptr) {
                 throw PcapException("Couldn't find interface by provided IP: " + TARGET);
             }
         } else {
-            pcapDevice = pcpp::PcapLiveDeviceList::getInstance().getPcapLiveDeviceByName(TARGET);
+            pcapDevice = pcpp::PcapLiveDeviceList::getInstance().getDeviceByName(TARGET);
             if (pcapDevice == nullptr) {
                 throw PcapException(fmt::format("Couldn't find interface by provided name: \"{}\". Available interfaces: {}", TARGET, ifNameList));
             }
