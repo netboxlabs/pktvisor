@@ -14,7 +14,7 @@ class Pktvisor(ConanFile):
         self.requires("fast-cpp-csv-parser/cci.20240102")
         self.requires("json-schema-validator/2.4.0")
         self.requires("libmaxminddb/1.12.2")
-        self.requires("nlohmann_json/3.12.0", force=True)
+        self.requires("nlohmann_json/3.11.3")
         self.requires("openssl/3.6.2")
         if self.settings.os != "Windows":
             self.requires("libpcap/1.10.5", force=True)
