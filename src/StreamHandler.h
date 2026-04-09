@@ -10,6 +10,7 @@
 #include "InputEventProxy.h"
 #include <ctime>
 #include <fmt/ostream.h>
+#include <fmt/ranges.h>
 #include <nlohmann/json.hpp>
 #include <sstream>
 

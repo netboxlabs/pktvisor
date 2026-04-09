@@ -5,6 +5,7 @@
 #include "GeoDB.h"
 #include <cstring>
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <stdexcept>
 
 namespace visor::geo {
