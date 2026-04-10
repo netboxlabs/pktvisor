@@ -8,6 +8,7 @@
 #include "InputStreamManager.h"
 #include "Policies.h"
 #include "Taps.h"
+#include "CorradeCompat.h"
 #include <Corrade/Utility/ConfigurationGroup.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
@@ -62,7 +63,7 @@ void CoreRegistry::start(HttpServer *svr)
                     InputPluginPtr mod = _input_registry.instantiate(alias);
                     _logger->info("Load input stream plugin: {} version {} interface {}", alias, version, mod->pluginInterface());
                     mod->init_plugin(this, svr, &geo::GeoIP(), &geo::GeoASN());
-                    auto result = _input_plugins.insert({std::make_pair(alias, version), std::move(mod)});
+                    auto result = _input_plugins.insert({std::make_pair(corrade_to_std_string(alias), version), std::move(mod)});
                     if (!result.second) {
                         throw std::runtime_error(fmt::format("Input alias '{}' with version '{}' was already loaded.", alias, version));
                     }
@@ -92,7 +93,7 @@ void CoreRegistry::start(HttpServer *svr)
                     HandlerPluginPtr mod = _handler_registry.instantiate(s);
                     _logger->info("Load stream handler plugin: {} version {} interface {}", alias, version, mod->pluginInterface());
                     mod->init_plugin(this, svr, &geo::GeoIP(), &geo::GeoASN());
-                    auto result = _handler_plugins.insert({std::make_pair(alias, version), std::move(mod)});
+                    auto result = _handler_plugins.insert({std::make_pair(corrade_to_std_string(alias), version), std::move(mod)});
                     if (!result.second) {
                         throw std::runtime_error(fmt::format("Handler alias '{}' with version '{}' was already loaded.", alias, version));
                     }
