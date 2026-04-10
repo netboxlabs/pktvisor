@@ -57,6 +57,15 @@ public:
     ~MaxmindDB();
 
     void enable(const std::string &database_filename, int cache_size = DEFAULT_CACHE_SIZE);
+    void disable()
+    {
+        if (_enabled) {
+            MMDB_close(&_mmdb);
+            _enabled = false;
+        }
+        _lru_geo_cache.reset();
+        _lru_asn_cache.reset();
+    }
     bool enabled() const
     {
         return _enabled;

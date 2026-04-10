@@ -13,6 +13,8 @@ TEST_CASE("GeoIP", "[geoip]")
 {
     SECTION("Geo enablement")
     {
+        visor::geo::GeoIP().disable();
+        visor::geo::GeoASN().disable();
         CHECK(!visor::geo::GeoIP().enabled());
         CHECK_THROWS(visor::geo::GeoIP().enable("nonexistent.mmdb"));
         CHECK(!visor::geo::GeoIP().enabled());
