@@ -156,6 +156,7 @@ TEST_CASE("Parse sflow stream without sampling", "[sflow][flow]")
 
 TEST_CASE("Parse sflow stream with ip filter", "[sflow][flow]")
 {
+    visor::network::IpPort::set_csv_iana_ports("tests/fixtures/pktvisor-port-service-names.csv");
 
     FlowInputStream stream{"sflow-test"};
     stream.config_set("flow_type", "sflow");
@@ -196,6 +197,7 @@ TEST_CASE("Parse sflow stream with ip filter", "[sflow][flow]")
 
 TEST_CASE("Parse sflow stream with device filter", "[sflow][flow]")
 {
+    visor::network::IpPort::set_csv_iana_ports("tests/fixtures/pktvisor-port-service-names.csv");
 
     FlowInputStream stream{"sflow-test"};
     stream.config_set("flow_type", "sflow");
@@ -240,6 +242,7 @@ TEST_CASE("Parse sflow stream with device filter", "[sflow][flow]")
 
 TEST_CASE("Parse sflow stream with port filter", "[sflow][flow]")
 {
+    visor::network::IpPort::set_csv_iana_ports("tests/fixtures/pktvisor-port-service-names.csv");
 
     FlowInputStream stream{"sflow-test"};
     stream.config_set("flow_type", "sflow");
