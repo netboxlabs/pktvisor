@@ -408,6 +408,7 @@ TEST_CASE("Parse netflow v5 stream", "[netflow][flow]")
     FlowInputStream stream{"netflow-test"};
     stream.config_set("flow_type", "netflow");
     stream.config_set("pcap_file", "tests/fixtures/nf5.pcap");
+    visor::network::IpPort::set_csv_iana_ports("tests/fixtures/pktvisor-port-service-names.csv");
 
     visor::Config c;
     auto stream_proxy = stream.add_event_proxy(c);
