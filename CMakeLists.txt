@@ -73,6 +73,24 @@ if(_conan_generators AND EXISTS "${_conan_generators}/conan_toolchain.cmake")
 endif()
 unset(_conan_generators)
 
+# On macOS with non-Xcode generators (e.g. Unix Makefiles), Conan sets
+# CMAKE_OSX_SYSROOT to the shortname 'macosx' which only Xcode resolves.
+# Clang requires the full SDK path. We override here, after the conan toolchain
+# re-include above (which resets the value via FORCE).
+if(APPLE AND NOT CMAKE_GENERATOR MATCHES "Xcode")
+    execute_process(
+        COMMAND xcrun --sdk macosx --show-sdk-path
+        OUTPUT_VARIABLE _VISOR_MACOS_SDK_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(_VISOR_MACOS_SDK_PATH)
+        set(CMAKE_OSX_SYSROOT "${_VISOR_MACOS_SDK_PATH}" CACHE STRING "macOS SDK path" FORCE)
+        message(STATUS "visor: macOS SDK path: ${CMAKE_OSX_SYSROOT}")
+    endif()
+    unset(_VISOR_MACOS_SDK_PATH)
+endif()
+
 include(sanitizer)
 if(CODE_COVERAGE)
     include(CodeCoverage)

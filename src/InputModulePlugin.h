@@ -26,7 +26,7 @@ public:
 
     static Corrade::Containers::Array<Corrade::Containers::String> pluginSearchPaths()
     {
-        return {};
+        return Corrade::Containers::Array<Corrade::Containers::String>{1};
     }
 
     explicit InputModulePlugin(Corrade::PluginManager::AbstractManager &manager, const std::string &plugin)
