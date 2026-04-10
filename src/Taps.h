@@ -9,6 +9,7 @@
 #include "Configurable.h"
 #include "InputModulePlugin.h"
 #include <yaml-cpp/yaml.h>
+#include "CorradeCompat.h"
 
 namespace visor {
 
@@ -56,7 +57,7 @@ public:
 
     void info_json(json &j) const override
     {
-        j["input_type"] = _input_plugin->plugin();
+        j["input_type"] = corrade_to_std_string(_input_plugin->plugin());
         j["interface"] = _input_plugin->pluginInterface();
         config_json(j["config"]);
         _tags->config_json(j["tags"]);
