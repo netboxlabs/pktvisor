@@ -168,6 +168,12 @@ jobs:
         id: conan
         uses: turtlebrowser/get-conan@c171f295f3f507360ee018736a6608731aa2109d #v1.2
 
+      - name: Setup Conan Profile
+        shell: bash
+        run: |
+          conan profile detect --force
+          sed -i 's/compiler.cppstd=14/compiler.cppstd=17/' "$(conan profile path default)"
+
       - name: Setup Conan Cache
         uses: actions/cache@v4
         with:
