@@ -21,9 +21,10 @@ public:
     static geo::MaxmindDB *asn;
     static geo::MaxmindDB *city;
 
-    static std::string pluginInterface()
+    static Corrade::Containers::StringView pluginInterface()
     {
-        return "visor.module.handler/1.0";
+        using namespace Corrade::Containers::Literals;
+        return "visor.module.handler/1.0"_s;
     }
 
     static Corrade::Containers::Array<Corrade::Containers::String> pluginSearchPaths()

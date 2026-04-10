@@ -18,9 +18,10 @@ class InputModulePlugin : public AbstractPlugin
 {
 
 public:
-    static std::string pluginInterface()
+    static Corrade::Containers::StringView pluginInterface()
     {
-        return "visor.module.input/1.0";
+        using namespace Corrade::Containers::Literals;
+        return "visor.module.input/1.0"_s;
     }
 
     static Corrade::Containers::Array<Corrade::Containers::String> pluginSearchPaths()
