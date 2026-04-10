@@ -26,9 +26,9 @@ public:
         return "visor.module.handler/1.0";
     }
 
-    static std::vector<std::string> pluginSearchPaths()
+    static Corrade::Containers::Array<Corrade::Containers::String> pluginSearchPaths()
     {
-        return {""};
+        return {};
     }
 
     explicit HandlerModulePlugin(Corrade::PluginManager::AbstractManager &manager, const std::string &plugin)

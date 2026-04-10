@@ -23,9 +23,9 @@ public:
         return "visor.module.input/1.0";
     }
 
-    static std::vector<std::string> pluginSearchPaths()
+    static Corrade::Containers::Array<Corrade::Containers::String> pluginSearchPaths()
     {
-        return {""};
+        return {};
     }
 
     explicit InputModulePlugin(Corrade::PluginManager::AbstractManager &manager, const std::string &plugin)
