@@ -7,6 +7,7 @@
 #include "HandlerManager.h"
 #include "InputStreamManager.h"
 #include "Taps.h"
+#include "CorradeCompat.h"
 #include <algorithm>
 #include <fmt/format.h>
 #include <spdlog/spdlog.h>
@@ -88,7 +89,7 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
                 auto [tap, tap_lock] = _registry->tap_manager()->module_get_locked(tap_name);
                 policy_ptr->add_tap(tap);
                 // ensure tap input type matches policy input tap
-                if (input_node["input_type"].as<std::string>() != tap->input_plugin()->plugin()) {
+                if (input_node["input_type"].as<std::string>() != corrade_to_std_string(tap->input_plugin()->plugin())) {
                     throw PolicyException(fmt::format("input_type for policy specified tap '{}' doesn't match tap's defined input type: {}/{}", tap_name, input_node["input_type"].as<std::string>(), tap->input_plugin()->plugin()));
                 }
                 // handler internal config
