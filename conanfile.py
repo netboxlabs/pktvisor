@@ -9,7 +9,7 @@ class Pktvisor(ConanFile):
     def requirements(self):
         self.requires("catch2/3.8.0")
         self.requires("corrade/2020.06")
-        self.requires("cpp-httplib/0.18.3")
+        self.requires("cpp-httplib/0.39.0")
         self.requires("docopt.cpp/0.6.3")
         self.requires("fast-cpp-csv-parser/cci.20240102")
         self.requires("json-schema-validator/2.3.0")
