@@ -43,7 +43,7 @@ jobs:
     steps:
       - name: Install sccache from cache
         id: cache-sccache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: bin/sccache
           key: sccache-v0.2.15
@@ -58,7 +58,7 @@ jobs:
 
       - name: Install compiler toolchain from cache
         id: cache-toolchain
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: toolchain
           key: toolchain-test-${{matrix.toolchain}}
@@ -73,7 +73,7 @@ jobs:
         run: pip install --no-cache-dir conan --force-reinstall
 
       - name: Restore sccache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/sccache
           key: sccache-${{matrix.arch}}-${{github.head_ref||github.event.ref}}-${{github.run_id}}
@@ -82,7 +82,7 @@ jobs:
             sccache-${{matrix.arch}}-${{github.base_ref||github.event.repository.default_branch}}-
 
       - name: Checkout sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: src
 
@@ -116,7 +116,7 @@ jobs:
           EOF
 
       - name: Setup Conan Cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{github.workspace}}/src/build/p/
           key: conan-${{ runner.os }}-${{matrix.arch}}-${{ hashFiles('**/conanfile.py') }}
@@ -152,14 +152,14 @@ jobs:
           "${{github.workspace}}/bin/sccache" -s
 
       - name: Upload pktvisord
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pktvisord-linux-${{matrix.arch}}-static
           path: ${{github.workspace}}/src/build/bin/pktvisord
           retention-days: 7
 
       - name: Upload pktvisor-reader
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pktvisor-reader-linux-${{matrix.arch}}-static
           path: ${{github.workspace}}/src/build/bin/pktvisor-reader
@@ -177,7 +177,7 @@ jobs:
             arch: armv7lh
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Configure CMake to generate VERSION
         shell: bash
@@ -216,7 +216,7 @@ jobs:
           goarch: "arm64"
 
       - name: Upload pktvisor-cli
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pktvisor-cli-${{matrix.os}}-${{matrix.arch}}
           path: pktvisor-cli
