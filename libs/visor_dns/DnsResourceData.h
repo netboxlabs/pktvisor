@@ -50,7 +50,7 @@ namespace visor::lib::dns {
 		/**
 		 * A virtual d'tor, does nothing
 		 */
-		virtual ~IDnsResourceData() { }
+		virtual ~IDnsResourceData() = default;
 
 		/**
 		 * A templated method which takes a class that derives from IDnsResourceData as the template argument and
@@ -58,7 +58,7 @@ namespace visor::lib::dns {
 		 * @return True if this instance is of the requested type, false otherwise
 		 */
 		template <class IDnsResourceDataType>
-		bool isTypeOf() const { return dynamic_cast<const IDnsResourceDataType*>(this) != NULL; }
+		bool isTypeOf() const { return dynamic_cast<const IDnsResourceDataType*>(this) != nullptr; }
 
 		/**
 		 * A templated method which take a class that derives from IDnsResourceData as the template argument and tries to
@@ -97,7 +97,7 @@ namespace visor::lib::dns {
 		 * A c'tor to this class
 		 * @param[in] ptr A pointer to IDnsResourceData
 		 */
-		DnsResourceDataPtr(IDnsResourceData* ptr) : PCPP_SMART_PTR(IDnsResourceData)(ptr) {}
+		explicit DnsResourceDataPtr(IDnsResourceData* ptr) : PCPP_SMART_PTR(IDnsResourceData)(ptr) {}
 
 		//Visual studio has always been stupid about returning something useful for __cplusplus
 		//Only recently was this fixed - and even then it requires a specific hack to the command line during build
@@ -147,11 +147,11 @@ namespace visor::lib::dns {
 		 * to set the DNS RR data as 'my.subdomain.yahoo.com' you may use the following string: 'my.subdomain.#12'.
 		 * This will result in writing 'my.subdomain' and a pointer to offset 12
 		 */
-		StringDnsResourceData(const std::string& data) { m_Data = data; }
+		explicit StringDnsResourceData(const std::string& data) : m_Data(data) {}
 
 		StringDnsResourceData(const uint8_t* dataPtr, size_t dataLen, IDnsResource* dnsResource);
 
-		~StringDnsResourceData() {}
+		~StringDnsResourceData() override = default;
 
 		/**
 		 * Equality operator overload for this class that compares the strings stored in each object
@@ -162,8 +162,8 @@ namespace visor::lib::dns {
 
 		// implement abstract methods
 
-		std::string toString() const { return m_Data; }
-		bool toByteArr(uint8_t* arr, size_t& arrLength, IDnsResource* dnsResource) const;
+		std::string toString() const override { return m_Data; }
+		bool toByteArr(uint8_t* arr, size_t& arrLength, IDnsResource* dnsResource) const override;
 	};
 
 
@@ -189,13 +189,13 @@ namespace visor::lib::dns {
 		 * A c'tor for this class
 		 * @param[in] addr The IPv4 address to store in this object
 		 */
-		IPv4DnsResourceData(const pcpp::IPv4Address& addr) : m_Data(addr) {}
+		explicit IPv4DnsResourceData(const pcpp::IPv4Address& addr) : m_Data(addr) {}
 
 		/**
 		 * A c'tor for this class
 		 * @param[in] addrAsString A string representation of an IPv4 address to store in this object
 		 */
-		IPv4DnsResourceData(const std::string& addrAsString) : m_Data(addrAsString) {}
+		explicit IPv4DnsResourceData(const std::string& addrAsString) : m_Data(addrAsString) {}
 
 		/**
 		 * Equality operator overload for this class that compares the IPv4 addresses stored in each object
@@ -211,8 +211,8 @@ namespace visor::lib::dns {
 
 		// implement abstract methods
 
-		std::string toString() const { return m_Data.toString(); }
-		bool toByteArr(uint8_t* arr, size_t& arrLength, IDnsResource* dnsResource) const;
+		std::string toString() const override { return m_Data.toString(); }
+		bool toByteArr(uint8_t* arr, size_t& arrLength, IDnsResource* dnsResource) const override;
 	};
 
 
@@ -238,13 +238,13 @@ namespace visor::lib::dns {
 		 * A c'tor for this class
 		 * @param[in] addr The IPv6 address to store in this object
 		 */
-		IPv6DnsResourceData(const pcpp::IPv6Address& addr) : m_Data(addr) {}
+		explicit IPv6DnsResourceData(const pcpp::IPv6Address& addr) : m_Data(addr) {}
 
 		/**
 		 * A c'tor for this class
 		 * @param[in] addrAsString A string representation of an IPv6 address to store in this object
 		 */
-		IPv6DnsResourceData(const std::string& addrAsString) : m_Data(addrAsString) {}
+		explicit IPv6DnsResourceData(const std::string& addrAsString) : m_Data(addrAsString) {}
 
 		/**
 		 * Equality operator overload for this class that compares the IPv6 addresses stored in each object
@@ -260,8 +260,8 @@ namespace visor::lib::dns {
 
 		// implement abstract methods
 
-		std::string toString() const { return m_Data.toString(); }
-		bool toByteArr(uint8_t* arr, size_t& arrLength, IDnsResource* dnsResource) const;
+		std::string toString() const override { return m_Data.toString(); }
+		bool toByteArr(uint8_t* arr, size_t& arrLength, IDnsResource* dnsResource) const override;
 	};
 
 
@@ -305,7 +305,7 @@ namespace visor::lib::dns {
 		 */
 		MxDnsResourceData(const uint16_t& preference, const std::string& mailExchange);
 
-		~MxDnsResourceData() {}
+		~MxDnsResourceData() override = default;
 
 		/**
 		 * Equality operator overload for this class that compares the MX data stored in each object
@@ -333,9 +333,9 @@ namespace visor::lib::dns {
 		 * A string representation of the MX data stored in this object. The string format is as follows:
 		 * 'pref: {preference_value}; mx: {mail_exchange_hostname_value}'
 		 */
-		std::string toString() const;
+		std::string toString() const override;
 
-		bool toByteArr(uint8_t* arr, size_t& arrLength, IDnsResource* dnsResource) const;
+		bool toByteArr(uint8_t* arr, size_t& arrLength, IDnsResource* dnsResource) const override;
 
 	private:
 		MxData m_Data;
@@ -361,13 +361,13 @@ namespace visor::lib::dns {
 		 * copied from this byte array to the object
 		 * @param[in] dataLen The byte array size
 		 */
-		GenericDnsResourceData(uint8_t* dataPtr, size_t dataLen);
+		GenericDnsResourceData(const uint8_t* dataPtr, size_t dataLen);
 
 		/**
 		 * A c'tor for this class
 		 * @param[in] dataAsHexString A hex string that represents the DNS RR data
 		 */
-		GenericDnsResourceData(const std::string& dataAsHexString);
+		explicit GenericDnsResourceData(const std::string& dataAsHexString);
 
 		/**
 		 * A copy c'tor for this class
@@ -375,7 +375,7 @@ namespace visor::lib::dns {
 		 */
 		GenericDnsResourceData(const GenericDnsResourceData& other);
 
-		~GenericDnsResourceData() { if (m_Data != NULL) delete [] m_Data; }
+		~GenericDnsResourceData() override { if (m_Data != nullptr) delete[] m_Data; }
 
 		GenericDnsResourceData& operator=(const GenericDnsResourceData& other);
 
@@ -388,8 +388,8 @@ namespace visor::lib::dns {
 
 		// implement abstract methods
 
-		std::string toString() const;
-		bool toByteArr(uint8_t* arr, size_t& arrLength, IDnsResource* dnsResource) const;
+		std::string toString() const override;
+		bool toByteArr(uint8_t* arr, size_t& arrLength, IDnsResource* dnsResource) const override;
 	};
 
 }

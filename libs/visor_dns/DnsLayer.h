@@ -88,7 +88,7 @@ struct dnshdr {
 		uint16_t numberOfAdditional;
 	};
 #pragma pack(pop)
-
+static_assert(sizeof(dnshdr) == 12, "dnshdr size is not 12 bytes");
 
 	// forward declarations
 	class DnsQuery;
@@ -144,7 +144,7 @@ struct dnshdr {
 		 */
 		DnsLayer& operator=(const DnsLayer& other);
 
-		virtual ~DnsLayer();
+		~DnsLayer() override;
 
 		/**
 		 * Get a pointer to the DNS header (as opposed to the DNS data which is the queries, answers, etc. Data can be retrieved through the
@@ -426,24 +426,24 @@ struct dnshdr {
 		/**
 		 * Does nothing for this layer (DnsLayer is always last)
 		 */
-		void parseNextLayer() {}
+		void parseNextLayer() override {}
 
 		/**
 		 * Return the size of the DNS data in the packet including he DNS header and size of all queries, answers, authorities and additional
 		 * records
 		 */
-		size_t getHeaderLen() const { return m_DataLen; } //No layer above DNS
+		size_t getHeaderLen() const override { return m_DataLen; } //No layer above DNS
 
 		/**
 		 * Does nothing for this layer
 		 */
-		void computeCalculateFields() {}
+		void computeCalculateFields() override {}
 
-		std::string toString() const;
+		std::string toString() const override;
 
                 bool parseResources(bool queryOnly, bool additionalOnly = false, bool force = false);
 
-                pcpp::OsiModelLayer getOsiModelLayer() const
+                pcpp::OsiModelLayer getOsiModelLayer() const override
                 {
                     return pcpp::OsiModelApplicationLayer;
                 }

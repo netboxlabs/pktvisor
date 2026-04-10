@@ -54,7 +54,7 @@ class IDnsResource
 
 	public:
 
-		virtual ~IDnsResource() {}
+		virtual ~IDnsResource() = default;
 
 		/**
 		 * @return The DNS type of this record
@@ -142,11 +142,11 @@ class IDnsResource
 		explicit DnsQuery(uint8_t* emptyRawData) : IDnsResource(emptyRawData) {}
 
 	public:
-		virtual ~DnsQuery() {}
+		~DnsQuery() override = default;
 
 		// implementation of abstract methods
-		virtual size_t getSize() const { return m_NameLength + 2 * sizeof(uint16_t); }
-		virtual DnsResourceType getType() const { return DnsQueryType; }
+		size_t getSize() const override { return m_NameLength + 2 * sizeof(uint16_t); }
+		DnsResourceType getType() const override { return DnsQueryType; }
 	};
 
 
@@ -166,7 +166,7 @@ class IDnsResource
 		DnsResource(uint8_t* emptyRawData, DnsResourceType resType) : IDnsResource(emptyRawData), m_ResourceType(resType) {}
 
 	public:
-		virtual ~DnsResource() {}
+		~DnsResource() override = default;
 
 		/**
 		 * @return The time-to-leave value for this record
@@ -234,8 +234,8 @@ class IDnsResource
 		void setCustomDnsClass(uint16_t customValue);
 
 		// implementation of abstract methods
-		virtual size_t getSize() const { return m_NameLength + 3 * sizeof(uint16_t) + sizeof(uint32_t) + getDataLength(); }
-		virtual DnsResourceType getType() const { return m_ResourceType; }
+		size_t getSize() const override { return m_NameLength + 3 * sizeof(uint16_t) + sizeof(uint32_t) + getDataLength(); }
+		DnsResourceType getType() const override { return m_ResourceType; }
 
 	};
 
