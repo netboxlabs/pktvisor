@@ -8,6 +8,7 @@
 #include "InputStreamManager.h"
 #include "Policies.h"
 #include "Taps.h"
+#include <Corrade/Containers/PointerStl.h>
 #include <Corrade/Containers/StringStl.h>
 #include <Corrade/Utility/ConfigurationGroup.h>
 #include <spdlog/sinks/stdout_color_sinks.h>

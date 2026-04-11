@@ -12,15 +12,15 @@ void AbstractPlugin::check_schema(json obj, SchemaMap &required, SchemaMap &opti
 {
     for (const auto &[key, value] : required) {
         if (!obj.contains(key)) {
-            throw SchemaException(fmt::format("{}: required field is missing: {}", plugin(), key));
+            throw SchemaException(fmt::format("{}: required field is missing: {}", std::string(plugin()), key));
         }
         if (!std::regex_match(obj[key].get<std::string>(), std::regex(value))) {
-            throw SchemaException(fmt::format("{}: required field fails input validation: {} requires {}", plugin(), key, value));
+            throw SchemaException(fmt::format("{}: required field fails input validation: {} requires {}", std::string(plugin()), key, value));
         }
     }
     for (const auto &[key, value] : optional) {
         if (obj.contains(key) && !std::regex_match(obj[key].get<std::string>(), std::regex(value))) {
-            throw SchemaException(fmt::format("{}: optional field fails input validation: {} requires {}", plugin(), key, value));
+            throw SchemaException(fmt::format("{}: optional field fails input validation: {} requires {}", std::string(plugin()), key, value));
         }
     }
 }

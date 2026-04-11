@@ -89,7 +89,7 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
                 policy_ptr->add_tap(tap);
                 // ensure tap input type matches policy input tap
                 if (input_node["input_type"].as<std::string>() != tap->input_plugin()->plugin()) {
-                    throw PolicyException(fmt::format("input_type for policy specified tap '{}' doesn't match tap's defined input type: {}/{}", tap_name, input_node["input_type"].as<std::string>(), tap->input_plugin()->plugin()));
+                    throw PolicyException(fmt::format("input_type for policy specified tap '{}' doesn't match tap's defined input type: {}/{}", tap_name, input_node["input_type"].as<std::string>(), std::string(tap->input_plugin()->plugin())));
                 }
                 // handler internal config
                 window_config.config_set<std::string>("_internal_tap_name", tap_name);

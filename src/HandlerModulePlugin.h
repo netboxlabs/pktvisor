@@ -25,12 +25,13 @@ public:
 
     static Corrade::Containers::StringView pluginInterface()
     {
-        return "visor.module.handler/1.0";
+        using namespace Corrade::Containers::Literals;
+        return "visor.module.handler/1.0"_s;
     }
 
     static Corrade::Containers::Array<Corrade::Containers::String> pluginSearchPaths()
     {
-        return {Corrade::Containers::InPlaceInit, {""}};
+        return {Corrade::InPlaceInit, {""}};
     }
 
     explicit HandlerModulePlugin(Corrade::PluginManager::AbstractManager &manager, const Corrade::Containers::StringView plugin)

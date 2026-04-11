@@ -22,12 +22,13 @@ class InputModulePlugin : public AbstractPlugin
 public:
     static Corrade::Containers::StringView pluginInterface()
     {
-        return "visor.module.input/1.0";
+        using namespace Corrade::Containers::Literals;
+        return "visor.module.input/1.0"_s;
     }
 
     static Corrade::Containers::Array<Corrade::Containers::String> pluginSearchPaths()
     {
-        return {Corrade::Containers::InPlaceInit, {""}};
+        return {Corrade::InPlaceInit, {""}};
     }
 
     explicit InputModulePlugin(Corrade::PluginManager::AbstractManager &manager, const Corrade::Containers::StringView plugin)

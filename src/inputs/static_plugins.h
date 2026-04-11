@@ -1,5 +1,8 @@
 #pragma once
 
+#include <Corrade/PluginManager/AbstractManager.h>
+#include <Corrade/Utility/Macros.h>
+
 static int import_input_plugins()
 {
     CORRADE_PLUGIN_IMPORT(VisorInputMock);

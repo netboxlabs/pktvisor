@@ -73,7 +73,7 @@ private:
 public:
     static Corrade::Containers::Array<Corrade::Containers::String> pluginSearchPaths()
     {
-        return {Corrade::Containers::InPlaceInit, {""}};
+        return {Corrade::InPlaceInit, {""}};
     }
 
     explicit AbstractPlugin(Corrade::PluginManager::AbstractManager &manager, const Corrade::Containers::StringView plugin)

@@ -17,6 +17,7 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wattributes"
 #endif
+#include <Corrade/Containers/StringStl.h>
 #include <Corrade/Utility/ConfigurationGroup.h>
 #ifdef __GNUC__
 #pragma GCC diagnostic pop
@@ -652,13 +653,13 @@ int main(int argc, char *argv[])
         for (auto &p : registry.input_plugin_registry()->pluginList()) {
             auto meta = registry.input_plugin_registry()->metadata(p);
             if (meta && meta->data().hasValue("type") && meta->data().value("type") == "input") {
-                logger->info("input: {}", p);
+                logger->info("input: {}", std::string(p));
             }
         }
         for (auto &p : registry.handler_plugin_registry()->pluginList()) {
             auto meta = registry.handler_plugin_registry()->metadata(p);
             if (meta && meta->data().hasValue("type") && meta->data().value("type") == "handler") {
-                logger->info("handler: {}", p);
+                logger->info("handler: {}", std::string(p));
             }
         }
         exit(EXIT_SUCCESS);
