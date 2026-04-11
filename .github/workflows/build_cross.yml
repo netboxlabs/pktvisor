@@ -119,11 +119,11 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{github.workspace}}/src/build/p/
-          key: conan-${{ runner.os }}-${{matrix.arch}}-${{ hashFiles('**/conanfile.py', 'conan/corrade/**') }}
+          key: conan-${{ runner.os }}-${{matrix.arch}}-${{ hashFiles('**/conanfile.py', 'src/conan/corrade/**') }}
           restore-keys: conan-${{ runner.os }}-${{matrix.arch}}-
 
       - name: Export local Corrade recipe
-        run: conan export ${{github.workspace}}/conan/corrade/ --name=corrade --version=cci.20260327
+        run: conan export ${{github.workspace}}/src/conan/corrade/ --name=corrade --version=cci.20260327
 
       - name: Install dependencies
         working-directory: ${{github.workspace}}/src
