@@ -43,16 +43,19 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{github.workspace}}/build/p/
-          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', '*/conanfile.py') }}
+          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', '*/conanfile.py', 'conan/corrade/conanfile.py') }}
           restore-keys: conan-${{ runner.os }}-
-      
+
       - name: Detect Conan Profile
         run: conan profile detect -f
+
+      - name: Export local Corrade recipe
+        run: conan export ${{github.workspace}}/conan/corrade/ --name=corrade --version=cci.20260327
 
       - name: Configure CMake
         shell: bash
         working-directory: ${{github.workspace}}/build
-        run: PKG_CONFIG_PATH=${{github.workspace}}/local/lib/pkgconfig cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=./cmake/conan_provider.cmake -DCONAN_INSTALL_ARGS="--build=missing;-c=corrade/*:tools.build:cxxflags=['-include','vector']"
+        run: PKG_CONFIG_PATH=${{github.workspace}}/local/lib/pkgconfig cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=./cmake/conan_provider.cmake -DCONAN_INSTALL_ARGS="--build=missing"
 
       - name: Build
         working-directory: ${{github.workspace}}/build
@@ -83,8 +86,11 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{github.workspace}}/build/p/
-          key: conan-${{ runner.os }}-amd64-${{ hashFiles('conanfile.py', '*/conanfile.py') }}
+          key: conan-${{ runner.os }}-amd64-${{ hashFiles('conanfile.py', '*/conanfile.py', 'conan/corrade/conanfile.py') }}
           restore-keys: conan-${{ runner.os }}-amd64-
+
+      - name: Export local Corrade recipe
+        run: conan export ${{github.workspace}}/conan/corrade/ --name=corrade --version=cci.20260327
 
       - name: Configure CMake
         shell: bash
@@ -131,8 +137,12 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{github.workspace}}/build/p/
-          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', '*/conanfile.py') }}
+          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', '*/conanfile.py', 'conan/corrade/conanfile.py') }}
           restore-keys: conan-${{ runner.os }}-
+
+      - name: Export local Corrade recipe
+        shell: bash
+        run: conan export $GITHUB_WORKSPACE/conan/corrade/ --name=corrade --version=cci.20260327
 
       - name: Configure CMake
         shell: bash

@@ -15,7 +15,7 @@ protected:
    void setup_routes(HttpServer *svr) override;
 
 public:
-   explicit NetProbeHandlerModulePlugin(Corrade::PluginManager::AbstractManager &manager, const std::string &plugin)
+   explicit NetProbeHandlerModulePlugin(Corrade::PluginManager::AbstractManager &manager, const Corrade::Containers::StringView plugin)
        : visor::HandlerModulePlugin{manager, plugin}
    {
    }

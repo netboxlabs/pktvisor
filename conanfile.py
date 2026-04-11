@@ -8,7 +8,7 @@ class Pktvisor(ConanFile):
 
     def requirements(self):
         self.requires("catch2/3.14.0")
-        self.requires("corrade/2020.06")
+        self.requires("corrade/cci.20260327")
         self.requires("cpp-httplib/0.18.3")
         self.requires("docopt.cpp/0.6.3")
         self.requires("fast-cpp-csv-parser/cci.20240102")
@@ -37,7 +37,7 @@ class Pktvisor(ConanFile):
             self.requires("sentry-crashpad/0.6.5")
 
     def build_requirements(self):
-        self.tool_requires("corrade/2020.06")
+        self.tool_requires("corrade/cci.20260327")
         self.tool_requires("protobuf/6.33.5")
 
     def layout(self):

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <Corrade/Containers/Array.h>
+#include <Corrade/Containers/String.h>
 #include <Corrade/PluginManager/AbstractPlugin.h>
 #include <exception>
 #include <nlohmann/json.hpp>
@@ -69,12 +71,12 @@ private:
     }
 
 public:
-    static std::vector<std::string> pluginSearchPaths()
+    static Corrade::Containers::Array<Corrade::Containers::String> pluginSearchPaths()
     {
-        return {""};
+        return {Corrade::Containers::InPlaceInit, {""}};
     }
 
-    explicit AbstractPlugin(Corrade::PluginManager::AbstractManager &manager, const std::string &plugin)
+    explicit AbstractPlugin(Corrade::PluginManager::AbstractManager &manager, const Corrade::Containers::StringView plugin)
         : Corrade::PluginManager::AbstractPlugin{manager, plugin}
     {
     }

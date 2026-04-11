@@ -15,7 +15,7 @@ protected:
     void setup_routes(HttpServer *svr) override;
 
 public:
-    explicit InputResourcesHandlerModulePlugin(Corrade::PluginManager::AbstractManager &manager, const std::string &plugin)
+    explicit InputResourcesHandlerModulePlugin(Corrade::PluginManager::AbstractManager &manager, const Corrade::Containers::StringView plugin)
         : visor::HandlerModulePlugin{manager, plugin}
     {
     }

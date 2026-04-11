@@ -5,6 +5,8 @@
 #pragma once
 
 #include "AbstractPlugin.h"
+#include <Corrade/Containers/Array.h>
+#include <Corrade/Containers/String.h>
 #include <Corrade/PluginManager/Manager.h>
 #include <Corrade/PluginManager/PluginMetadata.h>
 #include <string>
@@ -21,17 +23,17 @@ public:
     static geo::MaxmindDB *asn;
     static geo::MaxmindDB *city;
 
-    static std::string pluginInterface()
+    static Corrade::Containers::StringView pluginInterface()
     {
         return "visor.module.handler/1.0";
     }
 
-    static std::vector<std::string> pluginSearchPaths()
+    static Corrade::Containers::Array<Corrade::Containers::String> pluginSearchPaths()
     {
-        return {""};
+        return {Corrade::Containers::InPlaceInit, {""}};
     }
 
-    explicit HandlerModulePlugin(Corrade::PluginManager::AbstractManager &manager, const std::string &plugin)
+    explicit HandlerModulePlugin(Corrade::PluginManager::AbstractManager &manager, const Corrade::Containers::StringView plugin)
         : AbstractPlugin{manager, plugin}
     {
     }

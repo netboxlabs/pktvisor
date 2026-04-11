@@ -8,6 +8,7 @@
 #include "InputStreamManager.h"
 #include "Policies.h"
 #include "Taps.h"
+#include <Corrade/Containers/StringStl.h>
 #include <Corrade/Utility/ConfigurationGroup.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
@@ -47,12 +48,12 @@ void CoreRegistry::start(HttpServer *svr)
         for (auto &s : plugin_list) {
             auto meta = _input_registry.metadata(s);
             if (!meta) {
-                _logger->error("failed to load plugin metadata: {}", s);
+                _logger->error("failed to load plugin metadata: {}", std::string(s));
                 continue;
             }
             if (meta->data().hasValue("type") && meta->data().value("type") == "input") {
                 if (!meta->data().hasValue("version")) {
-                    _logger->error("version field is mandatory and was not provided by '{}'", s);
+                    _logger->error("version field is mandatory and was not provided by '{}'", std::string(s));
                 }
                 auto version = meta->data().value("version");
                 if (_input_registry.loadState(s) == Corrade::PluginManager::LoadState::NotLoaded) {
@@ -60,11 +61,11 @@ void CoreRegistry::start(HttpServer *svr)
                 }
                 for (const auto &alias : meta->provides()) {
                     InputPluginPtr mod = _input_registry.instantiate(alias);
-                    _logger->info("Load input stream plugin: {} version {} interface {}", alias, version, mod->pluginInterface());
+                    _logger->info("Load input stream plugin: {} version {} interface {}", std::string(alias), version, std::string(mod->pluginInterface()));
                     mod->init_plugin(this, svr, &geo::GeoIP(), &geo::GeoASN());
-                    auto result = _input_plugins.insert({std::make_pair(alias, version), std::move(mod)});
+                    auto result = _input_plugins.insert({std::make_pair(std::string(alias), version), std::move(mod)});
                     if (!result.second) {
-                        throw std::runtime_error(fmt::format("Input alias '{}' with version '{}' was already loaded.", alias, version));
+                        throw std::runtime_error(fmt::format("Input alias '{}' with version '{}' was already loaded.", std::string(alias), version));
                     }
                 }
             }
@@ -77,7 +78,7 @@ void CoreRegistry::start(HttpServer *svr)
         for (auto &s : plugin_list) {
             auto meta = _handler_registry.metadata(s);
             if (!meta) {
-                _logger->error("failed to load plugin metadata: {}", s);
+                _logger->error("failed to load plugin metadata: {}", std::string(s));
                 continue;
             }
             if (meta->data().hasValue("type") && meta->data().value("type") == "handler") {
@@ -85,16 +86,16 @@ void CoreRegistry::start(HttpServer *svr)
                     _handler_registry.load(s);
                 }
                 if (!meta->data().hasValue("version")) {
-                    _logger->error("version field is mandatory and was not provided by '{}'", s);
+                    _logger->error("version field is mandatory and was not provided by '{}'", std::string(s));
                 }
                 auto version = meta->data().value("version");
                 for (const auto &alias : meta->provides()) {
                     HandlerPluginPtr mod = _handler_registry.instantiate(s);
-                    _logger->info("Load stream handler plugin: {} version {} interface {}", alias, version, mod->pluginInterface());
+                    _logger->info("Load stream handler plugin: {} version {} interface {}", std::string(alias), version, std::string(mod->pluginInterface()));
                     mod->init_plugin(this, svr, &geo::GeoIP(), &geo::GeoASN());
-                    auto result = _handler_plugins.insert({std::make_pair(alias, version), std::move(mod)});
+                    auto result = _handler_plugins.insert({std::make_pair(std::string(alias), version), std::move(mod)});
                     if (!result.second) {
-                        throw std::runtime_error(fmt::format("Handler alias '{}' with version '{}' was already loaded.", alias, version));
+                        throw std::runtime_error(fmt::format("Handler alias '{}' with version '{}' was already loaded.", std::string(alias), version));
                     }
                 }
             }

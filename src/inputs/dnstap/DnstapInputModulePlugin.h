@@ -15,7 +15,7 @@ protected:
     void setup_routes(HttpServer *svr) override;
 
 public:
-    explicit DnstapInputModulePlugin(Corrade::PluginManager::AbstractManager &manager, const std::string &plugin)
+    explicit DnstapInputModulePlugin(Corrade::PluginManager::AbstractManager &manager, const Corrade::Containers::StringView plugin)
         : visor::InputModulePlugin{manager, plugin}
     {
     }
