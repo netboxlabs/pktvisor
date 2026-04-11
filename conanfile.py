@@ -20,9 +20,9 @@ class Pktvisor(ConanFile):
             self.requires("libpcap/1.10.5", force=True)
         else:
             self.requires("npcap/1.70")
-        self.requires("opentelemetry-cpp/1.17.0")
+        self.requires("opentelemetry-cpp/1.24.0")
         self.requires("pcapplusplus/25.05")
-        self.requires("protobuf/5.27.0")
+        self.requires("protobuf/6.33.5")
         self.requires("sigslot/1.2.3")
         self.requires("fmt/10.2.1", force=True)
         self.requires("spdlog/1.15.0")
@@ -38,7 +38,7 @@ class Pktvisor(ConanFile):
 
     def build_requirements(self):
         self.tool_requires("corrade/2020.06")
-        self.tool_requires("protobuf/5.27.0")
+        self.tool_requires("protobuf/6.33.5")
 
     def layout(self):
         cmake_layout(self)

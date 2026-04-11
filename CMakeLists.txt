@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.24)
 
+# Must be set before project() so cmake/conan_provider.cmake (loaded via
+# CMAKE_PROJECT_TOP_LEVEL_INCLUDES) sees the correct standard and does not
+# fall back to MSVC's default of C++14 when generating the Conan profile.
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 #######################################################
 # VERSION
 #######################################################
