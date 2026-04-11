@@ -20,8 +20,10 @@ function build() {
   cp -rf /github/workspace/CMakeLists.txt /pktvisor-src/
   cp -rf /github/workspace/conanfile.py /pktvisor-src/
   cp -rf /github/workspace/.conanrc /pktvisor-src/
+  cp -rf /github/workspace/conan/ /pktvisor-src/conan/
   cd /pktvisor-src/
   conan profile detect -f
+  conan export /pktvisor-src/conan/corrade/ --name=corrade --version=cci.20260327
   cd /pktvisor-src/build/
   if [ "$INPUT_ARCH" == "amd64" ]; then
     PKG_CONFIG_PATH=/local/lib/pkgconfig cmake .. -DCMAKE_BUILD_TYPE=$INPUT_BUILD_TYPE \

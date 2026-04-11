@@ -40,13 +40,17 @@ if(NOT TARGET Corrade::rc)
     if(CMAKE_CROSSCOMPILING)
         find_program(CORRADE_RC_PROGRAM
             NAMES corrade-rc
-            PATHS ENV
-            PATH NO_DEFAULT_PATH)
+            PATHS ENV PATH
+            NO_DEFAULT_PATH)
     else()
         find_program(CORRADE_RC_PROGRAM
             NAMES corrade-rc
             PATHS "${CMAKE_CURRENT_LIST_DIR}/../../bin/"
             NO_DEFAULT_PATH)
+    endif()
+
+    if(CORRADE_RC_PROGRAM STREQUAL "CORRADE_RC_PROGRAM-NOTFOUND")
+        message(FATAL_ERROR "Corrade: corrade-rc not found. Pass -DCORRADE_RC_PROGRAM=/path/to/corrade-rc.")
     endif()
 
     get_filename_component(CORRADE_RC_PROGRAM "${CORRADE_RC_PROGRAM}" ABSOLUTE)

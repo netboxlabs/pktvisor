@@ -36,7 +36,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{github.workspace}}/build/p/
-          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', '*/conanfile.py', 'conan/corrade/conanfile.py') }}
+          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', '*/conanfile.py', 'conan/corrade/**') }}
           restore-keys: conan-${{ runner.os }}-
 
       - name: Export local Corrade recipe
@@ -181,8 +181,12 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{github.workspace}}/build/p/
-          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', '*/conanfile.py') }}
+          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', '*/conanfile.py', 'conan/corrade/**') }}
           restore-keys: conan-${{ runner.os }}-
+
+      - name: Export local Corrade recipe
+        shell: bash
+        run: conan export $GITHUB_WORKSPACE/conan/corrade/ --name=corrade --version=cci.20260327
 
       - name: Configure CMake
         shell: bash
@@ -291,7 +295,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{github.workspace}}/build/p/
-          key: conan-${{ runner.os }}-arm64-${{ hashFiles('conanfile.py', '*/conanfile.py') }}
+          key: conan-${{ runner.os }}-arm64-${{ hashFiles('conanfile.py', '*/conanfile.py', 'conan/corrade/**') }}
           restore-keys: conan-${{ runner.os }}-arm64-
 
       - name: Build pktvisord + push symbol to backtrace.io
@@ -410,7 +414,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{github.workspace}}/build/p/
-          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', '*/conanfile.py') }}
+          key: conan-${{ runner.os }}-${{ hashFiles('conanfile.py', '*/conanfile.py', 'conan/corrade/**') }}
           restore-keys: conan-${{ runner.os }}-
 
       - name: Build pktvisord + push symbol to backtrace.io
