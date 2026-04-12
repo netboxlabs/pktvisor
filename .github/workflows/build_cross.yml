@@ -182,6 +182,12 @@ jobs:
       - name: Checkout sources
         uses: actions/checkout@v6
 
+      - name: Install Conan
+        run: pip install --no-cache-dir conan --force-reinstall
+
+      - name: Export local Corrade recipe
+        run: conan export ${{github.workspace}}/conan/corrade/ --name=corrade --version=cci.20260327
+
       - name: Configure CMake to generate VERSION
         shell: bash
         run: VERSION_ONLY=1 cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=Release -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=./cmake/conan_provider.cmake

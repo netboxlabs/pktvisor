@@ -79,6 +79,9 @@ jobs:
         id: conan
         uses: turtlebrowser/get-conan@c171f295f3f507360ee018736a6608731aa2109d #v1.2
 
+      - name: Export local Corrade recipe
+        run: conan export ${{github.workspace}}/conan/corrade/ --name=corrade --version=cci.20260327
+
       - name: Configure CMake to generate VERSION
         shell: bash
         working-directory: ${{github.workspace}}/build
@@ -123,11 +126,14 @@ jobs:
         id: conan
         uses: turtlebrowser/get-conan@c171f295f3f507360ee018736a6608731aa2109d #v1.2
 
+      - name: Export local Corrade recipe
+        run: conan export ${{github.workspace}}/conan/corrade/ --name=corrade --version=cci.20260327
+
       - name: Configure CMake to generate VERSION
         shell: bash
         working-directory: ${{github.workspace}}/build
         run: cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=./cmake/conan_provider.cmake
-        
+
       - name: Set variables
         run: |
           echo "LAST_TAG=`git tag --sort=committerdate | tail -1`" >> $GITHUB_ENV

@@ -68,6 +68,8 @@ jobs:
         # clone the repository, not sure if this needs to be done
         git clone https://github.com/netboxlabs/pktvisor.git
         cd pktvisor
+        # export the local Corrade recipe so conan_provider can resolve it
+        conan export conan/corrade/ --name=corrade --version=cci.20260327
         mkdir build && cd build
         # configure and handle dependencies
         cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=./cmake/conan_provider.cmake ..
