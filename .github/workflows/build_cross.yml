@@ -123,7 +123,8 @@ jobs:
           restore-keys: conan-${{ runner.os }}-${{matrix.arch}}-
 
       - name: Export local Corrade recipe
-        run: conan export ${{github.workspace}}/src/conan/corrade/ --name=corrade --version=cci.20260327
+        working-directory: ${{github.workspace}}/src
+        run: conan export conan/corrade/ --name=corrade --version=cci.20260327
 
       - name: Install dependencies
         working-directory: ${{github.workspace}}/src
