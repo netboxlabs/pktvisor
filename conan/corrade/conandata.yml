@@ -2,9 +2,3 @@ sources:
   "cci.20260327":
     sha256: d8f30e9a857172003b6b02304783f40e8038c36e4127a0cfec7fe14f41c13fd4
     url: https://github.com/mosra/corrade/archive/22e7ffc6fcdeaa0df96e0d8b3d482ad6abe7dc36.tar.gz
-
-patches:
-  "cci.20260327":
-    - patch_file: "patches/0001-fix-strerror_r-musl-compat.patch"
-      patch_description: "Fix strerror_r usage for non-glibc Linux (musl): always use POSIX XSI variant"
-      patch_type: "portability"

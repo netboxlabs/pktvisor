@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #include "Policies.h"
+#include <Corrade/Containers/StringStl.h>
 #include "CoreRegistry.h"
 #include "HandlerManager.h"
 #include "InputStreamManager.h"

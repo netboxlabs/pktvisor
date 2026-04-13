@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #include "AbstractPlugin.h"
+#include <Corrade/Containers/StringStl.h>
 #include <fmt/format.h>
 #include <regex>
 

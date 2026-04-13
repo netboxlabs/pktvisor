@@ -4,7 +4,7 @@ from conan import ConanFile
 from conan.errors import ConanInvalidConfiguration
 from conan.tools.build import cross_building
 from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain, cmake_layout
-from conan.tools.files import apply_conandata_patches, copy, export_conandata_patches, get, rmdir
+from conan.tools.files import apply_conandata_patches, copy, export_conandata_patches, get, replace_in_file, rmdir
 from conan.tools.microsoft import is_msvc, check_min_vs
 
 required_conan_version = ">=2.0"
@@ -71,6 +71,15 @@ class CorradeConan(ConanFile):
 
     def source(self):
         get(self, **self.conan_data["sources"][self.version], strip_root=True)
+        # Fix strerror_r for non-glibc Linux (e.g. musl): always use POSIX XSI variant.
+        # GCC defines _GNU_SOURCE on Linux even for musl targets, so Corrade's preprocessor
+        # condition falls into the GNU branch (char* strerror_r) which musl doesn't provide.
+        replace_in_file(
+            self,
+            os.path.join(self.source_folder, "src/Corrade/Utility/Implementation/ErrorString.cpp"),
+            "#if ((_POSIX_C_SOURCE >= 200112L) && !_GNU_SOURCE) || defined(CORRADE_TARGET_EMSCRIPTEN) || defined(CORRADE_TARGET_APPLE) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)",
+            "#if ((_POSIX_C_SOURCE >= 200112L) && !_GNU_SOURCE) || defined(CORRADE_TARGET_EMSCRIPTEN) || defined(CORRADE_TARGET_APPLE) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || (defined(__linux__) && !defined(__GLIBC__))",
+        )
 
     def generate(self):
         tc = CMakeToolchain(self)
