@@ -8,6 +8,7 @@
 #include "AbstractModule.h"
 #include "Configurable.h"
 #include "InputModulePlugin.h"
+#include <Corrade/Containers/StringStl.h>
 #include <yaml-cpp/yaml.h>
 
 namespace visor {
