@@ -606,6 +606,8 @@ The general build steps are:
 git clone https://github.com/netboxlabs/pktvisor.git
 cd pktvisor/
 conan profile detect -f
+# export the vendored Corrade recipe (not in conan-center)
+conan export conan/corrade/ --name=corrade --version=cci.20260327
 cd build/
 # configure and handle dependencies 
 cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=./cmake/conan_provider.cmake ..

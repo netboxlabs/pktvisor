@@ -21,11 +21,13 @@ COPY ./cmake/ /pktvisor-src/cmake/
 COPY ./CMakeLists.txt /pktvisor-src/
 COPY ./conanfile.py /pktvisor-src/
 COPY ./.conanrc /pktvisor-src/
+COPY ./conan/ /pktvisor-src/conan/
 
 WORKDIR /pktvisor-src
 
 RUN \
     conan profile detect -f && \
+    conan export conan/corrade/ --name=corrade --version=cci.20260327 && \
     cd build/ && \
     PKG_CONFIG_PATH=/local/lib/pkgconfig cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=./cmake/conan_provider.cmake .. && \
     make all -j 4
