@@ -25,10 +25,3 @@ std::unique_ptr<StreamHandler> InputResourcesHandlerModulePlugin::instantiate(co
 }
 
 }
-
-namespace visor {
-std::unique_ptr<HandlerModulePlugin> make_handler_input_resources(std::string alias)
-{
-    return std::make_unique<visor::handler::resources::InputResourcesHandlerModulePlugin>(std::move(alias));
-}
-}

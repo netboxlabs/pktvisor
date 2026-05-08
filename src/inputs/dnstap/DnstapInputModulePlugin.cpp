@@ -26,10 +26,3 @@ std::string DnstapInputModulePlugin::generate_input_name(std::string prefix, con
     return prefix + "-" + config.config_hash();
 }
 }
-
-namespace visor {
-std::unique_ptr<InputModulePlugin> make_input_dnstap(std::string alias)
-{
-    return std::make_unique<visor::input::dnstap::DnstapInputModulePlugin>(std::move(alias));
-}
-}

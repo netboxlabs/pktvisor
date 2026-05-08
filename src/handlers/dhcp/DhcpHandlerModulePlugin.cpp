@@ -27,10 +27,3 @@ std::unique_ptr<StreamHandler> DhcpHandlerModulePlugin::instantiate(const std::s
 }
 
 }
-
-namespace visor {
-std::unique_ptr<HandlerModulePlugin> make_handler_dhcp(std::string alias)
-{
-    return std::make_unique<visor::handler::dhcp::DhcpHandlerModulePlugin>(std::move(alias));
-}
-}

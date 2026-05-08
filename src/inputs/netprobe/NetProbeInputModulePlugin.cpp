@@ -24,10 +24,3 @@ std::string NetProbeInputModulePlugin::generate_input_name(std::string prefix, c
     return prefix + "-" + config.config_hash();
 }
 }
-
-namespace visor {
-std::unique_ptr<InputModulePlugin> make_input_netprobe(std::string alias)
-{
-    return std::make_unique<visor::input::netprobe::NetProbeInputModulePlugin>(std::move(alias));
-}
-}

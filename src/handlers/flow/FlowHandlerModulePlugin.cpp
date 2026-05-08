@@ -25,10 +25,3 @@ std::unique_ptr<StreamHandler> FlowHandlerModulePlugin::instantiate(const std::s
 }
 
 }
-
-namespace visor {
-std::unique_ptr<HandlerModulePlugin> make_handler_flow(std::string alias)
-{
-    return std::make_unique<visor::handler::flow::FlowHandlerModulePlugin>(std::move(alias));
-}
-}

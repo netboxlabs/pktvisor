@@ -27,10 +27,3 @@ std::unique_ptr<StreamHandler> PcapHandlerModulePlugin::instantiate(const std::s
 }
 
 }
-
-namespace visor {
-std::unique_ptr<HandlerModulePlugin> make_handler_pcap(std::string alias)
-{
-    return std::make_unique<visor::handler::pcap::PcapHandlerModulePlugin>(std::move(alias));
-}
-}

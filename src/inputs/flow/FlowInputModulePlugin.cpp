@@ -24,10 +24,3 @@ std::string FlowInputModulePlugin::generate_input_name(std::string prefix, const
     return prefix + "-" + config.config_hash();
 }
 }
-
-namespace visor {
-std::unique_ptr<InputModulePlugin> make_input_flow(std::string alias)
-{
-    return std::make_unique<visor::input::flow::FlowInputModulePlugin>(std::move(alias));
-}
-}

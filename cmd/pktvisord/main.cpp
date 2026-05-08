@@ -5,6 +5,7 @@
 #include <csignal>
 #include <functional>
 
+#include "BuiltinPlugins.h"
 #include "CoreServer.h"
 #include "CrashpadHandler.h"
 #include "HandlerManager.h"
@@ -569,8 +570,19 @@ int main(int argc, char *argv[])
 
     // modules
     CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
     if (options.module.dir.has_value()) {
         logger->warn("--module-dir is no longer supported (plugins are now statically linked); ignoring '{}'", options.module.dir.value());
+    }
+
+    if (options.module.list) {
+        for (const auto &entry : registry.pending_input_plugins()) {
+            logger->info("input: {} version {}", entry.alias, entry.version);
+        }
+        for (const auto &entry : registry.pending_handler_plugins()) {
+            logger->info("handler: {} version {}", entry.alias, entry.version);
+        }
+        exit(EXIT_SUCCESS);
     }
 
     // window config defaults for all policies
@@ -636,16 +648,6 @@ int main(int argc, char *argv[])
             logger->error(res.body);
         }
     });
-
-    if (options.module.list) {
-        for (const auto &entry : visor::CoreRegistry::builtin_input_plugins()) {
-            logger->info("input: {} version {}", entry.alias, entry.version);
-        }
-        for (const auto &entry : visor::CoreRegistry::builtin_handler_plugins()) {
-            logger->info("handler: {} version {}", entry.alias, entry.version);
-        }
-        exit(EXIT_SUCCESS);
-    }
 
     if (options.iana_ports_path.has_value()) {
         try {

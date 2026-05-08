@@ -61,6 +61,17 @@ configure_file(visor_config.h.in visor_config.h @ONLY)
 add_subdirectory(inputs)
 add_subdirectory(handlers)
 
+# Tiny static lib that wires built-in plugins into a CoreRegistry. It is the
+# only translation unit that pulls in plugin headers, so visor-core stays
+# decoupled from each plugin's transitive dependency tree. By depending on
+# every plugin lib AND on Visor::Core, it sits between the executable and
+# the plugin/core archives in the link order — a clean linear chain that
+# avoids any cyclic-archive linker tricks (--start-group/end-group).
+add_library(visor-builtin-plugins STATIC BuiltinPlugins.cpp)
+add_library(Visor::BuiltinPlugins ALIAS visor-builtin-plugins)
+target_link_libraries(visor-builtin-plugins PUBLIC Visor::Core ${VISOR_STATIC_PLUGINS})
+target_include_directories(visor-builtin-plugins PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
 set(VISOR_STATIC_PLUGINS ${VISOR_STATIC_PLUGINS} PARENT_SCOPE)
 
 ## TEST SUITE
@@ -78,11 +89,7 @@ target_include_directories(unit-tests-visor-core PRIVATE ${CMAKE_CURRENT_SOURCE_
 
 target_link_libraries(unit-tests-visor-core
         PRIVATE
-        # See cmd/pktvisord/CMakeLists.txt for why --start-group / --end-group is needed.
-        $<$<CXX_COMPILER_ID:GNU>:-Wl,--start-group>
-        Visor::Core
-        ${VISOR_STATIC_PLUGINS}
-        $<$<CXX_COMPILER_ID:GNU>:-Wl,--end-group>
+        Visor::BuiltinPlugins
         Catch2::Catch2WithMain)
 
 add_test(NAME unit-tests-visor-core

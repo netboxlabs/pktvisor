@@ -12,32 +12,6 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 
-// Forward-declared factory functions, one per plugin TU. Defined alongside
-// each plugin's class. Referencing them here forces the linker to pull each
-// plugin .o out of its static archive — no anchor / force-link symbol needed.
-// We use forward declarations rather than including the plugin headers because
-// the plugin headers transitively pull in heavy implementation details (e.g.
-// netflow.h, pcap headers) that visor-core itself does not need.
-namespace visor {
-std::unique_ptr<InputModulePlugin> make_input_mock(std::string);
-std::unique_ptr<InputModulePlugin> make_input_pcap(std::string);
-std::unique_ptr<InputModulePlugin> make_input_dnstap(std::string);
-std::unique_ptr<InputModulePlugin> make_input_flow(std::string);
-std::unique_ptr<InputModulePlugin> make_input_netprobe(std::string);
-
-std::unique_ptr<HandlerModulePlugin> make_handler_net_v1(std::string);
-std::unique_ptr<HandlerModulePlugin> make_handler_net_v2(std::string);
-std::unique_ptr<HandlerModulePlugin> make_handler_dns_v1(std::string);
-std::unique_ptr<HandlerModulePlugin> make_handler_dns_v2(std::string);
-std::unique_ptr<HandlerModulePlugin> make_handler_bgp(std::string);
-std::unique_ptr<HandlerModulePlugin> make_handler_flow(std::string);
-std::unique_ptr<HandlerModulePlugin> make_handler_dhcp(std::string);
-std::unique_ptr<HandlerModulePlugin> make_handler_pcap(std::string);
-std::unique_ptr<HandlerModulePlugin> make_handler_netprobe(std::string);
-std::unique_ptr<HandlerModulePlugin> make_handler_input_resources(std::string);
-std::unique_ptr<HandlerModulePlugin> make_handler_mock(std::string);
-}
-
 namespace visor {
 
 CoreRegistry::CoreRegistry()
@@ -61,59 +35,32 @@ CoreRegistry::CoreRegistry()
     _policy_manager = std::make_unique<PolicyManager>(this);
 }
 
-namespace {
-
-template <typename Plugin>
-struct BuiltinPlugin {
-    std::string_view alias;
-    std::string_view version;
-    std::unique_ptr<Plugin> (*factory)(std::string);
-};
-
-// Single source of truth for built-in plugins. The factory function pointers
-// reference symbols defined in each plugin's TU, which forces the linker to
-// pull each plugin .o out of its static archive at executable link time.
-const BuiltinPlugin<InputModulePlugin> g_builtin_inputs[] = {
-    {"mock", "1.0", &visor::make_input_mock},
-    {"pcap", "1.0", &visor::make_input_pcap},
-    {"dnstap", "1.0", &visor::make_input_dnstap},
-    {"flow", "1.0", &visor::make_input_flow},
-    {"sflow", "1.0", &visor::make_input_flow},
-    {"netprobe", "1.0", &visor::make_input_netprobe},
-};
-
-const BuiltinPlugin<HandlerModulePlugin> g_builtin_handlers[] = {
-    {"net", "1.0", &visor::make_handler_net_v1},
-    {"net", "2.0", &visor::make_handler_net_v2},
-    {"dns", "1.0", &visor::make_handler_dns_v1},
-    {"dns", "2.0", &visor::make_handler_dns_v2},
-    {"bgp", "1.0", &visor::make_handler_bgp},
-    {"flow", "1.0", &visor::make_handler_flow},
-    {"dhcp", "1.0", &visor::make_handler_dhcp},
-    {"pcap", "1.0", &visor::make_handler_pcap},
-    {"netprobe", "1.0", &visor::make_handler_netprobe},
-    {"input_resources", "1.0", &visor::make_handler_input_resources},
-    {"mock_dyn", "1.0", &visor::make_handler_mock},
-};
-
+void CoreRegistry::add_input_plugin(std::string alias, std::string version, std::unique_ptr<InputModulePlugin> mod)
+{
+    _pending_inputs.push_back({std::move(alias), std::move(version), std::move(mod)});
 }
 
-std::vector<CoreRegistry::PluginInfo> CoreRegistry::builtin_input_plugins()
+void CoreRegistry::add_handler_plugin(std::string alias, std::string version, std::unique_ptr<HandlerModulePlugin> mod)
+{
+    _pending_handlers.push_back({std::move(alias), std::move(version), std::move(mod)});
+}
+
+std::vector<CoreRegistry::PluginInfo> CoreRegistry::pending_input_plugins() const
 {
     std::vector<PluginInfo> result;
-    result.reserve(std::size(g_builtin_inputs));
-    for (const auto &p : g_builtin_inputs) {
-        result.push_back({std::string(p.alias), std::string(p.version)});
+    result.reserve(_pending_inputs.size());
+    for (const auto &p : _pending_inputs) {
+        result.push_back({p.alias, p.version});
     }
     return result;
 }
 
-std::vector<CoreRegistry::PluginInfo> CoreRegistry::builtin_handler_plugins()
+std::vector<CoreRegistry::PluginInfo> CoreRegistry::pending_handler_plugins() const
 {
     std::vector<PluginInfo> result;
-    result.reserve(std::size(g_builtin_handlers));
-    for (const auto &p : g_builtin_handlers) {
-        result.push_back({std::string(p.alias), std::string(p.version)});
+    result.reserve(_pending_handlers.size());
+    for (const auto &p : _pending_handlers) {
+        result.push_back({p.alias, p.version});
     }
     return result;
 }
@@ -124,25 +71,25 @@ void CoreRegistry::start(HttpServer *svr)
         _logger->warn("initializing modules with no HttpServer");
     }
 
-    for (const auto &p : g_builtin_inputs) {
-        auto mod = p.factory(std::string(p.alias));
-        _logger->info("Load input stream plugin: {} version {} interface {}", p.alias, p.version, mod->pluginInterface());
-        mod->init_plugin(this, svr, &geo::GeoIP(), &geo::GeoASN());
-        auto result = _input_plugins.insert({std::make_pair(std::string(p.alias), std::string(p.version)), std::move(mod)});
+    for (auto &p : _pending_inputs) {
+        _logger->info("Load input stream plugin: {} version {} interface {}", p.alias, p.version, p.mod->pluginInterface());
+        p.mod->init_plugin(this, svr, &geo::GeoIP(), &geo::GeoASN());
+        auto result = _input_plugins.insert({std::make_pair(p.alias, p.version), std::move(p.mod)});
         if (!result.second) {
             throw std::runtime_error(fmt::format("Input alias '{}' with version '{}' was already loaded.", p.alias, p.version));
         }
     }
+    _pending_inputs.clear();
 
-    for (const auto &p : g_builtin_handlers) {
-        auto mod = p.factory(std::string(p.alias));
-        _logger->info("Load stream handler plugin: {} version {} interface {}", p.alias, p.version, mod->pluginInterface());
-        mod->init_plugin(this, svr, &geo::GeoIP(), &geo::GeoASN());
-        auto result = _handler_plugins.insert({std::make_pair(std::string(p.alias), std::string(p.version)), std::move(mod)});
+    for (auto &p : _pending_handlers) {
+        _logger->info("Load stream handler plugin: {} version {} interface {}", p.alias, p.version, p.mod->pluginInterface());
+        p.mod->init_plugin(this, svr, &geo::GeoIP(), &geo::GeoASN());
+        auto result = _handler_plugins.insert({std::make_pair(p.alias, p.version), std::move(p.mod)});
         if (!result.second) {
             throw std::runtime_error(fmt::format("Handler alias '{}' with version '{}' was already loaded.", p.alias, p.version));
         }
     }
+    _pending_handlers.clear();
 }
 
 void CoreRegistry::stop()

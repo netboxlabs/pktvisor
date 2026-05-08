@@ -53,10 +53,3 @@ std::string PcapInputModulePlugin::generate_input_name(std::string prefix, const
 }
 
 }
-
-namespace visor {
-std::unique_ptr<InputModulePlugin> make_input_pcap(std::string alias)
-{
-    return std::make_unique<visor::input::pcap::PcapInputModulePlugin>(std::move(alias));
-}
-}

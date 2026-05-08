@@ -6,6 +6,7 @@
 #pragma GCC diagnostic pop
 #endif
 
+#include "BuiltinPlugins.h"
 #include "CoreRegistry.h"
 #include "Taps.h"
 
@@ -79,7 +80,7 @@ TEST_CASE("Taps", "[taps]")
     SECTION("Good Config")
     {
         CoreRegistry registry;
-        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(tap_config);
 
         CHECK(config_file["visor"]["taps"]);
@@ -96,7 +97,7 @@ TEST_CASE("Taps", "[taps]")
     SECTION("Good config, test remove tap and add again")
     {
         CoreRegistry registry;
-        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(tap_config);
 
         CHECK(config_file["visor"]["taps"]);
@@ -124,7 +125,7 @@ TEST_CASE("Taps", "[taps]")
     SECTION("Duplicate")
     {
         CoreRegistry registry;
-        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(tap_config);
 
         CHECK_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"], true));
@@ -134,7 +135,7 @@ TEST_CASE("Taps", "[taps]")
     SECTION("Bad Config")
     {
         CoreRegistry registry;
-        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(tap_config_bad);
 
         CHECK(config_file["visor"]["taps"]);
@@ -145,35 +146,35 @@ TEST_CASE("Taps", "[taps]")
     SECTION("Bad Config: empty data")
     {
         CoreRegistry registry;
-        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);        registry.start(nullptr);
         REQUIRE_THROWS_WITH(registry.tap_manager()->load_from_str(""), "empty data");
     }
 
     SECTION("Bad Config: invalid schema")
     {
         CoreRegistry registry;
-        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);        registry.start(nullptr);
         REQUIRE_THROWS_WITH(registry.tap_manager()->load_from_str("invalid: schema"), "invalid schema");
     }
 
     SECTION("Bad Config: invalid version")
     {
         CoreRegistry registry;
-        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);        registry.start(nullptr);
         REQUIRE_THROWS_WITH(registry.tap_manager()->load_from_str(tap_config_bad_version), "unsupported version");
     }
 
     SECTION("Bad Config: no taps")
     {
         CoreRegistry registry;
-        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);        registry.start(nullptr);
         REQUIRE_THROWS_WITH(registry.tap_manager()->load_from_str(tap_config_bad_no_tap), "no taps found in schema");
     }
 
     SECTION("Json validation")
     {
         CoreRegistry registry;
-        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(tap_config);
 
         CHECK(config_file["visor"]["taps"]);

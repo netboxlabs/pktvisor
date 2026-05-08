@@ -26,10 +26,3 @@ std::unique_ptr<StreamHandler> DnsHandlerModulePlugin::instantiate(const std::st
 }
 
 }
-
-namespace visor {
-std::unique_ptr<HandlerModulePlugin> make_handler_dns_v1(std::string alias)
-{
-    return std::make_unique<visor::handler::dns::DnsHandlerModulePlugin>(std::move(alias));
-}
-}

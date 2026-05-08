@@ -7,6 +7,7 @@
 #include "HandlerModulePlugin.h"
 #include "InputModulePlugin.h"
 #include <map>
+#include <vector>
 #ifdef __GNUC__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wold-style-cast"
@@ -43,16 +44,23 @@ public:
         std::string version;
     };
 
-    // Metadata-only enumeration of built-in plugins, available without
-    // calling start() (used by --module-list).
-    static std::vector<PluginInfo> builtin_input_plugins();
-    static std::vector<PluginInfo> builtin_handler_plugins();
-
 private:
-    // these hold instantiated visor::AbstractPlugin instances built from the
-    // built-in plugin list at start() time. They act as factories for
-    // visor::AbstractModule instances (held in the managers below) via the HTTP
-    // admin API (through setup_routes) or Tap instantiation. Keyed by (alias, version).
+    template <typename Plugin>
+    struct Pending {
+        std::string alias;
+        std::string version;
+        std::unique_ptr<Plugin> mod;
+    };
+
+    // Plugins are populated from the outside (e.g. by load_builtin_plugins() in
+    // visor-builtin-plugins) before start(). They sit in the pending lists
+    // until start() initializes them and moves them into the keyed maps below.
+    std::vector<Pending<InputModulePlugin>> _pending_inputs;
+    std::vector<Pending<HandlerModulePlugin>> _pending_handlers;
+
+    // Active, initialized plugin instances. Keyed by (alias, version). Act as
+    // factories for visor::AbstractModule instances via the HTTP admin API
+    // (through setup_routes) or Tap instantiation.
     InputPluginMap _input_plugins;
     HandlerPluginMap _handler_plugins;
 
@@ -70,6 +78,15 @@ private:
 public:
     CoreRegistry();
     ~CoreRegistry();
+
+    // Add a plugin to be initialized at start() time. Ownership transfers to
+    // the registry. Called by load_builtin_plugins() (or, in tests, directly).
+    void add_input_plugin(std::string alias, std::string version, std::unique_ptr<InputModulePlugin> mod);
+    void add_handler_plugin(std::string alias, std::string version, std::unique_ptr<HandlerModulePlugin> mod);
+
+    // Metadata of plugins added but not yet started. Used by --module-list.
+    [[nodiscard]] std::vector<PluginInfo> pending_input_plugins() const;
+    [[nodiscard]] std::vector<PluginInfo> pending_handler_plugins() const;
 
     void start(HttpServer *svr);
     void stop();

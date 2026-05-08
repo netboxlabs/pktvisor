@@ -26,10 +26,3 @@ std::unique_ptr<StreamHandler> NetHandlerModulePlugin::instantiate(const std::st
 }
 
 }
-
-namespace visor {
-std::unique_ptr<HandlerModulePlugin> make_handler_net_v2(std::string alias)
-{
-    return std::make_unique<visor::handler::net::v2::NetHandlerModulePlugin>(std::move(alias));
-}
-}

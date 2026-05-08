@@ -28,10 +28,3 @@ std::unique_ptr<StreamHandler> MockHandlerModulePlugin::instantiate(const std::s
 }
 
 }
-
-namespace visor {
-std::unique_ptr<HandlerModulePlugin> make_handler_mock(std::string alias)
-{
-    return std::make_unique<visor::handler::mock::MockHandlerModulePlugin>(std::move(alias));
-}
-}

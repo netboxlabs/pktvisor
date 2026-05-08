@@ -8,6 +8,7 @@
 
 #include <docopt/docopt.h>
 
+#include "BuiltinPlugins.h"
 #include "CoreRegistry.h"
 #include "HandlerManager.h"
 #include "InputStreamManager.h"
@@ -96,6 +97,7 @@ int main(int argc, char *argv[])
     }
 
     CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
 
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
