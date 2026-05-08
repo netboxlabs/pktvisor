@@ -13,8 +13,6 @@
 #include "InputStreamManager.h"
 #include <spdlog/sinks/stdout_color_sinks.h>
 
-#include "handlers/static_plugins.h"
-#include "inputs/static_plugins.h"
 #include "visor_config.h"
 
 #include "GeoDB.h"

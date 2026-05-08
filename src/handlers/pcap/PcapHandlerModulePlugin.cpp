@@ -9,11 +9,6 @@
 #include "PcapInputStream.h"
 #include "PcapStreamHandler.h"
 #include <nlohmann/json.hpp>
-
-#include "PluginRegistry.h"
-
-VISOR_REGISTER_HANDLER_PLUGIN(VisorHandlerPcap, visor::handler::pcap::PcapHandlerModulePlugin, "pcap", "1.0")
-
 namespace visor::handler::pcap {
 
 using namespace visor::input::pcap;
@@ -31,4 +26,11 @@ std::unique_ptr<StreamHandler> PcapHandlerModulePlugin::instantiate(const std::s
     return handler_module;
 }
 
+}
+
+namespace visor {
+std::unique_ptr<HandlerModulePlugin> make_handler_pcap(std::string alias)
+{
+    return std::make_unique<visor::handler::pcap::PcapHandlerModulePlugin>(std::move(alias));
+}
 }

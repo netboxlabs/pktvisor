@@ -8,11 +8,6 @@
 #include "HandlerManager.h"
 #include "InputStreamManager.h"
 #include <nlohmann/json.hpp>
-
-#include "PluginRegistry.h"
-
-VISOR_REGISTER_HANDLER_PLUGIN(VisorHandlerDhcp, visor::handler::dhcp::DhcpHandlerModulePlugin, "dhcp", "1.0")
-
 namespace visor::handler::dhcp {
 
 using namespace visor::input::pcap;
@@ -31,4 +26,11 @@ std::unique_ptr<StreamHandler> DhcpHandlerModulePlugin::instantiate(const std::s
     return handler_module;
 }
 
+}
+
+namespace visor {
+std::unique_ptr<HandlerModulePlugin> make_handler_dhcp(std::string alias)
+{
+    return std::make_unique<visor::handler::dhcp::DhcpHandlerModulePlugin>(std::move(alias));
+}
 }

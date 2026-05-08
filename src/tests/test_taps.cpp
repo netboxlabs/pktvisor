@@ -2,8 +2,6 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmissing-declarations"
 #endif
-#include "inputs/static_plugins.h"
-#include "handlers/static_plugins.h"
 #ifdef __GNUC__
 #pragma GCC diagnostic pop
 #endif

@@ -5,11 +5,6 @@
 #include "PcapInputModulePlugin.h"
 #include "CoreRegistry.h"
 #include "InputStreamManager.h"
-
-#include "PluginRegistry.h"
-
-VISOR_REGISTER_INPUT_PLUGIN(VisorInputPcap, visor::input::pcap::PcapInputModulePlugin, "pcap", "1.0")
-
 namespace visor::input::pcap {
 
 void PcapInputModulePlugin::setup_routes([[maybe_unused]] HttpServer *svr)
@@ -57,4 +52,11 @@ std::string PcapInputModulePlugin::generate_input_name(std::string prefix, const
     return prefix + "-" + input_name.config_hash();
 }
 
+}
+
+namespace visor {
+std::unique_ptr<InputModulePlugin> make_input_pcap(std::string alias)
+{
+    return std::make_unique<visor::input::pcap::PcapInputModulePlugin>(std::move(alias));
+}
 }

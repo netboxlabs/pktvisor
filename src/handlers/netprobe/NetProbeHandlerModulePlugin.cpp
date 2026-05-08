@@ -8,11 +8,6 @@
 #include "NetProbeHandlerModulePlugin.h"
 #include "NetProbeStreamHandler.h"
 #include <nlohmann/json.hpp>
-
-#include "PluginRegistry.h"
-
-VISOR_REGISTER_HANDLER_PLUGIN(VisorHandlerNetProbe, visor::handler::netprobe::NetProbeHandlerModulePlugin, "netprobe", "1.0")
-
 namespace visor::handler::netprobe {
 
 using json = nlohmann::json;
@@ -29,4 +24,11 @@ std::unique_ptr<StreamHandler> NetProbeHandlerModulePlugin::instantiate(const st
    return handler_module;
 }
 
+}
+
+namespace visor {
+std::unique_ptr<HandlerModulePlugin> make_handler_netprobe(std::string alias)
+{
+    return std::make_unique<visor::handler::netprobe::NetProbeHandlerModulePlugin>(std::move(alias));
+}
 }

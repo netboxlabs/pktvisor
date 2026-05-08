@@ -8,11 +8,6 @@
 #include "HandlerManager.h"
 #include "InputStreamManager.h"
 #include <nlohmann/json.hpp>
-
-#include "PluginRegistry.h"
-
-VISOR_REGISTER_HANDLER_PLUGIN(VisorHandlerBgp, visor::handler::bgp::BgpHandlerModulePlugin, "bgp", "1.0")
-
 namespace visor::handler::bgp {
 
 using namespace visor::input::pcap;
@@ -30,4 +25,11 @@ std::unique_ptr<StreamHandler> BgpHandlerModulePlugin::instantiate(const std::st
    return handler_module;
 }
 
+}
+
+namespace visor {
+std::unique_ptr<HandlerModulePlugin> make_handler_bgp(std::string alias)
+{
+    return std::make_unique<visor::handler::bgp::BgpHandlerModulePlugin>(std::move(alias));
+}
 }

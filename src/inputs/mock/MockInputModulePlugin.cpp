@@ -5,11 +5,6 @@
 #include "MockInputModulePlugin.h"
 #include "CoreRegistry.h"
 #include "InputStreamManager.h"
-
-#include "PluginRegistry.h"
-
-VISOR_REGISTER_INPUT_PLUGIN(VisorInputMock, visor::input::mock::MockInputModulePlugin, "mock", "1.0")
-
 namespace visor::input::mock {
 
 void MockInputModulePlugin::setup_routes([[maybe_unused]] HttpServer *svr)
@@ -29,4 +24,11 @@ std::string MockInputModulePlugin::generate_input_name(std::string prefix, const
     return prefix + "-" + config.config_hash();
 }
 
+}
+
+namespace visor {
+std::unique_ptr<InputModulePlugin> make_input_mock(std::string alias)
+{
+    return std::make_unique<visor::input::mock::MockInputModulePlugin>(std::move(alias));
+}
 }

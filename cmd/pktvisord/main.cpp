@@ -10,8 +10,6 @@
 #include "HandlerManager.h"
 #include "InputStreamManager.h"
 #include "Policies.h"
-#include "handlers/static_plugins.h"
-#include "inputs/static_plugins.h"
 #include "visor_config.h"
 #include <docopt/docopt.h>
 #include <spdlog/sinks/basic_file_sink.h>
@@ -640,10 +638,10 @@ int main(int argc, char *argv[])
     });
 
     if (options.module.list) {
-        for (const auto &entry : visor::InputPluginRegistry::instance().entries()) {
+        for (const auto &entry : visor::CoreRegistry::builtin_input_plugins()) {
             logger->info("input: {} version {}", entry.alias, entry.version);
         }
-        for (const auto &entry : visor::HandlerPluginRegistry::instance().entries()) {
+        for (const auto &entry : visor::CoreRegistry::builtin_handler_plugins()) {
             logger->info("handler: {} version {}", entry.alias, entry.version);
         }
         exit(EXIT_SUCCESS);

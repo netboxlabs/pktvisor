@@ -38,9 +38,19 @@ public:
     typedef std::map<std::pair<std::string, std::string>, std::unique_ptr<InputModulePlugin>> InputPluginMap;
     typedef std::map<std::pair<std::string, std::string>, std::unique_ptr<HandlerModulePlugin>> HandlerPluginMap;
 
+    struct PluginInfo {
+        std::string alias;
+        std::string version;
+    };
+
+    // Metadata-only enumeration of built-in plugins, available without
+    // calling start() (used by --module-list).
+    static std::vector<PluginInfo> builtin_input_plugins();
+    static std::vector<PluginInfo> builtin_handler_plugins();
+
 private:
-    // these hold instantiated visor::AbstractPlugin instances built from
-    // PluginRegistry<T>::entries() at start() time. They act as factories for
+    // these hold instantiated visor::AbstractPlugin instances built from the
+    // built-in plugin list at start() time. They act as factories for
     // visor::AbstractModule instances (held in the managers below) via the HTTP
     // admin API (through setup_routes) or Tap instantiation. Keyed by (alias, version).
     InputPluginMap _input_plugins;

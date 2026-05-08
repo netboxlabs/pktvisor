@@ -7,11 +7,6 @@
 #include "InputStreamManager.h"
 
 #include "DnstapInputStream.h"
-
-#include "PluginRegistry.h"
-
-VISOR_REGISTER_INPUT_PLUGIN(VisorInputDnstap, visor::input::dnstap::DnstapInputModulePlugin, "dnstap", "1.0")
-
 namespace visor::input::dnstap {
 
 void DnstapInputModulePlugin::setup_routes([[maybe_unused]] HttpServer *svr)
@@ -29,5 +24,12 @@ std::unique_ptr<InputStream> DnstapInputModulePlugin::instantiate(const std::str
 std::string DnstapInputModulePlugin::generate_input_name(std::string prefix, const Configurable &config, [[maybe_unused]] const Configurable &filter)
 {
     return prefix + "-" + config.config_hash();
+}
+}
+
+namespace visor {
+std::unique_ptr<InputModulePlugin> make_input_dnstap(std::string alias)
+{
+    return std::make_unique<visor::input::dnstap::DnstapInputModulePlugin>(std::move(alias));
 }
 }

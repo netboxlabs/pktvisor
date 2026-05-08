@@ -5,11 +5,6 @@
 #include "FlowInputModulePlugin.h"
 #include "CoreRegistry.h"
 #include "InputStreamManager.h"
-#include "PluginRegistry.h"
-
-VISOR_REGISTER_INPUT_PLUGIN(VisorInputFlow, visor::input::flow::FlowInputModulePlugin, "flow", "1.0")
-VISOR_REGISTER_INPUT_PLUGIN_ALIAS(VisorInputSflow, visor::input::flow::FlowInputModulePlugin, "sflow", "1.0")
-
 namespace visor::input::flow {
 
 void FlowInputModulePlugin::setup_routes([[maybe_unused]] HttpServer *svr)
@@ -27,5 +22,12 @@ std::unique_ptr<InputStream> FlowInputModulePlugin::instantiate(const std::strin
 std::string FlowInputModulePlugin::generate_input_name(std::string prefix, const Configurable &config, [[maybe_unused]] const Configurable &filter)
 {
     return prefix + "-" + config.config_hash();
+}
+}
+
+namespace visor {
+std::unique_ptr<InputModulePlugin> make_input_flow(std::string alias)
+{
+    return std::make_unique<visor::input::flow::FlowInputModulePlugin>(std::move(alias));
 }
 }

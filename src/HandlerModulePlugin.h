@@ -5,7 +5,6 @@
 #pragma once
 
 #include "AbstractPlugin.h"
-#include "PluginRegistry.h"
 #include <memory>
 #include <string>
 
@@ -43,7 +42,6 @@ public:
     virtual std::unique_ptr<StreamHandler> instantiate(const std::string &name, InputEventProxy *proxy, const Configurable *config, const Configurable *filter) = 0;
 };
 
-using HandlerPluginRegistry = PluginRegistry<HandlerModulePlugin>;
 using HandlerPluginPtr = std::unique_ptr<HandlerModulePlugin>;
 
 }

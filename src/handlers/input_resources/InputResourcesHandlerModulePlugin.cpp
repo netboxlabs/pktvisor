@@ -8,11 +8,6 @@
 #include "InputResourcesStreamHandler.h"
 #include "InputStreamManager.h"
 #include <nlohmann/json.hpp>
-
-#include "PluginRegistry.h"
-
-VISOR_REGISTER_HANDLER_PLUGIN(VisorHandlerInputResources, visor::handler::resources::InputResourcesHandlerModulePlugin, "input_resources", "1.0")
-
 namespace visor::handler::resources {
 
 using json = nlohmann::json;
@@ -29,4 +24,11 @@ std::unique_ptr<StreamHandler> InputResourcesHandlerModulePlugin::instantiate(co
     return handler_module;
 }
 
+}
+
+namespace visor {
+std::unique_ptr<HandlerModulePlugin> make_handler_input_resources(std::string alias)
+{
+    return std::make_unique<visor::handler::resources::InputResourcesHandlerModulePlugin>(std::move(alias));
+}
 }

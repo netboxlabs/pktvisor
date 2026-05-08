@@ -8,11 +8,6 @@
 #include "InputStreamManager.h"
 #include "FlowStreamHandler.h"
 #include <nlohmann/json.hpp>
-
-#include "PluginRegistry.h"
-
-VISOR_REGISTER_HANDLER_PLUGIN(VisorHandlerFlow, visor::handler::flow::FlowHandlerModulePlugin, "flow", "1.0")
-
 namespace visor::handler::flow {
 
 using json = nlohmann::json;
@@ -29,4 +24,11 @@ std::unique_ptr<StreamHandler> FlowHandlerModulePlugin::instantiate(const std::s
     return handler_module;
 }
 
+}
+
+namespace visor {
+std::unique_ptr<HandlerModulePlugin> make_handler_flow(std::string alias)
+{
+    return std::make_unique<visor::handler::flow::FlowHandlerModulePlugin>(std::move(alias));
+}
 }

@@ -5,7 +5,6 @@
 #pragma once
 
 #include "AbstractPlugin.h"
-#include "PluginRegistry.h"
 #include <memory>
 #include <string>
 
@@ -35,7 +34,6 @@ public:
     virtual std::string generate_input_name(std::string prefix, const Configurable &config, const Configurable &filter) = 0;
 };
 
-using InputPluginRegistry = PluginRegistry<InputModulePlugin>;
 using InputPluginPtr = std::unique_ptr<InputModulePlugin>;
 
 }

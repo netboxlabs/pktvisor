@@ -8,11 +8,6 @@
 #include "InputStreamManager.h"
 #include "NetStreamHandler.h"
 #include "nlohmann/json.hpp"
-
-#include "PluginRegistry.h"
-
-VISOR_REGISTER_HANDLER_PLUGIN(VisorHandlerNet, visor::handler::net::NetHandlerModulePlugin, "net", "1.0")
-
 namespace visor::handler::net {
 
 using namespace visor::input::pcap;
@@ -30,4 +25,11 @@ std::unique_ptr<StreamHandler> NetHandlerModulePlugin::instantiate(const std::st
     return handler_module;
 }
 
+}
+
+namespace visor {
+std::unique_ptr<HandlerModulePlugin> make_handler_net_v1(std::string alias)
+{
+    return std::make_unique<visor::handler::net::NetHandlerModulePlugin>(std::move(alias));
+}
 }

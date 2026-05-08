@@ -8,11 +8,6 @@
 #include "HandlerManager.h"
 #include "InputStreamManager.h"
 #include <nlohmann/json.hpp>
-
-#include "PluginRegistry.h"
-
-VISOR_REGISTER_HANDLER_PLUGIN(VisorHandlerDnsV2, visor::handler::dns::v2::DnsHandlerModulePlugin, "dns", "2.0")
-
 namespace visor::handler::dns::v2 {
 
 using namespace visor::input::pcap;
@@ -30,4 +25,11 @@ std::unique_ptr<StreamHandler> DnsHandlerModulePlugin::instantiate(const std::st
     return handler_module;
 }
 
+}
+
+namespace visor {
+std::unique_ptr<HandlerModulePlugin> make_handler_dns_v2(std::string alias)
+{
+    return std::make_unique<visor::handler::dns::v2::DnsHandlerModulePlugin>(std::move(alias));
+}
 }

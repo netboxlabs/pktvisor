@@ -9,11 +9,6 @@
 #include "MockInputStream.h"
 #include "MockStreamHandler.h"
 #include <nlohmann/json.hpp>
-
-#include "PluginRegistry.h"
-
-VISOR_REGISTER_HANDLER_PLUGIN(VisorHandlerMock, visor::handler::mock::MockHandlerModulePlugin, "mock_dyn", "1.0")
-
 namespace visor::handler::mock {
 
 using namespace visor::input::mock;
@@ -32,4 +27,11 @@ std::unique_ptr<StreamHandler> MockHandlerModulePlugin::instantiate(const std::s
     return handler_module;
 }
 
+}
+
+namespace visor {
+std::unique_ptr<HandlerModulePlugin> make_handler_mock(std::string alias)
+{
+    return std::make_unique<visor::handler::mock::MockHandlerModulePlugin>(std::move(alias));
+}
 }
