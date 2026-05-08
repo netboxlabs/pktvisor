@@ -1,11 +1,3 @@
-#ifdef __GNUC__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wmissing-declarations"
-#endif
-#ifdef __GNUC__
-#pragma GCC diagnostic pop
-#endif
-
 #include "BuiltinPlugins.h"
 #include "CoreRegistry.h"
 #include "Taps.h"
