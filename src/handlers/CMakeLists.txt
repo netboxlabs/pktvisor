@@ -5,7 +5,6 @@ add_subdirectory(bgp)
 add_subdirectory(flow)
 add_subdirectory(dhcp)
 add_subdirectory(pcap)
-add_subdirectory(mock)
 add_subdirectory(netprobe)
 add_subdirectory(input_resources)
 

@@ -11,7 +11,6 @@
 #include "handlers/dns/v2/DnsHandlerModulePlugin.h"
 #include "handlers/flow/FlowHandlerModulePlugin.h"
 #include "handlers/input_resources/InputResourcesHandlerModulePlugin.h"
-#include "handlers/mock/MockHandlerModulePlugin.h"
 #include "handlers/net/v1/NetHandlerModulePlugin.h"
 #include "handlers/net/v2/NetHandlerModulePlugin.h"
 #include "handlers/netprobe/NetProbeHandlerModulePlugin.h"
@@ -57,7 +56,6 @@ void load_builtin_plugins(CoreRegistry &reg)
     reg.add_handler_plugin("pcap", "1.0", make<handler::pcap::PcapHandlerModulePlugin>("pcap"));
     reg.add_handler_plugin("netprobe", "1.0", make<handler::netprobe::NetProbeHandlerModulePlugin>("netprobe"));
     reg.add_handler_plugin("input_resources", "1.0", make<handler::resources::InputResourcesHandlerModulePlugin>("input_resources"));
-    reg.add_handler_plugin("mock_dyn", "1.0", make<handler::mock::MockHandlerModulePlugin>("mock_dyn"));
 }
 
 }
