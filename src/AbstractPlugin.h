@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <exception>
 #include <nlohmann/json.hpp>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 
