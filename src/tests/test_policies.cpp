@@ -807,7 +807,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Good Config happy path")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config);
 
         CHECK(config_file["visor"]["policies"]);
@@ -848,7 +849,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Good Config merge like handlers")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_merge);
         CHECK(config_file["visor"]["policies"]);
         CHECK(config_file["visor"]["policies"].IsMap());
@@ -871,7 +873,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Good Config sequence modules")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_hseq);
         CHECK(config_file["visor"]["policies"]);
         CHECK(config_file["visor"]["policies"].IsMap());
@@ -894,7 +897,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Duplicate")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config);
 
         REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"]));
@@ -909,7 +913,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Good Config tap selector all")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_tap_selector_all);
         CHECK(config_file["visor"]["policies"]);
         CHECK(config_file["visor"]["policies"].IsMap());
@@ -923,7 +928,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Good Config tap selector any")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_tap_selector_any);
         CHECK(config_file["visor"]["policies"]);
         CHECK(config_file["visor"]["policies"].IsMap());
@@ -936,13 +942,15 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Bad Config: no policies schema")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        REQUIRE_THROWS_WITH(registry.policy_manager()->load_from_str(policies_config_bad0), "no policies found in schema");
+        visor::load_builtin_plugins(registry);
+        REQUIRE_THROWS_WITH(registry.policy_manager()->load_from_str(policies_config_bad0), "no policies found in schema");
     }
 
     SECTION("Bad Config: no policies map config")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        YAML::Node config_file = YAML::Load(policies_config_bad1);
+        visor::load_builtin_plugins(registry);
+        YAML::Node config_file = YAML::Load(policies_config_bad1);
 
         REQUIRE_THROWS_WITH(registry.policy_manager()->load(config_file["visor"]["policies"]), "expecting policy configuration map");
     }
@@ -950,25 +958,29 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Bad Config: empty data")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        REQUIRE_THROWS_WITH(registry.policy_manager()->load_from_str(""), "empty data");
+        visor::load_builtin_plugins(registry);
+        REQUIRE_THROWS_WITH(registry.policy_manager()->load_from_str(""), "empty data");
     }
 
     SECTION("Bad Config: invalid schema")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        REQUIRE_THROWS_WITH(registry.policy_manager()->load_from_str("invalid: schema"), "invalid schema");
+        visor::load_builtin_plugins(registry);
+        REQUIRE_THROWS_WITH(registry.policy_manager()->load_from_str("invalid: schema"), "invalid schema");
     }
 
     SECTION("Bad Config: unsupported version")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        REQUIRE_THROWS_WITH(registry.policy_manager()->load_from_str(policies_config_bad1), "unsupported version");
+        visor::load_builtin_plugins(registry);
+        REQUIRE_THROWS_WITH(registry.policy_manager()->load_from_str(policies_config_bad1), "unsupported version");
     }
 
     SECTION("Bad Config: invalid tap")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        YAML::Node config_file = YAML::Load(policies_config_bad2);
+        visor::load_builtin_plugins(registry);
+        YAML::Node config_file = YAML::Load(policies_config_bad2);
 
         REQUIRE_THROWS_WITH(registry.policy_manager()->load(config_file["visor"]["policies"]), "tap 'nonexist' does not exist");
     }
@@ -976,7 +988,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Bad Config: invalid tap config")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_bad3);
 
         REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"]));
@@ -986,7 +999,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Bad Config: exception on input start")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
 
         REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(policies_config_bad4));
         REQUIRE_THROWS_WITH(registry.policy_manager()->load_from_str(policies_config_bad4), "policy [default_view] failed to start: mock error on start");
@@ -995,7 +1009,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Bad Config: mis-matched input_type on tap")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_bad5);
 
         REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"]));
@@ -1005,7 +1020,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Bad Config: bad policy kind")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_bad6);
 
         REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"]));
@@ -1015,7 +1031,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Bad Config: invalid handler")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_bad7);
 
         REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"]));
@@ -1025,7 +1042,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Bad Config: invalid handler module")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_bad7);
 
         REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"], true));
@@ -1035,7 +1053,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Bad Config: handler module without a type")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_bad8);
 
         REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"], true));
@@ -1045,7 +1064,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Bad Config: handler module not map config")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_bad9);
 
         REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"], true));
@@ -1055,7 +1075,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Bad Config: handler module not map metric groups")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_bad10);
 
         REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"], true));
@@ -1065,7 +1086,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Bad Config: handler module metric groups not valid")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_bad11);
 
         REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"], true));
@@ -1075,7 +1097,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Bad Config: global_handler_config with not valid format")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_bad13);
 
         REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"], true));
@@ -1085,7 +1108,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Bad Config: policy config not a map")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_bad14);
 
         REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"], true));
@@ -1095,14 +1119,16 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Bad Config: invalid handler modules YAML type")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         REQUIRE_THROWS_WITH(YAML::Load(policies_config_hseq_bad2), "yaml-cpp: error at line 23, column 11: end of map not found");
     }
 
     SECTION("Bad Config: invalid matching tags for tap selector")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_tap_selector_bad1);
 
         REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"], true));
@@ -1112,7 +1138,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Bad Config: invalid matching tags for tap selector")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_tap_selector_bad2);
 
         REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"], true));
@@ -1122,7 +1149,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Bad Config: both tap and tap selector")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_tap_selector_bad3);
 
         REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"], true));
@@ -1132,7 +1160,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Bad Config: tap selector any must be sequence")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_tap_selector_bad4);
 
         REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"], true));
@@ -1142,7 +1171,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Bad Config: tap selector tag and selector must have same value type")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_tap_selector_bad5);
 
         REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"], true));
@@ -1152,7 +1182,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Bad Config: tap selector must have only one key and value")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_tap_selector_bad6);
 
         REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"], true));
@@ -1162,7 +1193,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Roll Back")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config);
 
         CHECK(config_file["visor"]["policies"]);
@@ -1191,7 +1223,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Good Config, test stop()")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config);
 
         CHECK(config_file["visor"]["policies"]);
@@ -1219,7 +1252,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Good Config, test remove policy and add again")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config);
 
         CHECK(config_file["visor"]["policies"]);
@@ -1254,7 +1288,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Good Config, test remove sequence handler policy and add again")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config_hseq);
 
         CHECK(config_file["visor"]["policies"]);
@@ -1287,7 +1322,8 @@ TEST_CASE("Policies", "[policies]")
     SECTION("Good Config, policies with same tap and input")
     {
         CoreRegistry registry;
-        visor::load_builtin_plugins(registry);        registry.start(nullptr);
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
         YAML::Node config_file = YAML::Load(policies_config);
 
         CHECK(config_file["visor"]["policies"]);
@@ -1319,7 +1355,8 @@ TEST_CASE("Policies", "[policies]")
 TEST_CASE("Policies and Metrics", "[policies][metrics]")
 {
     CoreRegistry registry;
-    visor::load_builtin_plugins(registry);    registry.start(nullptr);
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
     YAML::Node config_file = YAML::Load(policies_config);
     CHECK(config_file["visor"]["policies"]);
     CHECK(config_file["visor"]["policies"].IsMap());
