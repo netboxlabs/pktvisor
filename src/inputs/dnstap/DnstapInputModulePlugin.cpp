@@ -5,13 +5,12 @@
 #include "DnstapInputModulePlugin.h"
 #include "CoreRegistry.h"
 #include "InputStreamManager.h"
-#include <Corrade/PluginManager/AbstractManager.h>
-#include <Corrade/Utility/FormatStl.h>
 
 #include "DnstapInputStream.h"
 
-CORRADE_PLUGIN_REGISTER(VisorInputDnstap, visor::input::dnstap::DnstapInputModulePlugin,
-    "visor.module.input/1.0")
+#include "PluginRegistry.h"
+
+VISOR_REGISTER_INPUT_PLUGIN(VisorInputDnstap, visor::input::dnstap::DnstapInputModulePlugin, "dnstap", "1.0")
 
 namespace visor::input::dnstap {
 

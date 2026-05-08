@@ -43,7 +43,7 @@ function build() {
     source $INPUT_BUILD_TYPE/generators/conanbuild.sh
     PKG_CONFIG_PATH=/local/lib/pkgconfig cmake .. -DCMAKE_BUILD_TYPE=$INPUT_BUILD_TYPE \
      -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=./cmake/conan_provider.cmake -DASAN=$INPUT_ASAN \
-     -DCONAN_HOST_PROFILE="host" -DCORRADE_RC_PROGRAM=$(command -v corrade-rc) \
+     -DCONAN_HOST_PROFILE="host" \
      -DCONAN_INSTALL_ARGS=--build=never
   fi
   cmake --build . --config $INPUT_BUILD_TYPE -- -j 4

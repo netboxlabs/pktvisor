@@ -7,11 +7,11 @@
 #include "DnsStreamHandler.h"
 #include "HandlerManager.h"
 #include "InputStreamManager.h"
-#include <Corrade/PluginManager/AbstractManager.h>
 #include <nlohmann/json.hpp>
 
-CORRADE_PLUGIN_REGISTER(VisorHandlerDnsV2, visor::handler::dns::v2::DnsHandlerModulePlugin,
-    "visor.module.handler/1.0")
+#include "PluginRegistry.h"
+
+VISOR_REGISTER_HANDLER_PLUGIN(VisorHandlerDnsV2, visor::handler::dns::v2::DnsHandlerModulePlugin, "dns", "2.0")
 
 namespace visor::handler::dns::v2 {
 

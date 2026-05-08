@@ -5,10 +5,10 @@
 #include "FlowInputModulePlugin.h"
 #include "CoreRegistry.h"
 #include "InputStreamManager.h"
-#include <Corrade/PluginManager/AbstractManager.h>
+#include "PluginRegistry.h"
 
-CORRADE_PLUGIN_REGISTER(VisorInputFlow, visor::input::flow::FlowInputModulePlugin,
-    "visor.module.input/1.0")
+VISOR_REGISTER_INPUT_PLUGIN(VisorInputFlow, visor::input::flow::FlowInputModulePlugin, "flow", "1.0")
+VISOR_REGISTER_INPUT_PLUGIN_ALIAS(VisorInputSflow, visor::input::flow::FlowInputModulePlugin, "sflow", "1.0")
 
 namespace visor::input::flow {
 

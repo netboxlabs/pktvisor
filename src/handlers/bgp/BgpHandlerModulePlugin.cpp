@@ -7,11 +7,11 @@
 #include "BgpStreamHandler.h"
 #include "HandlerManager.h"
 #include "InputStreamManager.h"
-#include <Corrade/PluginManager/AbstractManager.h>
 #include <nlohmann/json.hpp>
 
-CORRADE_PLUGIN_REGISTER(VisorHandlerBgp, visor::handler::bgp::BgpHandlerModulePlugin,
-   "visor.module.handler/1.0")
+#include "PluginRegistry.h"
+
+VISOR_REGISTER_HANDLER_PLUGIN(VisorHandlerBgp, visor::handler::bgp::BgpHandlerModulePlugin, "bgp", "1.0")
 
 namespace visor::handler::bgp {
 

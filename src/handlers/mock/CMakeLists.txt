@@ -1,11 +1,6 @@
 message(STATUS "Handler Module: Mock (dynamic)")
 
-set_directory_properties(PROPERTIES CORRADE_USE_PEDANTIC_FLAGS ON)
-
-corrade_add_plugin(VisorHandlerMock
-        ${CMAKE_CURRENT_BINARY_DIR}
-        ""
-        VisorHandlerMock.conf
+add_library(VisorHandlerMock STATIC
         MockHandlerModulePlugin.cpp
         MockStreamHandler.cpp)
 add_library(Visor::Handler::Mock ALIAS VisorHandlerMock)

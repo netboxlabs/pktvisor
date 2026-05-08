@@ -1,8 +1,6 @@
 
 message(STATUS "visor-core")
 
-set_directory_properties(PROPERTIES CORRADE_USE_PEDANTIC_FLAGS ON)
-
 find_package(Protobuf REQUIRED)
 find_package(fmt REQUIRED)
 find_package(httplib REQUIRED)
@@ -20,7 +18,6 @@ find_package(opentelemetry-cpp REQUIRED)
 add_library(visor-core
         AbstractModule.cpp
         AbstractPlugin.cpp
-        InputModulePlugin.cpp
         HandlerModulePlugin.cpp
         GeoDB.cpp
         CoreServer.cpp
@@ -48,7 +45,6 @@ target_link_libraries(visor-core
         opentelemetry-cpp::proto
         protobuf::libprotobuf
         maxminddb::maxminddb
-        Corrade::Corrade
         spdlog::spdlog
         fmt::fmt
         httplib::httplib

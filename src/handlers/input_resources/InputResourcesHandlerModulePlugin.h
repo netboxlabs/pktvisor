@@ -15,8 +15,8 @@ protected:
     void setup_routes(HttpServer *svr) override;
 
 public:
-    explicit InputResourcesHandlerModulePlugin(Corrade::PluginManager::AbstractManager &manager, const std::string &plugin)
-        : visor::HandlerModulePlugin{manager, plugin}
+    explicit InputResourcesHandlerModulePlugin(std::string plugin)
+        : visor::HandlerModulePlugin{std::move(plugin)}
     {
     }
     std::unique_ptr<StreamHandler> instantiate(const std::string &name, InputEventProxy *proxy, const Configurable *config, const Configurable *filter) override;

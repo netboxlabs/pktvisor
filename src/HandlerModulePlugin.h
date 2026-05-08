@@ -5,8 +5,8 @@
 #pragma once
 
 #include "AbstractPlugin.h"
-#include <Corrade/PluginManager/Manager.h>
-#include <Corrade/PluginManager/PluginMetadata.h>
+#include "PluginRegistry.h"
+#include <memory>
 #include <string>
 
 namespace visor {
@@ -26,13 +26,8 @@ public:
         return "visor.module.handler/1.0";
     }
 
-    static std::vector<std::string> pluginSearchPaths()
-    {
-        return {""};
-    }
-
-    explicit HandlerModulePlugin(Corrade::PluginManager::AbstractManager &manager, const std::string &plugin)
-        : AbstractPlugin{manager, plugin}
+    explicit HandlerModulePlugin(std::string alias)
+        : AbstractPlugin{std::move(alias)}
     {
     }
 
@@ -48,7 +43,7 @@ public:
     virtual std::unique_ptr<StreamHandler> instantiate(const std::string &name, InputEventProxy *proxy, const Configurable *config, const Configurable *filter) = 0;
 };
 
-typedef Corrade::PluginManager::Manager<HandlerModulePlugin> HandlerPluginRegistry;
-typedef Corrade::Containers::Pointer<HandlerModulePlugin> HandlerPluginPtr;
+using HandlerPluginRegistry = PluginRegistry<HandlerModulePlugin>;
+using HandlerPluginPtr = std::unique_ptr<HandlerModulePlugin>;
 
 }

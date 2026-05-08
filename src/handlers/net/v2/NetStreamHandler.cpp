@@ -3,7 +3,6 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #include "NetStreamHandler.h"
-#include "Corrade/Utility/Debug.h"
 #include "HandlerModulePlugin.h"
 #include "utils.h"
 

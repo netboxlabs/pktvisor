@@ -1,10 +1,6 @@
 message(STATUS "Input Module: Net Probe")
 
-set_directory_properties(PROPERTIES CORRADE_USE_PEDANTIC_FLAGS ON)
-
-corrade_add_static_plugin(VisorInputNetProbe
-        ${CMAKE_CURRENT_BINARY_DIR}
-        NetProbeInput.conf
+add_library(VisorInputNetProbe STATIC
         NetProbeInputModulePlugin.cpp
         NetProbeInputStream.cpp
         PingProbe.cpp

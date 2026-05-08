@@ -1,13 +1,24 @@
 #pragma once
 
-static int import_input_plugins()
+/* See handlers/static_plugins.h for the force-link mechanism. */
+
+extern "C" int visor_force_link_VisorInputMock;
+extern "C" int visor_force_link_VisorInputPcap;
+extern "C" int visor_force_link_VisorInputDnstap;
+extern "C" int visor_force_link_VisorInputFlow;
+extern "C" int visor_force_link_VisorInputNetProbe;
+
+namespace visor::detail {
+
+inline int force_link_input_plugins()
 {
-    CORRADE_PLUGIN_IMPORT(VisorInputMock);
-    CORRADE_PLUGIN_IMPORT(VisorInputPcap);
-    CORRADE_PLUGIN_IMPORT(VisorInputDnstap);
-    CORRADE_PLUGIN_IMPORT(VisorInputFlow);
-    CORRADE_PLUGIN_IMPORT(VisorInputNetProbe);
-    return 0;
+    return visor_force_link_VisorInputMock
+        + visor_force_link_VisorInputPcap
+        + visor_force_link_VisorInputDnstap
+        + visor_force_link_VisorInputFlow
+        + visor_force_link_VisorInputNetProbe;
 }
 
-CORRADE_AUTOMATIC_INITIALIZER(import_input_plugins)
+[[maybe_unused]] static const int _visor_input_plugin_anchor = force_link_input_plugins();
+
+}

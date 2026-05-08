@@ -5,8 +5,8 @@
 #pragma once
 
 #include "AbstractPlugin.h"
-#include <Corrade/PluginManager/Manager.h>
-#include <Corrade/PluginManager/PluginMetadata.h>
+#include "PluginRegistry.h"
+#include <memory>
 #include <string>
 
 namespace visor {
@@ -16,20 +16,14 @@ class Configurable;
 
 class InputModulePlugin : public AbstractPlugin
 {
-
 public:
     static std::string pluginInterface()
     {
         return "visor.module.input/1.0";
     }
 
-    static std::vector<std::string> pluginSearchPaths()
-    {
-        return {""};
-    }
-
-    explicit InputModulePlugin(Corrade::PluginManager::AbstractManager &manager, const std::string &plugin)
-        : AbstractPlugin{manager, plugin}
+    explicit InputModulePlugin(std::string alias)
+        : AbstractPlugin{std::move(alias)}
     {
     }
 
@@ -41,7 +35,7 @@ public:
     virtual std::string generate_input_name(std::string prefix, const Configurable &config, const Configurable &filter) = 0;
 };
 
-typedef Corrade::PluginManager::Manager<InputModulePlugin> InputPluginRegistry;
-typedef Corrade::Containers::Pointer<InputModulePlugin> InputPluginPtr;
+using InputPluginRegistry = PluginRegistry<InputModulePlugin>;
+using InputPluginPtr = std::unique_ptr<InputModulePlugin>;
 
 }

@@ -7,7 +7,6 @@
 #include "AbstractMetricsManager.h"
 #include "MockInputStream.h"
 #include "StreamHandler.h"
-#include <Corrade/Utility/Debug.h>
 #include <limits>
 #include <spdlog/spdlog.h>
 #include <string>

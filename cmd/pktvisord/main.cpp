@@ -17,7 +17,6 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wattributes"
 #endif
-#include <Corrade/Utility/ConfigurationGroup.h>
 #ifdef __GNUC__
 #pragma GCC diagnostic pop
 #endif
@@ -580,8 +579,7 @@ int main(int argc, char *argv[])
     // modules
     CoreRegistry registry;
     if (options.module.dir.has_value()) {
-        registry.input_plugin_registry()->setPluginDirectory(options.module.dir.value());
-        registry.handler_plugin_registry()->setPluginDirectory(options.module.dir.value());
+        logger->warn("--module-dir is no longer supported (plugins are now statically linked); ignoring '{}'", options.module.dir.value());
     }
 
     // window config defaults for all policies
@@ -649,17 +647,11 @@ int main(int argc, char *argv[])
     });
 
     if (options.module.list) {
-        for (auto &p : registry.input_plugin_registry()->pluginList()) {
-            auto meta = registry.input_plugin_registry()->metadata(p);
-            if (meta && meta->data().hasValue("type") && meta->data().value("type") == "input") {
-                logger->info("input: {}", p);
-            }
+        for (const auto &entry : visor::InputPluginRegistry::instance().entries()) {
+            logger->info("input: {} version {}", entry.alias, entry.version);
         }
-        for (auto &p : registry.handler_plugin_registry()->pluginList()) {
-            auto meta = registry.handler_plugin_registry()->metadata(p);
-            if (meta && meta->data().hasValue("type") && meta->data().value("type") == "handler") {
-                logger->info("handler: {}", p);
-            }
+        for (const auto &entry : visor::HandlerPluginRegistry::instance().entries()) {
+            logger->info("handler: {} version {}", entry.alias, entry.version);
         }
         exit(EXIT_SUCCESS);
     }

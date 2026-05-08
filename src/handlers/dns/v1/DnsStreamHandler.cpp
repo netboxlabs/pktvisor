@@ -5,7 +5,6 @@
 #include "DnsStreamHandler.h"
 #include "HandlerModulePlugin.h"
 #include "utils.h"
-#include <Corrade/Utility/Debug.h>
 #ifdef __GNUC__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"

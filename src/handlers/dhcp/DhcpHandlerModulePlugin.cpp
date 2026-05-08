@@ -7,11 +7,11 @@
 #include "DhcpStreamHandler.h"
 #include "HandlerManager.h"
 #include "InputStreamManager.h"
-#include <Corrade/PluginManager/AbstractManager.h>
 #include <nlohmann/json.hpp>
 
-CORRADE_PLUGIN_REGISTER(VisorHandlerDhcp, visor::handler::dhcp::DhcpHandlerModulePlugin,
-    "visor.module.handler/1.0")
+#include "PluginRegistry.h"
+
+VISOR_REGISTER_HANDLER_PLUGIN(VisorHandlerDhcp, visor::handler::dhcp::DhcpHandlerModulePlugin, "dhcp", "1.0")
 
 namespace visor::handler::dhcp {
 

@@ -7,11 +7,11 @@
 #include "HandlerManager.h"
 #include "InputResourcesStreamHandler.h"
 #include "InputStreamManager.h"
-#include <Corrade/PluginManager/AbstractManager.h>
 #include <nlohmann/json.hpp>
 
-CORRADE_PLUGIN_REGISTER(VisorHandlerInputResources, visor::handler::resources::InputResourcesHandlerModulePlugin,
-    "visor.module.handler/1.0")
+#include "PluginRegistry.h"
+
+VISOR_REGISTER_HANDLER_PLUGIN(VisorHandlerInputResources, visor::handler::resources::InputResourcesHandlerModulePlugin, "input_resources", "1.0")
 
 namespace visor::handler::resources {
 

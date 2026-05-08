@@ -8,11 +8,11 @@
 #include "InputStreamManager.h"
 #include "MockInputStream.h"
 #include "MockStreamHandler.h"
-#include <Corrade/PluginManager/AbstractManager.h>
 #include <nlohmann/json.hpp>
 
-CORRADE_PLUGIN_REGISTER(VisorHandlerMock, visor::handler::mock::MockHandlerModulePlugin,
-    "visor.module.handler/1.0")
+#include "PluginRegistry.h"
+
+VISOR_REGISTER_HANDLER_PLUGIN(VisorHandlerMock, visor::handler::mock::MockHandlerModulePlugin, "mock_dyn", "1.0")
 
 namespace visor::handler::mock {
 

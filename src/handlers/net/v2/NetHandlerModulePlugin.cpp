@@ -4,14 +4,14 @@
 
 #include "NetHandlerModulePlugin.h"
 #include "CoreRegistry.h"
-#include "Corrade/PluginManager/AbstractManager.h"
 #include "HandlerManager.h"
 #include "InputStreamManager.h"
 #include "NetStreamHandler.h"
 #include "nlohmann/json.hpp"
 
-CORRADE_PLUGIN_REGISTER(VisorHandlerNetV2, visor::handler::net::v2::NetHandlerModulePlugin,
-    "visor.module.handler/1.0")
+#include "PluginRegistry.h"
+
+VISOR_REGISTER_HANDLER_PLUGIN(VisorHandlerNetV2, visor::handler::net::v2::NetHandlerModulePlugin, "net", "2.0")
 
 namespace visor::handler::net::v2 {
 

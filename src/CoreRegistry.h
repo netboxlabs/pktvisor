@@ -39,14 +39,10 @@ public:
     typedef std::map<std::pair<std::string, std::string>, std::unique_ptr<HandlerModulePlugin>> HandlerPluginMap;
 
 private:
-    // this is the interface to load/instantiate/unload Corrade plugins (Corrade::PluginManager::Manager)
-    InputPluginRegistry _input_registry;
-    HandlerPluginRegistry _handler_registry;
-
-    // these hold instantiated Corrade plugin instances (Corrade::PluginManager::AbstractPlugin->visor::AbstractPlugin instances)
-    // they know how to instantiate visor::AbstractModule derived instances (stored in managers below) via HTTP admin API (through setup_routes) or Tap instantiation
-    // *only one* per plugin type exists at a time, but they can instantiate many visor::AbstractModules (see managers below)
-    // keyed by plugin alias name
+    // these hold instantiated visor::AbstractPlugin instances built from
+    // PluginRegistry<T>::entries() at start() time. They act as factories for
+    // visor::AbstractModule instances (held in the managers below) via the HTTP
+    // admin API (through setup_routes) or Tap instantiation. Keyed by (alias, version).
     InputPluginMap _input_plugins;
     HandlerPluginMap _handler_plugins;
 
@@ -97,23 +93,6 @@ public:
     {
         return _policy_manager.get();
     }
-    [[nodiscard]] const HandlerPluginRegistry *handler_plugin_registry() const
-    {
-        return &_handler_registry;
-    }
-    [[nodiscard]] const InputPluginRegistry *input_plugin_registry() const
-    {
-        return &_input_registry;
-    }
-    [[nodiscard]] HandlerPluginRegistry *handler_plugin_registry()
-    {
-        return &_handler_registry;
-    }
-    [[nodiscard]] InputPluginRegistry *input_plugin_registry()
-    {
-        return &_input_registry;
-    }
-
     [[nodiscard]] InputPluginMap &input_plugins()
     {
         return _input_plugins;

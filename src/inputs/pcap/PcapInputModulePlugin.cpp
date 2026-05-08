@@ -5,11 +5,10 @@
 #include "PcapInputModulePlugin.h"
 #include "CoreRegistry.h"
 #include "InputStreamManager.h"
-#include <Corrade/PluginManager/AbstractManager.h>
-#include <Corrade/Utility/FormatStl.h>
 
-CORRADE_PLUGIN_REGISTER(VisorInputPcap, visor::input::pcap::PcapInputModulePlugin,
-    "visor.module.input/1.0")
+#include "PluginRegistry.h"
+
+VISOR_REGISTER_INPUT_PLUGIN(VisorInputPcap, visor::input::pcap::PcapInputModulePlugin, "pcap", "1.0")
 
 namespace visor::input::pcap {
 
