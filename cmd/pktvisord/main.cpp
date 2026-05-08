@@ -83,8 +83,8 @@ static const char USAGE[] =
       --cp-custom USERDEF                   Crashpad optional user defined field
       --cp-path PATH                        Crashpad handler binary
     Modules:
-      --module-list                         List all modules which have been loaded (builtin and dynamic).
-      --module-dir DIR                      Set module load path. All modules in this directory will be loaded.
+      --module-list                         List all built-in modules statically linked into this binary, then exit.
+      --module-dir DIR                      Deprecated no-op; kept for backwards compatibility. Logs a warning and is otherwise ignored.
     Logging Options:
       --log-file FILE                       Log to the given output file name
       --syslog                              Log to syslog
