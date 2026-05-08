@@ -5,7 +5,11 @@ find_package(docopt REQUIRED)
 target_link_libraries(pktvisor-reader
         PRIVATE
         docopt_s
+        # See pktvisord/CMakeLists.txt for why --start-group / --end-group is needed.
+        $<$<CXX_COMPILER_ID:GNU>:-Wl,--start-group>
+        Visor::Core
         ${VISOR_STATIC_PLUGINS}
+        $<$<CXX_COMPILER_ID:GNU>:-Wl,--end-group>
         )
 
 set_target_properties(pktvisor-reader

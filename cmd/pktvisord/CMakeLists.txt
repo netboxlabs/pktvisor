@@ -16,8 +16,14 @@ target_link_libraries(pktvisord
         timer
         ${ADDITIONAL_LIBS}
         docopt_s
+        # CoreRegistry references plugin factory symbols and plugins link back
+        # to Visor::Core — a real cycle. GNU ld is single-pass so it needs
+        # --start-group / --end-group around the cyclic archives. ld64 (macOS)
+        # and MSVC's link.exe handle this natively and don't accept the flag.
+        $<$<CXX_COMPILER_ID:GNU>:-Wl,--start-group>
         Visor::Core
         ${VISOR_STATIC_PLUGINS}
+        $<$<CXX_COMPILER_ID:GNU>:-Wl,--end-group>
         )
 
 set_target_properties(pktvisord

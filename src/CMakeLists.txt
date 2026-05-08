@@ -54,7 +54,6 @@ target_link_libraries(visor-core
         robin_hood::robin_hood
         yaml-cpp::yaml-cpp
         OpenSSL::SSL
-        ${VISOR_STATIC_PLUGINS}
         )
 
 configure_file(visor_config.h.in visor_config.h @ONLY)
@@ -77,10 +76,13 @@ add_executable(unit-tests-visor-core
 
 target_include_directories(unit-tests-visor-core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(unit-tests-visor-core 
+target_link_libraries(unit-tests-visor-core
         PRIVATE
+        # See cmd/pktvisord/CMakeLists.txt for why --start-group / --end-group is needed.
+        $<$<CXX_COMPILER_ID:GNU>:-Wl,--start-group>
         Visor::Core
         ${VISOR_STATIC_PLUGINS}
+        $<$<CXX_COMPILER_ID:GNU>:-Wl,--end-group>
         Catch2::Catch2WithMain)
 
 add_test(NAME unit-tests-visor-core
