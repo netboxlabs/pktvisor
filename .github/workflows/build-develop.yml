@@ -47,7 +47,10 @@ jobs:
           restore-keys: conan-${{ runner.os }}-
       
       - name: Detect Conan Profile
-        run: conan profile detect -f
+        run: |
+          conan profile detect -f
+          echo "[conf]" >> "$(conan profile path default)"
+          echo "tools.apple:sdk_path=$(xcrun --sdk macosx --show-sdk-path)" >> "$(conan profile path default)"
 
       - name: Configure CMake
         shell: bash
