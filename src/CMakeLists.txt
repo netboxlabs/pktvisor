@@ -69,7 +69,10 @@ add_subdirectory(handlers)
 # avoids any cyclic-archive linker tricks (--start-group/end-group).
 add_library(visor-builtin-plugins STATIC BuiltinPlugins.cpp)
 add_library(Visor::BuiltinPlugins ALIAS visor-builtin-plugins)
-target_link_libraries(visor-builtin-plugins PUBLIC Visor::Core ${VISOR_STATIC_PLUGINS})
+# Visor::Core is intentionally not listed directly: every plugin lib already
+# PUBLIC-links to Visor::Core, so it's reachable transitively, and listing it
+# here would just duplicate the symbol set in the propagated link line.
+target_link_libraries(visor-builtin-plugins PUBLIC ${VISOR_STATIC_PLUGINS})
 target_include_directories(visor-builtin-plugins PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 set(VISOR_STATIC_PLUGINS ${VISOR_STATIC_PLUGINS} PARENT_SCOPE)

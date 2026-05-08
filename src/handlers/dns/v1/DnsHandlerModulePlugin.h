@@ -15,8 +15,8 @@ protected:
     void setup_routes(HttpServer *svr) override;
 
 public:
-    explicit DnsHandlerModulePlugin(std::string plugin)
-        : visor::HandlerModulePlugin{std::move(plugin)}
+    explicit DnsHandlerModulePlugin(std::string alias)
+        : visor::HandlerModulePlugin{std::move(alias)}
     {
     }
     std::unique_ptr<StreamHandler> instantiate(const std::string &name, InputEventProxy *proxy, const Configurable *config, const Configurable *filter) override;

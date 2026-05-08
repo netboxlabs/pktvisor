@@ -37,11 +37,17 @@ CoreRegistry::CoreRegistry()
 
 void CoreRegistry::add_input_plugin(std::string alias, std::string version, std::unique_ptr<InputModulePlugin> mod)
 {
+    if (alias.empty() || version.empty() || !mod) {
+        throw std::invalid_argument(fmt::format("add_input_plugin: alias='{}' version='{}' mod={}", alias, version, mod ? "<set>" : "<null>"));
+    }
     _pending_inputs.push_back({std::move(alias), std::move(version), std::move(mod)});
 }
 
 void CoreRegistry::add_handler_plugin(std::string alias, std::string version, std::unique_ptr<HandlerModulePlugin> mod)
 {
+    if (alias.empty() || version.empty() || !mod) {
+        throw std::invalid_argument(fmt::format("add_handler_plugin: alias='{}' version='{}' mod={}", alias, version, mod ? "<set>" : "<null>"));
+    }
     _pending_handlers.push_back({std::move(alias), std::move(version), std::move(mod)});
 }
 

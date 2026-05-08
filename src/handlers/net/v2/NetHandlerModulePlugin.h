@@ -15,8 +15,8 @@ protected:
     void setup_routes(HttpServer *svr) override;
 
 public:
-    explicit NetHandlerModulePlugin(std::string plugin)
-        : visor::HandlerModulePlugin{std::move(plugin)}
+    explicit NetHandlerModulePlugin(std::string alias)
+        : visor::HandlerModulePlugin{std::move(alias)}
     {
     }
 
