@@ -17,6 +17,11 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      # Some comment-posting actions hit the issues.createComment API path
+      # (PR conversation comments share the issue endpoint). Granting
+      # issues:write avoids a 403 if the action doesn't honour the PR-only
+      # scope mapping.
+      issues: write
     outputs:
       version_number: ${{ steps.build.outputs.version }}
     steps:
