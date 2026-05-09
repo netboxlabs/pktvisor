@@ -92,14 +92,13 @@ if(CODE_COVERAGE)
     setup_target_for_coverage_lcov(
             NAME coverage
             EXECUTABLE ctest
+            LCOV_ARGS --ignore-errors unused
             EXCLUDE
                 "3rd/*"
                 "libs/*"
                 "${PROJECT_BINARY_DIR}/*"
                 "/usr/*"
-                "/Library/*"
-                "*/c++/*"
-                "*/.conan2/*")
+                "*/c++/*")
 endif()
 
 set(VISOR_STATIC_PLUGINS)
