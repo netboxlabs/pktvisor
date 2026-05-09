@@ -14,6 +14,9 @@ env:
 jobs:
   code-coverage:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     outputs:
       version_number: ${{ steps.build.outputs.version }}
     steps:
@@ -68,6 +71,13 @@ jobs:
           files: build/coverage.info
           name: pktvisor
           verbose: true
+
+      - name: Post coverage summary to PR
+        if: github.event_name == 'pull_request'
+        uses: romeovs/lcov-reporter-action@87a815f34ec27a5826abba44ce09bbc688da58fd #v0.4.0
+        with:
+          lcov-file: build/coverage.info
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
   build:
     runs-on: ubuntu-latest
