@@ -3,6 +3,8 @@ name: Debug Builds
 on:
   push:
     branches: [ develop, master, release/** ]
+  pull_request:
+    branches: [ develop ]
 
 env:
   CTEST_OUTPUT_ON_FAILURE: 1
@@ -12,6 +14,10 @@ env:
 jobs:
   code-coverage:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
     outputs:
       version_number: ${{ steps.build.outputs.version }}
     steps:
@@ -67,8 +73,18 @@ jobs:
           name: pktvisor
           verbose: true
 
+      - name: Report coverage to PR
+        if: github.event_name == 'pull_request'
+        uses: zgosalvez/github-actions-report-lcov@7d72c57ce4bc101a4a0bf9d726b6c435abde8439 #v7.0.10
+        with:
+          coverage-files: build/coverage.info
+          artifact-name: code-coverage-report
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          update-comment: true
+
   build:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v6
 
@@ -113,6 +129,7 @@ jobs:
   package:
     needs: build
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
     steps:
       - name: Download to workspace
         uses: actions/download-artifact@v8
