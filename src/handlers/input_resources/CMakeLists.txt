@@ -1,10 +1,6 @@
 message(STATUS "Handler Module: Input Resources")
 
-set_directory_properties(PROPERTIES CORRADE_USE_PEDANTIC_FLAGS ON)
-
-corrade_add_static_plugin(VisorHandlerInputResources
-        ${CMAKE_CURRENT_BINARY_DIR}
-        InputResourcesHandler.conf
+add_library(VisorHandlerInputResources STATIC
         InputResourcesHandlerModulePlugin.cpp
         InputResourcesStreamHandler.cpp
         )

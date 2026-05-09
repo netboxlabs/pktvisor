@@ -1,8 +1,6 @@
 
 message(STATUS "visor-core")
 
-set_directory_properties(PROPERTIES CORRADE_USE_PEDANTIC_FLAGS ON)
-
 find_package(Protobuf REQUIRED)
 find_package(fmt REQUIRED)
 find_package(httplib REQUIRED)
@@ -20,7 +18,6 @@ find_package(opentelemetry-cpp REQUIRED)
 add_library(visor-core
         AbstractModule.cpp
         AbstractPlugin.cpp
-        InputModulePlugin.cpp
         HandlerModulePlugin.cpp
         GeoDB.cpp
         CoreServer.cpp
@@ -48,7 +45,6 @@ target_link_libraries(visor-core
         opentelemetry-cpp::proto
         protobuf::libprotobuf
         maxminddb::maxminddb
-        Corrade::Corrade
         spdlog::spdlog
         fmt::fmt
         httplib::httplib
@@ -58,13 +54,26 @@ target_link_libraries(visor-core
         robin_hood::robin_hood
         yaml-cpp::yaml-cpp
         OpenSSL::SSL
-        ${VISOR_STATIC_PLUGINS}
         )
 
 configure_file(visor_config.h.in visor_config.h @ONLY)
 
 add_subdirectory(inputs)
 add_subdirectory(handlers)
+
+# Tiny static lib that wires built-in plugins into a CoreRegistry. It is the
+# only translation unit that pulls in plugin headers, so visor-core stays
+# decoupled from each plugin's transitive dependency tree. By depending on
+# every plugin lib AND on Visor::Core, it sits between the executable and
+# the plugin/core archives in the link order — a clean linear chain that
+# avoids any cyclic-archive linker tricks (--start-group/end-group).
+add_library(visor-builtin-plugins STATIC BuiltinPlugins.cpp)
+add_library(Visor::BuiltinPlugins ALIAS visor-builtin-plugins)
+# Visor::Core is intentionally not listed directly: every plugin lib already
+# PUBLIC-links to Visor::Core, so it's reachable transitively, and listing it
+# here would just duplicate the symbol set in the propagated link line.
+target_link_libraries(visor-builtin-plugins PUBLIC ${VISOR_STATIC_PLUGINS})
+target_include_directories(visor-builtin-plugins PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 set(VISOR_STATIC_PLUGINS ${VISOR_STATIC_PLUGINS} PARENT_SCOPE)
 
@@ -81,10 +90,9 @@ add_executable(unit-tests-visor-core
 
 target_include_directories(unit-tests-visor-core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(unit-tests-visor-core 
+target_link_libraries(unit-tests-visor-core
         PRIVATE
-        Visor::Core
-        ${VISOR_STATIC_PLUGINS}
+        Visor::BuiltinPlugins
         Catch2::Catch2WithMain)
 
 add_test(NAME unit-tests-visor-core

@@ -7,12 +7,7 @@
 #include "InputStreamManager.h"
 #include "NetProbeHandlerModulePlugin.h"
 #include "NetProbeStreamHandler.h"
-#include <Corrade/PluginManager/AbstractManager.h>
 #include <nlohmann/json.hpp>
-
-CORRADE_PLUGIN_REGISTER(VisorHandlerNetProbe, visor::handler::netprobe::NetProbeHandlerModulePlugin,
-   "visor.module.handler/1.0")
-
 namespace visor::handler::netprobe {
 
 using json = nlohmann::json;

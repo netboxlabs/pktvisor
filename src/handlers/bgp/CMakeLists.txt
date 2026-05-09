@@ -1,10 +1,6 @@
 message(STATUS "Handler Module: BGP")
 
-set_directory_properties(PROPERTIES CORRADE_USE_PEDANTIC_FLAGS ON)
-
-corrade_add_static_plugin(VisorHandlerBgp
-        ${CMAKE_CURRENT_BINARY_DIR}
-        BgpHandler.conf
+add_library(VisorHandlerBgp STATIC
         BgpHandlerModulePlugin.cpp
         BgpStreamHandler.cpp)
 add_library(Visor::Handler::Bgp ALIAS VisorHandlerBgp)

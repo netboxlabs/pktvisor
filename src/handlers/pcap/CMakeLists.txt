@@ -1,10 +1,6 @@
 message(STATUS "Handler Module: Pcap")
 
-set_directory_properties(PROPERTIES CORRADE_USE_PEDANTIC_FLAGS ON)
-
-corrade_add_static_plugin(VisorHandlerPcap
-        ${CMAKE_CURRENT_BINARY_DIR}
-        PcapHandler.conf
+add_library(VisorHandlerPcap STATIC
         PcapHandlerModulePlugin.cpp
         PcapStreamHandler.cpp)
 add_library(Visor::Handler::Pcap ALIAS VisorHandlerPcap)

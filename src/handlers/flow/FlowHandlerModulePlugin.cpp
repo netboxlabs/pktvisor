@@ -7,12 +7,7 @@
 #include "HandlerManager.h"
 #include "InputStreamManager.h"
 #include "FlowStreamHandler.h"
-#include <Corrade/PluginManager/AbstractManager.h>
 #include <nlohmann/json.hpp>
-
-CORRADE_PLUGIN_REGISTER(VisorHandlerFlow, visor::handler::flow::FlowHandlerModulePlugin,
-    "visor.module.handler/1.0")
-
 namespace visor::handler::flow {
 
 using json = nlohmann::json;

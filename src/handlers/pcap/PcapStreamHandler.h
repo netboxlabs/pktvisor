@@ -7,7 +7,6 @@
 #include "AbstractMetricsManager.h"
 #include "PcapInputStream.h"
 #include "StreamHandler.h"
-#include <Corrade/Utility/Debug.h>
 #include <limits>
 #include <string>
 

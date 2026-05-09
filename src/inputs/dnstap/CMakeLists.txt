@@ -1,7 +1,5 @@
 message(STATUS "Input Module: Dnstap")
 
-set_directory_properties(PROPERTIES CORRADE_USE_PEDANTIC_FLAGS ON)
-
 protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS pb/dnstap.proto)
 
 if(NOT WIN32)
@@ -11,8 +9,7 @@ if(NOT WIN32)
     )
 endif()
 
-corrade_add_static_plugin(VisorInputDnstap ${CMAKE_CURRENT_BINARY_DIR}
-        Dnstap.conf
+add_library(VisorInputDnstap STATIC
         DnstapInputModulePlugin.cpp
         DnstapInputStream.cpp
         ${PROTO_SRCS}

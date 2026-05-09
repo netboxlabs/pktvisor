@@ -4,9 +4,8 @@
 
 #pragma once
 
-#include <Corrade/PluginManager/AbstractPlugin.h>
-#include <exception>
 #include <nlohmann/json.hpp>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 
@@ -31,17 +30,18 @@ public:
 };
 
 /**
- * These are loadable plugins (static or dynamic libraries)
- * Their job is to enable life cycle maintenance of AbstractModule instances
- * This means they provide an interface to do so over the Admin API and through Policies
+ * Plugin instances managed in-process by CoreRegistry. They expose admin API
+ * routes (setup_routes) and act as factories for AbstractModule instances
+ * via subclass-specific instantiate() methods.
  */
-class AbstractPlugin : public Corrade::PluginManager::AbstractPlugin
+class AbstractPlugin
 {
 public:
     typedef const std::unordered_map<std::string, std::string> SchemaMap;
 
 private:
-    CoreRegistry *_registry;
+    std::string _alias;
+    CoreRegistry *_registry{nullptr};
 
     /**
      * Utility functions for checking json schema
@@ -50,7 +50,6 @@ private:
 
     /**
      * Configure Admin API routes for life cycle maintenance of AbstractModule instances
-     * @param svr
      */
     virtual void setup_routes(HttpServer *svr) = 0;
 
@@ -58,25 +57,33 @@ private:
     {
     }
 
-    const CoreRegistry *registry() const
+protected:
+    [[nodiscard]] const CoreRegistry *registry() const
     {
         return _registry;
     }
 
-    CoreRegistry *registry()
+    [[nodiscard]] CoreRegistry *registry()
     {
         return _registry;
+    }
+
+    [[nodiscard]] const std::string &plugin_name() const
+    {
+        return _alias;
     }
 
 public:
-    static std::vector<std::string> pluginSearchPaths()
+    explicit AbstractPlugin(std::string alias)
+        : _alias(std::move(alias))
     {
-        return {""};
     }
 
-    explicit AbstractPlugin(Corrade::PluginManager::AbstractManager &manager, const std::string &plugin)
-        : Corrade::PluginManager::AbstractPlugin{manager, plugin}
+    virtual ~AbstractPlugin() = default;
+
+    [[nodiscard]] const std::string &plugin() const
     {
+        return _alias;
     }
 
     void init_plugin(CoreRegistry *mgrs, HttpServer *svr, geo::MaxmindDB *city_db, geo::MaxmindDB *asn_db)

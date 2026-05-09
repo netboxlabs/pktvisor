@@ -12,7 +12,6 @@
 #include "StreamHandler.h"
 #include "VisorLRUList.h"
 #include "utils.h"
-#include <Corrade/Utility/Debug.h>
 #include <string>
 
 namespace visor::handler::flow {

@@ -5,11 +5,6 @@
 #include "FlowInputModulePlugin.h"
 #include "CoreRegistry.h"
 #include "InputStreamManager.h"
-#include <Corrade/PluginManager/AbstractManager.h>
-
-CORRADE_PLUGIN_REGISTER(VisorInputFlow, visor::input::flow::FlowInputModulePlugin,
-    "visor.module.input/1.0")
-
 namespace visor::input::flow {
 
 void FlowInputModulePlugin::setup_routes([[maybe_unused]] HttpServer *svr)

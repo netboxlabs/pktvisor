@@ -5,12 +5,6 @@
 #include "MockInputModulePlugin.h"
 #include "CoreRegistry.h"
 #include "InputStreamManager.h"
-#include <Corrade/PluginManager/AbstractManager.h>
-#include <Corrade/Utility/FormatStl.h>
-
-CORRADE_PLUGIN_REGISTER(VisorInputMock, visor::input::mock::MockInputModulePlugin,
-    "visor.module.input/1.0")
-
 namespace visor::input::mock {
 
 void MockInputModulePlugin::setup_routes([[maybe_unused]] HttpServer *svr)

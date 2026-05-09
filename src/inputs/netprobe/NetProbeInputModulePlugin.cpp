@@ -5,11 +5,6 @@
 #include "CoreRegistry.h"
 #include "InputStreamManager.h"
 #include "NetProbeInputModulePlugin.h"
-#include <Corrade/PluginManager/AbstractManager.h>
-
-CORRADE_PLUGIN_REGISTER(VisorInputNetProbe, visor::input::netprobe::NetProbeInputModulePlugin,
-    "visor.module.input/1.0")
-
 namespace visor::input::netprobe {
 
 void NetProbeInputModulePlugin::setup_routes([[maybe_unused]] HttpServer *svr)

@@ -1,10 +1,6 @@
 message(STATUS "Handler Module: DNS v2")
 
-set_directory_properties(PROPERTIES CORRADE_USE_PEDANTIC_FLAGS ON)
-
-corrade_add_static_plugin(VisorHandlerDnsV2
-        ${CMAKE_CURRENT_BINARY_DIR}
-        DnsHandler.conf
+add_library(VisorHandlerDnsV2 STATIC
         DnsHandlerModulePlugin.cpp
         DnsStreamHandler.cpp
         )

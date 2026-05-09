@@ -8,13 +8,12 @@
 
 #include <docopt/docopt.h>
 
+#include "BuiltinPlugins.h"
 #include "CoreRegistry.h"
 #include "HandlerManager.h"
 #include "InputStreamManager.h"
 #include <spdlog/sinks/stdout_color_sinks.h>
 
-#include "handlers/static_plugins.h"
-#include "inputs/static_plugins.h"
 #include "visor_config.h"
 
 #include "GeoDB.h"
@@ -98,6 +97,7 @@ int main(int argc, char *argv[])
     }
 
     CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
 
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);

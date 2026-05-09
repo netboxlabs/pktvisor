@@ -1,10 +1,6 @@
 message(STATUS "Handler Module: DHCP")
 
-set_directory_properties(PROPERTIES CORRADE_USE_PEDANTIC_FLAGS ON)
-
-corrade_add_static_plugin(VisorHandlerDhcp
-        ${CMAKE_CURRENT_BINARY_DIR}
-        DhcpHandler.conf
+add_library(VisorHandlerDhcp STATIC
         DhcpHandlerModulePlugin.cpp
         DhcpStreamHandler.cpp)
 add_library(Visor::Handler::Dhcp ALIAS VisorHandlerDhcp)

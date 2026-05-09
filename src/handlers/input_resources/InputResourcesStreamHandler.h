@@ -12,7 +12,6 @@
 #include "PcapInputStream.h"
 #include "StreamHandler.h"
 #include "ThreadMonitor.h"
-#include <Corrade/Utility/Debug.h>
 #include <limits>
 #include <string>
 

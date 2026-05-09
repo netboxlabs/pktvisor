@@ -8,12 +8,7 @@
 #include "InputStreamManager.h"
 #include "PcapInputStream.h"
 #include "PcapStreamHandler.h"
-#include <Corrade/PluginManager/AbstractManager.h>
 #include <nlohmann/json.hpp>
-
-CORRADE_PLUGIN_REGISTER(VisorHandlerPcap, visor::handler::pcap::PcapHandlerModulePlugin,
-    "visor.module.handler/1.0")
-
 namespace visor::handler::pcap {
 
 using namespace visor::input::pcap;

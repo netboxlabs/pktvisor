@@ -1,10 +1,6 @@
 message(STATUS "Handler Module: Net Probe")
 
-set_directory_properties(PROPERTIES CORRADE_USE_PEDANTIC_FLAGS ON)
-
-corrade_add_static_plugin(VisorHandlerNetProbe
-        ${CMAKE_CURRENT_BINARY_DIR}
-        NetProbeHandler.conf
+add_library(VisorHandlerNetProbe STATIC
         NetProbeHandlerModulePlugin.cpp
         NetProbeStreamHandler.cpp
         )

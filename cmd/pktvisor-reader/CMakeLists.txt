@@ -5,7 +5,7 @@ find_package(docopt REQUIRED)
 target_link_libraries(pktvisor-reader
         PRIVATE
         docopt_s
-        ${VISOR_STATIC_PLUGINS}
+        Visor::BuiltinPlugins
         )
 
 set_target_properties(pktvisor-reader

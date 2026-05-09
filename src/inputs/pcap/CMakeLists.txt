@@ -1,9 +1,6 @@
 message(STATUS "Input Module: Pcap")
 
-set_directory_properties(PROPERTIES CORRADE_USE_PEDANTIC_FLAGS ON)
-
-corrade_add_static_plugin(VisorInputPcap ${CMAKE_CURRENT_BINARY_DIR}
-        PcapInput.conf
+add_library(VisorInputPcap STATIC
         PcapInputModulePlugin.cpp
         PcapInputStream.cpp
         afpacket.cpp

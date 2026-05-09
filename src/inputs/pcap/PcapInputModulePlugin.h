@@ -17,8 +17,8 @@ protected:
     void setup_routes(HttpServer *svr) override;
 
 public:
-    explicit PcapInputModulePlugin(Corrade::PluginManager::AbstractManager &manager, const std::string &plugin)
-        : visor::InputModulePlugin{manager, plugin}
+    explicit PcapInputModulePlugin(std::string alias)
+        : visor::InputModulePlugin{std::move(alias)}
     {
     }
     std::unique_ptr<InputStream> instantiate(const std::string name, const Configurable *config, const Configurable *filter) override;

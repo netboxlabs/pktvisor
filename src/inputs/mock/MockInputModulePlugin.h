@@ -16,8 +16,8 @@ protected:
     void setup_routes(HttpServer *svr) override;
 
 public:
-    explicit MockInputModulePlugin(Corrade::PluginManager::AbstractManager &manager, const std::string &plugin)
-        : visor::InputModulePlugin{manager, plugin}
+    explicit MockInputModulePlugin(std::string alias)
+        : visor::InputModulePlugin{std::move(alias)}
     {
     }
     std::unique_ptr<InputStream> instantiate(const std::string name, const Configurable *config, const Configurable *filter) override;

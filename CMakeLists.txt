@@ -65,9 +65,15 @@ endif()
 
 if(WIN32)
     set(CUSTOM_CMAKE_OPTIONS docopt.cpp:boost_regex=True)
+    # NOMINMAX prevents windows.h from defining min/max as macros, which would
+    # otherwise break headers like 3rd/rng/jsf.h that declare static min()/max()
+    # methods. Corrade's headers used to do this for us; with Corrade gone we
+    # must set it ourselves.
+    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 
-find_package(Corrade REQUIRED)
+# Trigger conan install once via a benign find_package so the toolchain file is generated.
+find_package(spdlog REQUIRED)
 
 # After the first find_package() triggers conan install, load conan_toolchain.cmake to set
 # CMAKE_PROGRAM_PATH so that tool_requires (e.g. protoc) are preferred over system versions.

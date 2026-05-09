@@ -15,8 +15,8 @@ protected:
    void setup_routes(HttpServer *svr) override;
 
 public:
-   explicit BgpHandlerModulePlugin(Corrade::PluginManager::AbstractManager &manager, const std::string &plugin)
-       : visor::HandlerModulePlugin{manager, plugin}
+   explicit BgpHandlerModulePlugin(std::string alias)
+       : visor::HandlerModulePlugin{std::move(alias)}
    {
    }
    std::unique_ptr<StreamHandler> instantiate(const std::string &name, InputEventProxy *proxy, const Configurable *config, const Configurable *filter) override;

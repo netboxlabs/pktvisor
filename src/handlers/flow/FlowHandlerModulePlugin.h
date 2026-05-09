@@ -15,8 +15,8 @@ protected:
     void setup_routes(HttpServer *svr) override;
 
 public:
-    explicit FlowHandlerModulePlugin(Corrade::PluginManager::AbstractManager &manager, const std::string &plugin)
-        : visor::HandlerModulePlugin{manager, plugin}
+    explicit FlowHandlerModulePlugin(std::string alias)
+        : visor::HandlerModulePlugin{std::move(alias)}
     {
     }
 

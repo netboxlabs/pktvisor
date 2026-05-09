@@ -17,7 +17,6 @@
 #ifdef __GNUC__
 #pragma GCC diagnostic pop
 #endif
-#include <Corrade/Utility/Debug.h>
 #include <limits>
 #include <string>
 

@@ -5,22 +5,13 @@
 #include <csignal>
 #include <functional>
 
+#include "BuiltinPlugins.h"
 #include "CoreServer.h"
 #include "CrashpadHandler.h"
 #include "HandlerManager.h"
 #include "InputStreamManager.h"
 #include "Policies.h"
-#include "handlers/static_plugins.h"
-#include "inputs/static_plugins.h"
 #include "visor_config.h"
-#ifdef __GNUC__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wattributes"
-#endif
-#include <Corrade/Utility/ConfigurationGroup.h>
-#ifdef __GNUC__
-#pragma GCC diagnostic pop
-#endif
 #include <docopt/docopt.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -92,8 +83,8 @@ static const char USAGE[] =
       --cp-custom USERDEF                   Crashpad optional user defined field
       --cp-path PATH                        Crashpad handler binary
     Modules:
-      --module-list                         List all modules which have been loaded (builtin and dynamic).
-      --module-dir DIR                      Set module load path. All modules in this directory will be loaded.
+      --module-list                         List all built-in modules statically linked into this binary, then exit.
+      --module-dir DIR                      Deprecated no-op; kept for backwards compatibility. Logs a warning and is otherwise ignored.
     Logging Options:
       --log-file FILE                       Log to the given output file name
       --syslog                              Log to syslog
@@ -579,9 +570,19 @@ int main(int argc, char *argv[])
 
     // modules
     CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
     if (options.module.dir.has_value()) {
-        registry.input_plugin_registry()->setPluginDirectory(options.module.dir.value());
-        registry.handler_plugin_registry()->setPluginDirectory(options.module.dir.value());
+        logger->warn("--module-dir is no longer supported (plugins are now statically linked); ignoring '{}'", options.module.dir.value());
+    }
+
+    if (options.module.list) {
+        for (const auto &entry : registry.pending_input_plugins()) {
+            logger->info("input: {} version {}", entry.alias, entry.version);
+        }
+        for (const auto &entry : registry.pending_handler_plugins()) {
+            logger->info("handler: {} version {}", entry.alias, entry.version);
+        }
+        exit(EXIT_SUCCESS);
     }
 
     // window config defaults for all policies
@@ -647,22 +648,6 @@ int main(int argc, char *argv[])
             logger->error(res.body);
         }
     });
-
-    if (options.module.list) {
-        for (auto &p : registry.input_plugin_registry()->pluginList()) {
-            auto meta = registry.input_plugin_registry()->metadata(p);
-            if (meta && meta->data().hasValue("type") && meta->data().value("type") == "input") {
-                logger->info("input: {}", p);
-            }
-        }
-        for (auto &p : registry.handler_plugin_registry()->pluginList()) {
-            auto meta = registry.handler_plugin_registry()->metadata(p);
-            if (meta && meta->data().hasValue("type") && meta->data().value("type") == "handler") {
-                logger->info("handler: {}", p);
-            }
-        }
-        exit(EXIT_SUCCESS);
-    }
 
     if (options.iana_ports_path.has_value()) {
         try {

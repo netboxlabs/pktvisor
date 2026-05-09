@@ -7,12 +7,7 @@
 #include "HandlerManager.h"
 #include "InputResourcesStreamHandler.h"
 #include "InputStreamManager.h"
-#include <Corrade/PluginManager/AbstractManager.h>
 #include <nlohmann/json.hpp>
-
-CORRADE_PLUGIN_REGISTER(VisorHandlerInputResources, visor::handler::resources::InputResourcesHandlerModulePlugin,
-    "visor.module.handler/1.0")
-
 namespace visor::handler::resources {
 
 using json = nlohmann::json;

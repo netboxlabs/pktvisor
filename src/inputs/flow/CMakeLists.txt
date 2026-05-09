@@ -1,9 +1,6 @@
 message(STATUS "Input Module: Flow")
 
-set_directory_properties(PROPERTIES CORRADE_USE_PEDANTIC_FLAGS ON)
-
-corrade_add_static_plugin(VisorInputFlow ${CMAKE_CURRENT_BINARY_DIR}
-        FlowInput.conf
+add_library(VisorInputFlow STATIC
         FlowInputModulePlugin.cpp
         FlowInputStream.cpp
         )

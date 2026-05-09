@@ -16,8 +16,7 @@ target_link_libraries(pktvisord
         timer
         ${ADDITIONAL_LIBS}
         docopt_s
-        Visor::Core
-        ${VISOR_STATIC_PLUGINS}
+        Visor::BuiltinPlugins
         )
 
 set_target_properties(pktvisord
