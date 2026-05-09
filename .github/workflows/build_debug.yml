@@ -3,6 +3,8 @@ name: Debug Builds
 on:
   push:
     branches: [ develop, master, release/** ]
+  pull_request:
+    branches: [ develop ]
 
 env:
   CTEST_OUTPUT_ON_FAILURE: 1
@@ -69,6 +71,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v6
 
@@ -113,6 +116,7 @@ jobs:
   package:
     needs: build
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
     steps:
       - name: Download to workspace
         uses: actions/download-artifact@v8

@@ -1,0 +1,30 @@
+coverage:
+  # Both gates are informational — they show up in PR comments and Codecov
+  # status checks but never block merge. Flip `informational: false` later
+  # when we want to enforce a floor.
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+        informational: true
+    patch:
+      default:
+        target: auto
+        informational: true
+
+comment:
+  layout: "diff, flags, files"
+  behavior: default
+  require_changes: false
+
+ignore:
+  # Vendored third-party code we don't own
+  - "3rd/**"
+  # Build artifacts and generated headers
+  - "build/**"
+  - "**/*.pb.h"
+  - "**/*.pb.cc"
+  # Test sources themselves don't need to be coverage targets
+  - "**/tests/**"
+  - "**/test_*.cpp"
