@@ -73,12 +73,31 @@ jobs:
           name: pktvisor
           verbose: true
 
-      - name: Post coverage summary to PR
+      - name: Render coverage summary
         if: github.event_name == 'pull_request'
-        uses: romeovs/lcov-reporter-action@87a815f34ec27a5826abba44ce09bbc688da58fd #v0.4.0
+        working-directory: ${{github.workspace}}/build
+        run: |
+          {
+            echo "## Code Coverage"
+            echo ""
+            echo '```'
+            lcov --summary coverage.info 2>/dev/null
+            echo '```'
+            echo ""
+            echo "<details><summary>Per-file breakdown</summary>"
+            echo ""
+            echo '```'
+            lcov --list coverage.info 2>/dev/null
+            echo '```'
+            echo "</details>"
+          } > coverage-comment.md
+
+      - name: Post coverage comment
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 #v3.0.4
         with:
-          lcov-file: build/coverage.info
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          header: code-coverage
+          path: build/coverage-comment.md
 
   build:
     runs-on: ubuntu-latest
