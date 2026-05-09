@@ -73,31 +73,14 @@ jobs:
           name: pktvisor
           verbose: true
 
-      - name: Render coverage summary
+      - name: Report coverage to PR
         if: github.event_name == 'pull_request'
-        working-directory: ${{github.workspace}}/build
-        run: |
-          {
-            echo "## Code Coverage"
-            echo ""
-            echo '```'
-            lcov --summary coverage.info 2>/dev/null
-            echo '```'
-            echo ""
-            echo "<details><summary>Per-file breakdown</summary>"
-            echo ""
-            echo '```'
-            lcov --list coverage.info 2>/dev/null
-            echo '```'
-            echo "</details>"
-          } > coverage-comment.md
-
-      - name: Post coverage comment
-        if: github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 #v3.0.4
+        uses: zgosalvez/github-actions-report-lcov@7d72c57ce4bc101a4a0bf9d726b6c435abde8439 #v7.0.10
         with:
-          header: code-coverage
-          path: build/coverage-comment.md
+          coverage-files: build/coverage.info
+          artifact-name: code-coverage-report
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          update-comment: true
 
   build:
     runs-on: ubuntu-latest
