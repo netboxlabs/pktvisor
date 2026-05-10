@@ -2,6 +2,7 @@
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/catch_test_visor.hpp>
 
+#include <catch2/otel_helpers.hpp>
 #include <opentelemetry/proto/metrics/v1/metrics.pb.h>
 #include <sstream>
 
@@ -1060,7 +1061,7 @@ TEST_CASE("DNS Filters: only_rcode with predicate", "[pcap][dns][filter]")
 TEST_CASE("dns to_prometheus and to_opentelemetry backends", "[pcap][dns][backends]")
 {
     visor::input::pcap::PcapInputStream stream{"pcap-test"};
-    stream.config_set("pcap_file", "tests/fixtures/dns_udp_tcp_random.pcap");
+    stream.config_set("pcap_file", "tests/fixtures/dns_ipv4_udp.pcap");
     stream.config_set("bpf", "");
 
     visor::Config c;
@@ -1073,14 +1074,23 @@ TEST_CASE("dns to_prometheus and to_opentelemetry backends", "[pcap][dns][backen
     handler.stop();
     stream.stop();
 
+    // Counter values match the existing "Parse DNS UDP IPv4 tests" case:
+    // UDP=140, IPv4=140, queries=70, replies=70.
     std::stringstream prom;
     handler.metrics()->bucket(0)->to_prometheus(prom, {});
-    CHECK(prom.str().find("dns_") != std::string::npos);
+    auto prom_text = prom.str();
+    CHECK(prom_text.find("dns_wire_packets_udp{} 140") != std::string::npos);
+    CHECK(prom_text.find("dns_wire_packets_ipv4{} 140") != std::string::npos);
+    CHECK(prom_text.find("dns_wire_packets_queries{} 70") != std::string::npos);
+    CHECK(prom_text.find("dns_wire_packets_replies{} 70") != std::string::npos);
 
     opentelemetry::proto::metrics::v1::ScopeMetrics scope;
     timespec start_ts{}, end_ts{};
     handler.metrics()->bucket(0)->to_opentelemetry(scope, start_ts, end_ts, {});
-    CHECK(scope.metrics_size() > 0);
+    using visor::test::otel_gauge_value;
+    CHECK(otel_gauge_value(scope, "dns_wire_packets_udp") == 140);
+    CHECK(otel_gauge_value(scope, "dns_wire_packets_queries") == 70);
+    CHECK(otel_gauge_value(scope, "dns_wire_packets_replies") == 70);
 }
 
 TEST_CASE("DNS v1 process_dns_layer(l3,l4,QR) shallow overload", "[dns][unit]")
@@ -1098,14 +1108,31 @@ TEST_CASE("DNS v1 process_dns_layer(l3,l4,QR) shallow overload", "[dns][unit]")
     handler.start();
 
     auto *bucket = const_cast<visor::handler::dns::DnsMetricsBucket *>(handler.metrics()->bucket(0));
+    // Snapshot counters before our direct calls so we can assert deltas
+    // independent of what the existing PCAP feed already produced.
+    using visor::test::otel_gauge_value;
+    auto snapshot = [&](const std::string &name) {
+        opentelemetry::proto::metrics::v1::ScopeMetrics s;
+        timespec st{}, et{};
+        bucket->to_opentelemetry(s, st, et, {});
+        return otel_gauge_value(s, name);
+    };
+    auto q0 = snapshot("dns_wire_packets_queries");
+    auto r0 = snapshot("dns_wire_packets_replies");
+    auto u0 = snapshot("dns_wire_packets_udp");
+    auto t0 = snapshot("dns_wire_packets_tcp");
+
+    // Two UDP queries, one UDP response, one TCP query → +3 queries, +1 reply,
+    // +3 udp, +1 tcp.
+    bucket->process_dns_layer(pcpp::UDP, visor::handler::dns::Protocol::PCPP_UDP, visor::lib::dns::QR::query);
     bucket->process_dns_layer(pcpp::UDP, visor::handler::dns::Protocol::PCPP_UDP, visor::lib::dns::QR::query);
     bucket->process_dns_layer(pcpp::UDP, visor::handler::dns::Protocol::PCPP_UDP, visor::lib::dns::QR::response);
     bucket->process_dns_layer(pcpp::TCP, visor::handler::dns::Protocol::PCPP_TCP, visor::lib::dns::QR::query);
 
-    nlohmann::json j;
-    bucket->to_json(j);
-    CHECK(j["wire_packets"]["queries"] >= 2);
-    CHECK(j["wire_packets"]["replies"] >= 1);
+    CHECK(snapshot("dns_wire_packets_queries") == q0 + 3);
+    CHECK(snapshot("dns_wire_packets_replies") == r0 + 1);
+    CHECK(snapshot("dns_wire_packets_udp") == u0 + 3);
+    CHECK(snapshot("dns_wire_packets_tcp") == t0 + 1);
 
     handler.stop();
 }

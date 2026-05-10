@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_test_visor.hpp>
+#include <catch2/otel_helpers.hpp>
 
 #include <opentelemetry/proto/metrics/v1/metrics.pb.h>
 #include <sstream>
@@ -70,13 +71,22 @@ TEST_CASE("BGP to_prometheus and to_opentelemetry backends", "[pcap][bgp][backen
     bgp_handler.stop();
     stream.stop();
 
+    // Counter values come from the existing parse test: total=9, OPEN=2,
+    // UPDATE=4, KEEPALIVE=3. They must round-trip identically through both
+    // backends.
     std::stringstream prom;
     bgp_handler.metrics()->bucket(0)->to_prometheus(prom, {});
     auto prom_text = prom.str();
-    CHECK(prom_text.find("bgp_") != std::string::npos);
+    CHECK(prom_text.find("bgp_wire_packets_total{} 9") != std::string::npos);
+    CHECK(prom_text.find("bgp_wire_packets_open{} 2") != std::string::npos);
+    CHECK(prom_text.find("bgp_wire_packets_update{} 4") != std::string::npos);
+    CHECK(prom_text.find("bgp_wire_packets_keepalive{} 3") != std::string::npos);
 
     opentelemetry::proto::metrics::v1::ScopeMetrics scope;
     timespec start_ts{}, end_ts{};
     bgp_handler.metrics()->bucket(0)->to_opentelemetry(scope, start_ts, end_ts, {});
-    CHECK(scope.metrics_size() > 0);
+    using visor::test::otel_gauge_value;
+    CHECK(otel_gauge_value(scope, "bgp_wire_packets_total") == 9);
+    CHECK(otel_gauge_value(scope, "bgp_wire_packets_open") == 2);
+    CHECK(otel_gauge_value(scope, "bgp_wire_packets_keepalive") == 3);
 }

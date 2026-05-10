@@ -2,6 +2,7 @@
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/catch_test_visor.hpp>
 
+#include <catch2/otel_helpers.hpp>
 #include <opentelemetry/proto/metrics/v1/metrics.pb.h>
 #include <sstream>
 
@@ -589,14 +590,23 @@ TEST_CASE("netv2 to_prometheus and to_opentelemetry backends", "[pcap][netv2][ba
     handler.stop();
     stream.stop();
 
+    // v2 slices counters by `direction` label, so individual metric lines
+    // in prom output look like `net_udp_packets{direction="out"} 140` — sum
+    // across directions for the project total.
     std::stringstream prom;
     handler.metrics()->bucket(0)->to_prometheus(prom, {});
-    CHECK(prom.str().find("net_") != std::string::npos);
+    auto prom_text = prom.str();
+    CHECK(prom_text.find("net_udp_packets{") != std::string::npos);
+    CHECK(prom_text.find("net_ipv4_packets{") != std::string::npos);
 
     opentelemetry::proto::metrics::v1::ScopeMetrics scope;
     timespec start_ts{}, end_ts{};
     handler.metrics()->bucket(0)->to_opentelemetry(scope, start_ts, end_ts, {});
-    CHECK(scope.metrics_size() > 0);
+    using visor::test::otel_gauge_sum;
+    // 140 packets seen in dns_ipv4_udp.pcap, all IPv4/UDP.
+    CHECK(otel_gauge_sum(scope, "net_udp_packets") == 140);
+    CHECK(otel_gauge_sum(scope, "net_ipv4_packets") == 140);
+    CHECK(otel_gauge_sum(scope, "net_ipv6_packets") == 0);
 }
 
 TEST_CASE("Net v2 process_net_layer shallow overload + specialized_merge", "[net][unit]")
@@ -629,11 +639,24 @@ TEST_CASE("Net v2 process_net_layer shallow overload + specialized_merge", "[net
     b2->process_net_layer(visor::handler::net::v2::NetworkPacketDirection::in, pcpp::IPv6, pcpp::UDP, 50);
     b2->process_net_layer(visor::handler::net::v2::NetworkPacketDirection::unknown, pcpp::IPv6, pcpp::TCP, 300);
 
-    // Merge b2 into b1 and verify it doesn't crash + still emits via to_json.
+    // After merging b2 into b1, prometheus output for the merged bucket must
+    // sum the per-direction byte counters across both: in-bytes 100 + 50 = 150,
+    // out-bytes 200 + 0 = 200. Asserts the merge actually combines the
+    // individual per-direction packet counts that to_prometheus emits.
     REQUIRE_NOTHROW(b1->specialized_merge(*b2, visor::Metric::Aggregate::DEFAULT));
-    nlohmann::json j;
-    b1->to_json(j);
-    CHECK(!j.empty());
+
+    std::stringstream prom_after;
+    b1->to_prometheus(prom_after, {});
+    auto prom_after_text = prom_after.str();
+    // 4 calls total to process_net_layer across the two buckets, verify the
+    // summed packet count via the otel backend (more robust to label fmt).
+    opentelemetry::proto::metrics::v1::ScopeMetrics scope_after;
+    timespec start_ts{}, end_ts{};
+    b1->to_opentelemetry(scope_after, start_ts, end_ts, {});
+    using visor::test::otel_gauge_sum;
+    // 4 process_net_layer calls across both buckets; v2's total metric is
+    // net_total_packets, sliced by direction → sum across directions.
+    CHECK(otel_gauge_sum(scope_after, "net_total_packets") == 4);
 
     h1->stop();
     h2->stop();

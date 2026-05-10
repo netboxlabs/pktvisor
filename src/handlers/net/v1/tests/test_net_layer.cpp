@@ -2,6 +2,7 @@
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/catch_test_visor.hpp>
 
+#include <catch2/otel_helpers.hpp>
 #include <opentelemetry/proto/metrics/v1/metrics.pb.h>
 #include <sstream>
 
@@ -597,14 +598,22 @@ TEST_CASE("net to_prometheus and to_opentelemetry backends", "[pcap][net][backen
     handler.stop();
     stream.stop();
 
+    // Counter values match the existing "Parse net (dns) UDP IPv4 tests"
+    // case for the same fixture: UDP=140, IPv4=140, IPv6=0.
     std::stringstream prom;
     handler.metrics()->bucket(0)->to_prometheus(prom, {});
-    CHECK(prom.str().find("packets_") != std::string::npos);
+    auto prom_text = prom.str();
+    CHECK(prom_text.find("packets_udp{} 140") != std::string::npos);
+    CHECK(prom_text.find("packets_ipv4{} 140") != std::string::npos);
+    CHECK(prom_text.find("packets_ipv6{} 0") != std::string::npos);
 
     opentelemetry::proto::metrics::v1::ScopeMetrics scope;
     timespec start_ts{}, end_ts{};
     handler.metrics()->bucket(0)->to_opentelemetry(scope, start_ts, end_ts, {});
-    CHECK(scope.metrics_size() > 0);
+    using visor::test::otel_gauge_value;
+    CHECK(otel_gauge_value(scope, "packets_udp") == 140);
+    CHECK(otel_gauge_value(scope, "packets_ipv4") == 140);
+    CHECK(otel_gauge_value(scope, "packets_ipv6") == 0);
 }
 
 TEST_CASE("Net v1 process_net_layer shallow overload", "[net][unit]")
@@ -622,15 +631,33 @@ TEST_CASE("Net v1 process_net_layer shallow overload", "[net][unit]")
     handler.start();
 
     auto *bucket = const_cast<visor::handler::net::NetworkMetricsBucket *>(handler.metrics()->bucket(0));
+    // Snapshot the counters before our direct calls so we can assert deltas.
+    using visor::test::otel_gauge_value;
+    auto snapshot = [&](const std::string &name) {
+        opentelemetry::proto::metrics::v1::ScopeMetrics s;
+        timespec st{}, et{};
+        bucket->to_opentelemetry(s, st, et, {});
+        return otel_gauge_value(s, name);
+    };
+    auto in0 = snapshot("packets_in");
+    auto out0 = snapshot("packets_out");
+    auto udp0 = snapshot("packets_udp");
+    auto tcp0 = snapshot("packets_tcp");
+    auto v40 = snapshot("packets_ipv4");
+    auto v60 = snapshot("packets_ipv6");
+
     bucket->process_net_layer(visor::input::pcap::PacketDirection::toHost, pcpp::IPv4, pcpp::UDP, 128);
     bucket->process_net_layer(visor::input::pcap::PacketDirection::fromHost, pcpp::IPv4, pcpp::TCP, 64);
     bucket->process_net_layer(visor::input::pcap::PacketDirection::unknown, pcpp::IPv6, pcpp::UDP, 256);
 
-    nlohmann::json j;
-    bucket->to_json(j);
-    // process_net_layer populates payload_size and the cardinality counters
-    // — schema keys vary per handler version, so just assert *something* landed.
-    CHECK(!j.empty());
+    // +1 toHost, +1 fromHost, +1 unknown (no direction counter); +2 udp +1 tcp;
+    // +2 ipv4, +1 ipv6.
+    CHECK(snapshot("packets_in") == in0 + 1);
+    CHECK(snapshot("packets_out") == out0 + 1);
+    CHECK(snapshot("packets_udp") == udp0 + 2);
+    CHECK(snapshot("packets_tcp") == tcp0 + 1);
+    CHECK(snapshot("packets_ipv4") == v40 + 2);
+    CHECK(snapshot("packets_ipv6") == v60 + 1);
 
     handler.stop();
 }

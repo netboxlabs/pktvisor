@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_test_visor.hpp>
+#include <catch2/otel_helpers.hpp>
 
 #include <opentelemetry/proto/metrics/v1/metrics.pb.h>
 #include <sstream>
@@ -112,12 +113,21 @@ TEST_CASE("DHCP to_prometheus and to_opentelemetry backends", "[pcap][dhcp][back
     dhcp_handler.stop();
     stream.stop();
 
+    // Counter values come from "Parse DHCP tests": DISCOVER=1, OFFER=1,
+    // REQUEST=3, ACK=3. Round-trip through both backends.
     std::stringstream prom;
     dhcp_handler.metrics()->bucket(0)->to_prometheus(prom, {});
-    CHECK(prom.str().find("dhcp_") != std::string::npos);
+    auto prom_text = prom.str();
+    CHECK(prom_text.find("dhcp_wire_packets_discover{} 1") != std::string::npos);
+    CHECK(prom_text.find("dhcp_wire_packets_offer{} 1") != std::string::npos);
+    CHECK(prom_text.find("dhcp_wire_packets_request{} 3") != std::string::npos);
+    CHECK(prom_text.find("dhcp_wire_packets_ack{} 3") != std::string::npos);
 
     opentelemetry::proto::metrics::v1::ScopeMetrics scope;
     timespec start_ts{}, end_ts{};
     dhcp_handler.metrics()->bucket(0)->to_opentelemetry(scope, start_ts, end_ts, {});
-    CHECK(scope.metrics_size() > 0);
+    using visor::test::otel_gauge_value;
+    CHECK(otel_gauge_value(scope, "dhcp_wire_packets_discover") == 1);
+    CHECK(otel_gauge_value(scope, "dhcp_wire_packets_request") == 3);
+    CHECK(otel_gauge_value(scope, "dhcp_wire_packets_ack") == 3);
 }

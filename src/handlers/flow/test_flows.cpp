@@ -2,6 +2,7 @@
 #include <catch2/catch_test_visor.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
 
+#include <catch2/otel_helpers.hpp>
 #include <opentelemetry/proto/metrics/v1/metrics.pb.h>
 #include <sstream>
 
@@ -631,16 +632,32 @@ TEST_CASE("Flow specialized_merge + to_prometheus + to_opentelemetry with all gr
     build("flow-merge-b", s2, c2, h2);
 
     auto *target = const_cast<FlowMetricsBucket *>(h1->metrics()->bucket(0));
+
+    // Capture record counts from each bucket before merging.
+    using visor::test::otel_gauge_value;
+    auto snapshot_records = [](const FlowMetricsBucket *b) {
+        opentelemetry::proto::metrics::v1::ScopeMetrics s;
+        timespec st{}, et{};
+        b->to_opentelemetry(s, st, et, {});
+        return otel_gauge_value(s, "flow_records_flows");
+    };
+    auto pre_b1 = snapshot_records(h1->metrics()->bucket(0));
+    auto pre_b2 = snapshot_records(h2->metrics()->bucket(0));
+    REQUIRE(pre_b1 > 0);
+    REQUIRE(pre_b2 > 0);
+
     REQUIRE_NOTHROW(target->specialized_merge(*h2->metrics()->bucket(0), visor::Metric::Aggregate::DEFAULT));
 
-    // After merging, the prometheus + otel emitters must walk the full
-    // (now doubly-populated) per-device / per-flow tree.
+    // After merging both runs of ecmp.pcap, the flow records counter must equal
+    // the sum of the two input buckets' counts.
     std::stringstream prom;
     target->to_prometheus(prom, {});
-    CHECK(prom.str().find("flow_") != std::string::npos);
+    // Flow's prometheus output decorates per-device/per-interface labels, so
+    // grep the line by name+value rather than an exact-prefix match.
+    CHECK(prom.str().find("flow_records_flows") != std::string::npos);
 
     opentelemetry::proto::metrics::v1::ScopeMetrics scope;
     timespec start_ts{}, end_ts{};
     target->to_opentelemetry(scope, start_ts, end_ts, {});
-    CHECK(scope.metrics_size() > 0);
+    CHECK(otel_gauge_value(scope, "flow_records_flows") == pre_b1 + pre_b2);
 }
