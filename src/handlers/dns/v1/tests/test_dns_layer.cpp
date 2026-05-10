@@ -1082,3 +1082,30 @@ TEST_CASE("dns to_prometheus and to_opentelemetry backends", "[pcap][dns][backen
     handler.metrics()->bucket(0)->to_opentelemetry(scope, start_ts, end_ts, {});
     CHECK(scope.metrics_size() > 0);
 }
+
+TEST_CASE("DNS v1 process_dns_layer(l3,l4,QR) shallow overload", "[dns][unit]")
+{
+    // Exercises the no-payload overload of DnsMetricsBucket::process_dns_layer
+    // that's used when full packet info isn't available (e.g. filter pre-pass).
+    PcapInputStream stream{"pcap-test"};
+    stream.config_set("pcap_file", "tests/fixtures/dns_udp_tcp_random.pcap");
+    stream.config_set("bpf", "");
+
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    auto stream_proxy = stream.add_event_proxy(c);
+    visor::handler::dns::DnsStreamHandler handler{"dns-unit", stream_proxy, &c};
+    handler.start();
+
+    auto *bucket = const_cast<visor::handler::dns::DnsMetricsBucket *>(handler.metrics()->bucket(0));
+    bucket->process_dns_layer(pcpp::UDP, visor::handler::dns::Protocol::PCPP_UDP, visor::lib::dns::QR::query);
+    bucket->process_dns_layer(pcpp::UDP, visor::handler::dns::Protocol::PCPP_UDP, visor::lib::dns::QR::response);
+    bucket->process_dns_layer(pcpp::TCP, visor::handler::dns::Protocol::PCPP_TCP, visor::lib::dns::QR::query);
+
+    nlohmann::json j;
+    bucket->to_json(j);
+    CHECK(j["wire_packets"]["queries"] >= 2);
+    CHECK(j["wire_packets"]["replies"] >= 1);
+
+    handler.stop();
+}

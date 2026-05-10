@@ -598,3 +598,43 @@ TEST_CASE("netv2 to_prometheus and to_opentelemetry backends", "[pcap][netv2][ba
     handler.metrics()->bucket(0)->to_opentelemetry(scope, start_ts, end_ts, {});
     CHECK(scope.metrics_size() > 0);
 }
+
+TEST_CASE("Net v2 process_net_layer shallow overload + specialized_merge", "[net][unit]")
+{
+    auto build = [](const std::string &name,
+                    std::shared_ptr<visor::input::pcap::PcapInputStream> &stream,
+                    std::shared_ptr<visor::Config> &c,
+                    std::shared_ptr<visor::handler::net::v2::NetStreamHandler> &h) {
+        stream = std::make_shared<visor::input::pcap::PcapInputStream>(name + "-stream");
+        stream->config_set("pcap_file", std::string("tests/fixtures/dns_ipv4_udp.pcap"));
+        stream->config_set("bpf", std::string(""));
+        c = std::make_shared<visor::Config>();
+        c->config_set<uint64_t>("num_periods", 1);
+        auto proxy = stream->add_event_proxy(*c);
+        h = std::make_shared<visor::handler::net::v2::NetStreamHandler>(name, proxy, c.get());
+        h->start();
+    };
+
+    std::shared_ptr<visor::input::pcap::PcapInputStream> s1, s2;
+    std::shared_ptr<visor::Config> c1, c2;
+    std::shared_ptr<visor::handler::net::v2::NetStreamHandler> h1, h2;
+    build("net-v2-a", s1, c1, h1);
+    build("net-v2-b", s2, c2, h2);
+
+    // Drive the shallow process_net_layer overload directly on each bucket.
+    auto *b1 = const_cast<visor::handler::net::v2::NetworkMetricsBucket *>(h1->metrics()->bucket(0));
+    auto *b2 = const_cast<visor::handler::net::v2::NetworkMetricsBucket *>(h2->metrics()->bucket(0));
+    b1->process_net_layer(visor::handler::net::v2::NetworkPacketDirection::in, pcpp::IPv4, pcpp::UDP, 100);
+    b1->process_net_layer(visor::handler::net::v2::NetworkPacketDirection::out, pcpp::IPv4, pcpp::TCP, 200);
+    b2->process_net_layer(visor::handler::net::v2::NetworkPacketDirection::in, pcpp::IPv6, pcpp::UDP, 50);
+    b2->process_net_layer(visor::handler::net::v2::NetworkPacketDirection::unknown, pcpp::IPv6, pcpp::TCP, 300);
+
+    // Merge b2 into b1 and verify it doesn't crash + still emits via to_json.
+    REQUIRE_NOTHROW(b1->specialized_merge(*b2, visor::Metric::Aggregate::DEFAULT));
+    nlohmann::json j;
+    b1->to_json(j);
+    CHECK(!j.empty());
+
+    h1->stop();
+    h2->stop();
+}

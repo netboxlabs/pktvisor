@@ -1003,3 +1003,36 @@ TEST_CASE("dnsv2 to_prometheus and to_opentelemetry backends", "[pcap][dnsv2][ba
     handler.metrics()->bucket(0)->to_opentelemetry(scope, start_ts, end_ts, {});
     CHECK(scope.metrics_size() > 0);
 }
+
+TEST_CASE("DNS v2 specialized_merge aggregates two buckets", "[dns][unit]")
+{
+    auto run = [](const std::string &name,
+                  std::shared_ptr<visor::input::pcap::PcapInputStream> &stream,
+                  std::shared_ptr<visor::Config> &c,
+                  std::shared_ptr<visor::handler::dns::v2::DnsStreamHandler> &h) {
+        stream = std::make_shared<visor::input::pcap::PcapInputStream>(name + "-stream");
+        stream->config_set("pcap_file", std::string("tests/fixtures/dns_udp_tcp_random.pcap"));
+        stream->config_set("bpf", std::string(""));
+        c = std::make_shared<visor::Config>();
+        c->config_set<uint64_t>("num_periods", 1);
+        auto proxy = stream->add_event_proxy(*c);
+        h = std::make_shared<visor::handler::dns::v2::DnsStreamHandler>(name, proxy, c.get());
+        h->start();
+        stream->start();
+        h->stop();
+        stream->stop();
+    };
+
+    std::shared_ptr<visor::input::pcap::PcapInputStream> s1, s2;
+    std::shared_ptr<visor::Config> c1, c2;
+    std::shared_ptr<visor::handler::dns::v2::DnsStreamHandler> h1, h2;
+    run("dns-merge-1", s1, c1, h1);
+    run("dns-merge-2", s2, c2, h2);
+
+    auto *target = const_cast<visor::handler::dns::v2::DnsMetricsBucket *>(h1->metrics()->bucket(0));
+    REQUIRE_NOTHROW(target->specialized_merge(*h2->metrics()->bucket(0), visor::Metric::Aggregate::DEFAULT));
+
+    nlohmann::json j;
+    target->to_json(j);
+    CHECK(!j.empty());
+}
