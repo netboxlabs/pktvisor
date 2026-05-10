@@ -600,3 +600,47 @@ TEST_CASE("flow to_prometheus and to_opentelemetry backends", "[sflow][flow][bac
     handler.metrics()->bucket(0)->to_opentelemetry(scope, start_ts, end_ts, {});
     CHECK(scope.metrics_size() > 0);
 }
+
+TEST_CASE("Flow specialized_merge + to_prometheus + to_opentelemetry with all groups enabled", "[sflow][flow][unit]")
+{
+    auto build = [](const std::string &name,
+                    std::shared_ptr<visor::input::flow::FlowInputStream> &stream,
+                    std::shared_ptr<visor::Config> &c,
+                    std::shared_ptr<FlowStreamHandler> &handler) {
+        stream = std::make_shared<visor::input::flow::FlowInputStream>(name + "-stream");
+        stream->config_set("flow_type", "sflow");
+        stream->config_set("pcap_file", std::string("tests/fixtures/ecmp.pcap"));
+        c = std::make_shared<visor::Config>();
+        c->config_set<uint64_t>("num_periods", 1);
+        auto proxy = stream->add_event_proxy(*c);
+        handler = std::make_shared<FlowStreamHandler>(name, proxy, c.get());
+        // Switch on every group — exercises Conversations, TopTos, TopGeo,
+        // TopInterfaces in addition to the defaults — so to_prometheus and
+        // to_opentelemetry walk every group_enabled() branch.
+        handler->config_set<visor::Configurable::StringList>("enable", visor::Configurable::StringList({"all"}));
+        handler->start();
+        stream->start();
+        handler->stop();
+        stream->stop();
+    };
+
+    std::shared_ptr<visor::input::flow::FlowInputStream> s1, s2;
+    std::shared_ptr<visor::Config> c1, c2;
+    std::shared_ptr<FlowStreamHandler> h1, h2;
+    build("flow-merge-a", s1, c1, h1);
+    build("flow-merge-b", s2, c2, h2);
+
+    auto *target = const_cast<FlowMetricsBucket *>(h1->metrics()->bucket(0));
+    REQUIRE_NOTHROW(target->specialized_merge(*h2->metrics()->bucket(0), visor::Metric::Aggregate::DEFAULT));
+
+    // After merging, the prometheus + otel emitters must walk the full
+    // (now doubly-populated) per-device / per-flow tree.
+    std::stringstream prom;
+    target->to_prometheus(prom, {});
+    CHECK(prom.str().find("flow_") != std::string::npos);
+
+    opentelemetry::proto::metrics::v1::ScopeMetrics scope;
+    timespec start_ts{}, end_ts{};
+    target->to_opentelemetry(scope, start_ts, end_ts, {});
+    CHECK(scope.metrics_size() > 0);
+}
