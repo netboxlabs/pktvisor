@@ -2,6 +2,9 @@
 #include <catch2/catch_test_visor.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
 
+#include <opentelemetry/proto/metrics/v1/metrics.pb.h>
+#include <sstream>
+
 #include "FlowInputStream.h"
 #include "FlowStreamHandler.h"
 #include "IpPort.h"
@@ -570,4 +573,30 @@ TEST_CASE("Flow invalid config", "[flow][filter][config]")
     FlowStreamHandler flow_handler{"flow-test", stream_proxy, &c};
     flow_handler.config_set<bool>("invalid_config", true);
     REQUIRE_THROWS_WITH(flow_handler.start(), "invalid_config is an invalid/unsupported config or filter. The valid configs/filters are: device_map, enrichment, only_device_interfaces, only_ips, only_ports, only_directions, geoloc_notfound, asn_notfound, summarize_ips_by_asn, subnets_for_summarization, exclude_asns_from_summarization, exclude_unknown_asns_from_summarization, exclude_ips_from_summarization, sample_rate_scaling, recorded_stream, deep_sample_rate, num_periods, topn_count, topn_percentile_threshold");
+}
+
+TEST_CASE("flow to_prometheus and to_opentelemetry backends", "[sflow][flow][backends]")
+{
+    visor::input::flow::FlowInputStream stream{"flow-test"};
+    stream.config_set("pcap_file", "tests/fixtures/ecmp.pcap");
+    stream.config_set("flow_type", "sflow");
+
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    auto stream_proxy = stream.add_event_proxy(c);
+    visor::handler::flow::FlowStreamHandler handler{"flow-test", stream_proxy, &c};
+
+    handler.start();
+    stream.start();
+    handler.stop();
+    stream.stop();
+
+    std::stringstream prom;
+    handler.metrics()->bucket(0)->to_prometheus(prom, {});
+    CHECK(prom.str().find("flow_") != std::string::npos);
+
+    opentelemetry::proto::metrics::v1::ScopeMetrics scope;
+    timespec start_ts{}, end_ts{};
+    handler.metrics()->bucket(0)->to_opentelemetry(scope, start_ts, end_ts, {});
+    CHECK(scope.metrics_size() > 0);
 }

@@ -2,6 +2,9 @@
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/catch_test_visor.hpp>
 
+#include <opentelemetry/proto/metrics/v1/metrics.pb.h>
+#include <sstream>
+
 #include "DnsStreamHandler.h"
 #include "GeoDB.h"
 #include "PcapInputStream.h"
@@ -1052,4 +1055,30 @@ TEST_CASE("DNS Filters: only_rcode with predicate", "[pcap][dns][filter]")
 
     nlohmann::json j;
     dns_handler_2.metrics()->bucket(0)->to_json(j);
+}
+
+TEST_CASE("dns to_prometheus and to_opentelemetry backends", "[pcap][dns][backends]")
+{
+    visor::input::pcap::PcapInputStream stream{"pcap-test"};
+    stream.config_set("pcap_file", "tests/fixtures/dns_udp_tcp_random.pcap");
+    stream.config_set("bpf", "");
+
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    auto stream_proxy = stream.add_event_proxy(c);
+    visor::handler::dns::DnsStreamHandler handler{"dns-test", stream_proxy, &c};
+
+    handler.start();
+    stream.start();
+    handler.stop();
+    stream.stop();
+
+    std::stringstream prom;
+    handler.metrics()->bucket(0)->to_prometheus(prom, {});
+    CHECK(prom.str().find("dns_") != std::string::npos);
+
+    opentelemetry::proto::metrics::v1::ScopeMetrics scope;
+    timespec start_ts{}, end_ts{};
+    handler.metrics()->bucket(0)->to_opentelemetry(scope, start_ts, end_ts, {});
+    CHECK(scope.metrics_size() > 0);
 }

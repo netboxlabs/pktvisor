@@ -1,6 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_test_visor.hpp>
 
+#include <opentelemetry/proto/metrics/v1/metrics.pb.h>
+#include <sstream>
+
 #include "DhcpStreamHandler.h"
 #include "PcapInputStream.h"
 
@@ -91,4 +94,30 @@ TEST_CASE("Parse DHCP V6 tests", "[pcap][dhcp]")
 
     CHECK(j["top_clients"][0]["name"] == nullptr);
     CHECK(j["top_servers"][0]["name"] == "08:00:27:d4:10:bb/fe80::a00:27ff:fed4:10bb");
+}
+
+TEST_CASE("DHCP to_prometheus and to_opentelemetry backends", "[pcap][dhcp][backends]")
+{
+    PcapInputStream stream{"pcap-test"};
+    stream.config_set("pcap_file", "tests/fixtures/dhcp-flow.pcap");
+    stream.config_set("bpf", "");
+
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    auto stream_proxy = stream.add_event_proxy(c);
+    DhcpStreamHandler dhcp_handler{"dhcp-test", stream_proxy, &c};
+
+    dhcp_handler.start();
+    stream.start();
+    dhcp_handler.stop();
+    stream.stop();
+
+    std::stringstream prom;
+    dhcp_handler.metrics()->bucket(0)->to_prometheus(prom, {});
+    CHECK(prom.str().find("dhcp_") != std::string::npos);
+
+    opentelemetry::proto::metrics::v1::ScopeMetrics scope;
+    timespec start_ts{}, end_ts{};
+    dhcp_handler.metrics()->bucket(0)->to_opentelemetry(scope, start_ts, end_ts, {});
+    CHECK(scope.metrics_size() > 0);
 }
