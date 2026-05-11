@@ -2,6 +2,10 @@
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/catch_test_visor.hpp>
 
+#include <catch2/otel_helpers.hpp>
+#include <opentelemetry/proto/metrics/v1/metrics.pb.h>
+#include <sstream>
+
 #include "DnsStreamHandler.h"
 #include "GeoDB.h"
 #include "PcapInputStream.h"
@@ -973,4 +977,85 @@ TEST_CASE("DNS invalid config", "[dns][filter][config]")
     DnsStreamHandler dns_handler{"dns-test", stream_proxy, &c};
     dns_handler.config_set<bool>("invalid_config", true);
     REQUIRE_THROWS_WITH(dns_handler.start(), "invalid_config is an invalid/unsupported config or filter. The valid configs/filters are: exclude_noerror, only_rcode, only_dnssec_response, answer_count, only_qtype, only_qname, only_qname_suffix, geoloc_notfound, asn_notfound, dnstap_msg_type, public_suffix_list, recorded_stream, xact_ttl_secs, xact_ttl_ms, deep_sample_rate, num_periods, topn_count, topn_percentile_threshold");
+}
+
+TEST_CASE("dnsv2 to_prometheus and to_opentelemetry backends", "[pcap][dnsv2][backends]")
+{
+    visor::input::pcap::PcapInputStream stream{"pcap-test"};
+    stream.config_set("pcap_file", "tests/fixtures/dns_ipv4_udp.pcap");
+    stream.config_set("bpf", "");
+
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    auto stream_proxy = stream.add_event_proxy(c);
+    visor::handler::dns::v2::DnsStreamHandler handler{"dnsv2-test", stream_proxy, &c};
+
+    handler.start();
+    stream.start();
+    handler.stop();
+    stream.stop();
+
+    // DNS v2 slices counters by `direction` label (in/out/unknown), so we
+    // sum across all data points to get the project total. The fixture has
+    // 70 query/reply pairs over UDP IPv4 → 70 xacts total.
+    std::stringstream prom;
+    handler.metrics()->bucket(0)->to_prometheus(prom, {});
+    CHECK(prom.str().find("dns_xacts{") != std::string::npos);
+
+    opentelemetry::proto::metrics::v1::ScopeMetrics scope;
+    timespec start_ts{}, end_ts{};
+    handler.metrics()->bucket(0)->to_opentelemetry(scope, start_ts, end_ts, {});
+    using visor::test::otel_gauge_sum;
+    CHECK(otel_gauge_sum(scope, "dns_xacts") == 70);
+    CHECK(otel_gauge_sum(scope, "dns_udp_xacts") == 70);
+    CHECK(otel_gauge_sum(scope, "dns_ipv4_xacts") == 70);
+}
+
+TEST_CASE("DNS v2 specialized_merge aggregates two buckets", "[dns][unit]")
+{
+    auto run = [](const std::string &name,
+                  std::shared_ptr<visor::input::pcap::PcapInputStream> &stream,
+                  std::shared_ptr<visor::Config> &c,
+                  std::shared_ptr<visor::handler::dns::v2::DnsStreamHandler> &h) {
+        stream = std::make_shared<visor::input::pcap::PcapInputStream>(name + "-stream");
+        stream->config_set("pcap_file", std::string("tests/fixtures/dns_udp_tcp_random.pcap"));
+        stream->config_set("bpf", std::string(""));
+        c = std::make_shared<visor::Config>();
+        c->config_set<uint64_t>("num_periods", 1);
+        auto proxy = stream->add_event_proxy(*c);
+        h = std::make_shared<visor::handler::dns::v2::DnsStreamHandler>(name, proxy, c.get());
+        h->start();
+        stream->start();
+        h->stop();
+        stream->stop();
+    };
+
+    std::shared_ptr<visor::input::pcap::PcapInputStream> s1, s2;
+    std::shared_ptr<visor::Config> c1, c2;
+    std::shared_ptr<visor::handler::dns::v2::DnsStreamHandler> h1, h2;
+    run("dns-merge-1", s1, c1, h1);
+    run("dns-merge-2", s2, c2, h2);
+
+    auto *target = const_cast<visor::handler::dns::v2::DnsMetricsBucket *>(h1->metrics()->bucket(0));
+
+    // Capture per-bucket counters before merging so we can assert the sum.
+    // DNS v2 emits per-direction; sum across data points.
+    using visor::test::otel_gauge_sum;
+    auto snapshot_xacts = [](const visor::handler::dns::v2::DnsMetricsBucket *b) {
+        opentelemetry::proto::metrics::v1::ScopeMetrics s;
+        timespec st{}, et{};
+        b->to_opentelemetry(s, st, et, {});
+        return otel_gauge_sum(s, "dns_xacts");
+    };
+    auto pre_b1 = snapshot_xacts(h1->metrics()->bucket(0));
+    auto pre_b2 = snapshot_xacts(h2->metrics()->bucket(0));
+    REQUIRE(pre_b1 > 0);
+    REQUIRE(pre_b2 > 0);
+
+    REQUIRE_NOTHROW(target->specialized_merge(*h2->metrics()->bucket(0), visor::Metric::Aggregate::DEFAULT));
+
+    opentelemetry::proto::metrics::v1::ScopeMetrics scope_after;
+    timespec st{}, et{};
+    target->to_opentelemetry(scope_after, st, et, {});
+    CHECK(otel_gauge_sum(scope_after, "dns_xacts") == pre_b1 + pre_b2);
 }

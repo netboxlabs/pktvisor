@@ -1,6 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_test_visor.hpp>
 
+#include <opentelemetry/proto/metrics/v1/metrics.pb.h>
+#include <sstream>
+
 #include "DnstapInputStream.h"
 #include "FlowInputStream.h"
 #include "InputResourcesStreamHandler.h"
@@ -108,4 +111,32 @@ TEST_CASE("Check resources for sflow input", "[sflow][resources]")
     CHECK(j["memory_bytes"]["p50"] != nullptr);
     CHECK(j["policy_count"] == 0);
     CHECK(j["handler_count"] == 0);
+}
+
+TEST_CASE("input_resources to_prometheus and to_opentelemetry backends", "[pcap][input_resources][backends]")
+{
+    visor::input::pcap::PcapInputStream stream{"pcap-test"};
+    stream.config_set("pcap_file", "tests/fixtures/dns_ipv4_udp.pcap");
+    stream.config_set("bpf", "");
+
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    auto stream_proxy = stream.add_event_proxy(c);
+    visor::handler::resources::InputResourcesStreamHandler handler{"input_resources-test", stream_proxy, &c};
+
+    handler.start();
+    stream.start();
+    handler.stop();
+    stream.stop();
+
+    std::stringstream prom;
+    handler.metrics()->bucket(0)->to_prometheus(prom, {});
+    // input_resources emits cross-schema metrics (base_, cpu_usage, memory_bytes,
+    // etc.) so just assert the backend produced something.
+    CHECK(!prom.str().empty());
+
+    opentelemetry::proto::metrics::v1::ScopeMetrics scope;
+    timespec start_ts{}, end_ts{};
+    handler.metrics()->bucket(0)->to_opentelemetry(scope, start_ts, end_ts, {});
+    CHECK(scope.metrics_size() > 0);
 }

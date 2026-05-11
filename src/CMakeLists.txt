@@ -86,6 +86,7 @@ add_executable(unit-tests-visor-core
         tests/test_taps.cpp
         tests/test_policies.cpp
         tests/test_handlers.cpp
+        tests/test_module_plugins.cpp
         )
 
 target_include_directories(unit-tests-visor-core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

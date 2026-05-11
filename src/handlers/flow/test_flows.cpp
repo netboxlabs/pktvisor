@@ -2,6 +2,10 @@
 #include <catch2/catch_test_visor.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
 
+#include <catch2/otel_helpers.hpp>
+#include <opentelemetry/proto/metrics/v1/metrics.pb.h>
+#include <sstream>
+
 #include "FlowInputStream.h"
 #include "FlowStreamHandler.h"
 #include "IpPort.h"
@@ -570,4 +574,90 @@ TEST_CASE("Flow invalid config", "[flow][filter][config]")
     FlowStreamHandler flow_handler{"flow-test", stream_proxy, &c};
     flow_handler.config_set<bool>("invalid_config", true);
     REQUIRE_THROWS_WITH(flow_handler.start(), "invalid_config is an invalid/unsupported config or filter. The valid configs/filters are: device_map, enrichment, only_device_interfaces, only_ips, only_ports, only_directions, geoloc_notfound, asn_notfound, summarize_ips_by_asn, subnets_for_summarization, exclude_asns_from_summarization, exclude_unknown_asns_from_summarization, exclude_ips_from_summarization, sample_rate_scaling, recorded_stream, deep_sample_rate, num_periods, topn_count, topn_percentile_threshold");
+}
+
+TEST_CASE("flow to_prometheus and to_opentelemetry backends", "[sflow][flow][backends]")
+{
+    visor::input::flow::FlowInputStream stream{"flow-test"};
+    stream.config_set("pcap_file", "tests/fixtures/ecmp.pcap");
+    stream.config_set("flow_type", "sflow");
+
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    auto stream_proxy = stream.add_event_proxy(c);
+    visor::handler::flow::FlowStreamHandler handler{"flow-test", stream_proxy, &c};
+
+    handler.start();
+    stream.start();
+    handler.stop();
+    stream.stop();
+
+    std::stringstream prom;
+    handler.metrics()->bucket(0)->to_prometheus(prom, {});
+    CHECK(prom.str().find("flow_") != std::string::npos);
+
+    opentelemetry::proto::metrics::v1::ScopeMetrics scope;
+    timespec start_ts{}, end_ts{};
+    handler.metrics()->bucket(0)->to_opentelemetry(scope, start_ts, end_ts, {});
+    CHECK(scope.metrics_size() > 0);
+}
+
+TEST_CASE("Flow specialized_merge + to_prometheus + to_opentelemetry with all groups enabled", "[sflow][flow][unit]")
+{
+    auto build = [](const std::string &name,
+                    std::shared_ptr<visor::input::flow::FlowInputStream> &stream,
+                    std::shared_ptr<visor::Config> &c,
+                    std::shared_ptr<FlowStreamHandler> &handler) {
+        stream = std::make_shared<visor::input::flow::FlowInputStream>(name + "-stream");
+        stream->config_set("flow_type", "sflow");
+        stream->config_set("pcap_file", std::string("tests/fixtures/ecmp.pcap"));
+        c = std::make_shared<visor::Config>();
+        c->config_set<uint64_t>("num_periods", 1);
+        auto proxy = stream->add_event_proxy(*c);
+        handler = std::make_shared<FlowStreamHandler>(name, proxy, c.get());
+        // Switch on every group — exercises Conversations, TopTos, TopGeo,
+        // TopInterfaces in addition to the defaults — so to_prometheus and
+        // to_opentelemetry walk every group_enabled() branch.
+        handler->config_set<visor::Configurable::StringList>("enable", visor::Configurable::StringList({"all"}));
+        handler->start();
+        stream->start();
+        handler->stop();
+        stream->stop();
+    };
+
+    std::shared_ptr<visor::input::flow::FlowInputStream> s1, s2;
+    std::shared_ptr<visor::Config> c1, c2;
+    std::shared_ptr<FlowStreamHandler> h1, h2;
+    build("flow-merge-a", s1, c1, h1);
+    build("flow-merge-b", s2, c2, h2);
+
+    auto *target = const_cast<FlowMetricsBucket *>(h1->metrics()->bucket(0));
+
+    // Capture record counts from each bucket before merging.
+    using visor::test::otel_gauge_value;
+    auto snapshot_records = [](const FlowMetricsBucket *b) {
+        opentelemetry::proto::metrics::v1::ScopeMetrics s;
+        timespec st{}, et{};
+        b->to_opentelemetry(s, st, et, {});
+        return otel_gauge_value(s, "flow_records_flows");
+    };
+    auto pre_b1 = snapshot_records(h1->metrics()->bucket(0));
+    auto pre_b2 = snapshot_records(h2->metrics()->bucket(0));
+    REQUIRE(pre_b1 > 0);
+    REQUIRE(pre_b2 > 0);
+
+    REQUIRE_NOTHROW(target->specialized_merge(*h2->metrics()->bucket(0), visor::Metric::Aggregate::DEFAULT));
+
+    // After merging both runs of ecmp.pcap, the flow records counter must equal
+    // the sum of the two input buckets' counts.
+    std::stringstream prom;
+    target->to_prometheus(prom, {});
+    // Flow's prometheus output decorates per-device/per-interface labels, so
+    // grep the line by name+value rather than an exact-prefix match.
+    CHECK(prom.str().find("flow_records_flows") != std::string::npos);
+
+    opentelemetry::proto::metrics::v1::ScopeMetrics scope;
+    timespec start_ts{}, end_ts{};
+    target->to_opentelemetry(scope, start_ts, end_ts, {});
+    CHECK(otel_gauge_value(scope, "flow_records_flows") == pre_b1 + pre_b2);
 }

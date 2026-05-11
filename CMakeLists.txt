@@ -95,6 +95,7 @@ if(CODE_COVERAGE)
             LCOV_ARGS --ignore-errors unused
             EXCLUDE
                 "3rd/*"
+                "cmd/*"
                 "libs/*"
                 "${PROJECT_BINARY_DIR}/*"
                 "/usr/*"

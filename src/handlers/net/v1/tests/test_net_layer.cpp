@@ -2,6 +2,10 @@
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/catch_test_visor.hpp>
 
+#include <catch2/otel_helpers.hpp>
+#include <opentelemetry/proto/metrics/v1/metrics.pb.h>
+#include <sstream>
+
 #include "DnsStreamHandler.h"
 #include "DnstapInputStream.h"
 #include "GeoDB.h"
@@ -576,4 +580,84 @@ TEST_CASE("Net invalid config", "[net][filter][config]")
     NetStreamHandler net_handler{"net-test", stream_proxy, &c};
     net_handler.config_set<bool>("invalid_config", true);
     REQUIRE_THROWS_WITH(net_handler.start(), "invalid_config is an invalid/unsupported config or filter. The valid configs/filters are: geoloc_notfound, asn_notfound, only_geoloc_prefix, only_asn_number, recorded_stream, deep_sample_rate, num_periods, topn_count, topn_percentile_threshold");
+}
+
+TEST_CASE("net to_prometheus and to_opentelemetry backends", "[pcap][net][backends]")
+{
+    visor::input::pcap::PcapInputStream stream{"pcap-test"};
+    stream.config_set("pcap_file", "tests/fixtures/dns_ipv4_udp.pcap");
+    stream.config_set("bpf", "");
+
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    auto stream_proxy = stream.add_event_proxy(c);
+    visor::handler::net::NetStreamHandler handler{"net-test", stream_proxy, &c};
+
+    handler.start();
+    stream.start();
+    handler.stop();
+    stream.stop();
+
+    // Counter values match the existing "Parse net (dns) UDP IPv4 tests"
+    // case for the same fixture: UDP=140, IPv4=140, IPv6=0.
+    std::stringstream prom;
+    handler.metrics()->bucket(0)->to_prometheus(prom, {});
+    auto prom_text = prom.str();
+    CHECK(prom_text.find("packets_udp{} 140") != std::string::npos);
+    CHECK(prom_text.find("packets_ipv4{} 140") != std::string::npos);
+    CHECK(prom_text.find("packets_ipv6{} 0") != std::string::npos);
+
+    opentelemetry::proto::metrics::v1::ScopeMetrics scope;
+    timespec start_ts{}, end_ts{};
+    handler.metrics()->bucket(0)->to_opentelemetry(scope, start_ts, end_ts, {});
+    using visor::test::otel_gauge_value;
+    CHECK(otel_gauge_value(scope, "packets_udp") == 140);
+    CHECK(otel_gauge_value(scope, "packets_ipv4") == 140);
+    CHECK(otel_gauge_value(scope, "packets_ipv6") == 0);
+}
+
+TEST_CASE("Net v1 process_net_layer shallow overload", "[net][unit]")
+{
+    // Direct call to NetworkMetricsBucket::process_net_layer(dir, l3, l4, payload_size)
+    // — the no-NetworkPacket overload, used when only direction + sizes are known.
+    visor::input::pcap::PcapInputStream stream{"pcap-test"};
+    stream.config_set("pcap_file", std::string("tests/fixtures/dns_ipv4_udp.pcap"));
+    stream.config_set("bpf", std::string(""));
+
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    auto stream_proxy = stream.add_event_proxy(c);
+    visor::handler::net::NetStreamHandler handler{"net-unit", stream_proxy, &c};
+    handler.start();
+
+    auto *bucket = const_cast<visor::handler::net::NetworkMetricsBucket *>(handler.metrics()->bucket(0));
+    // Snapshot the counters before our direct calls so we can assert deltas.
+    using visor::test::otel_gauge_value;
+    auto snapshot = [&](const std::string &name) {
+        opentelemetry::proto::metrics::v1::ScopeMetrics s;
+        timespec st{}, et{};
+        bucket->to_opentelemetry(s, st, et, {});
+        return otel_gauge_value(s, name);
+    };
+    auto in0 = snapshot("packets_in");
+    auto out0 = snapshot("packets_out");
+    auto udp0 = snapshot("packets_udp");
+    auto tcp0 = snapshot("packets_tcp");
+    auto v40 = snapshot("packets_ipv4");
+    auto v60 = snapshot("packets_ipv6");
+
+    bucket->process_net_layer(visor::input::pcap::PacketDirection::toHost, pcpp::IPv4, pcpp::UDP, 128);
+    bucket->process_net_layer(visor::input::pcap::PacketDirection::fromHost, pcpp::IPv4, pcpp::TCP, 64);
+    bucket->process_net_layer(visor::input::pcap::PacketDirection::unknown, pcpp::IPv6, pcpp::UDP, 256);
+
+    // +1 toHost, +1 fromHost, +1 unknown (no direction counter); +2 udp +1 tcp;
+    // +2 ipv4, +1 ipv6.
+    CHECK(snapshot("packets_in") == in0 + 1);
+    CHECK(snapshot("packets_out") == out0 + 1);
+    CHECK(snapshot("packets_udp") == udp0 + 2);
+    CHECK(snapshot("packets_tcp") == tcp0 + 1);
+    CHECK(snapshot("packets_ipv4") == v40 + 2);
+    CHECK(snapshot("packets_ipv6") == v60 + 1);
+
+    handler.stop();
 }

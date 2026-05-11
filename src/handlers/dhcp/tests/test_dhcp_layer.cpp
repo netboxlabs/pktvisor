@@ -1,5 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_test_visor.hpp>
+#include <catch2/otel_helpers.hpp>
+
+#include <opentelemetry/proto/metrics/v1/metrics.pb.h>
+#include <sstream>
 
 #include "DhcpStreamHandler.h"
 #include "PcapInputStream.h"
@@ -91,4 +95,39 @@ TEST_CASE("Parse DHCP V6 tests", "[pcap][dhcp]")
 
     CHECK(j["top_clients"][0]["name"] == nullptr);
     CHECK(j["top_servers"][0]["name"] == "08:00:27:d4:10:bb/fe80::a00:27ff:fed4:10bb");
+}
+
+TEST_CASE("DHCP to_prometheus and to_opentelemetry backends", "[pcap][dhcp][backends]")
+{
+    PcapInputStream stream{"pcap-test"};
+    stream.config_set("pcap_file", "tests/fixtures/dhcp-flow.pcap");
+    stream.config_set("bpf", "");
+
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    auto stream_proxy = stream.add_event_proxy(c);
+    DhcpStreamHandler dhcp_handler{"dhcp-test", stream_proxy, &c};
+
+    dhcp_handler.start();
+    stream.start();
+    dhcp_handler.stop();
+    stream.stop();
+
+    // Counter values come from "Parse DHCP tests": DISCOVER=1, OFFER=1,
+    // REQUEST=3, ACK=3. Round-trip through both backends.
+    std::stringstream prom;
+    dhcp_handler.metrics()->bucket(0)->to_prometheus(prom, {});
+    auto prom_text = prom.str();
+    CHECK(prom_text.find("dhcp_wire_packets_discover{} 1") != std::string::npos);
+    CHECK(prom_text.find("dhcp_wire_packets_offer{} 1") != std::string::npos);
+    CHECK(prom_text.find("dhcp_wire_packets_request{} 3") != std::string::npos);
+    CHECK(prom_text.find("dhcp_wire_packets_ack{} 3") != std::string::npos);
+
+    opentelemetry::proto::metrics::v1::ScopeMetrics scope;
+    timespec start_ts{}, end_ts{};
+    dhcp_handler.metrics()->bucket(0)->to_opentelemetry(scope, start_ts, end_ts, {});
+    using visor::test::otel_gauge_value;
+    CHECK(otel_gauge_value(scope, "dhcp_wire_packets_discover") == 1);
+    CHECK(otel_gauge_value(scope, "dhcp_wire_packets_request") == 3);
+    CHECK(otel_gauge_value(scope, "dhcp_wire_packets_ack") == 3);
 }
