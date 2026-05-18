@@ -661,3 +661,86 @@ TEST_CASE("Flow specialized_merge + to_prometheus + to_opentelemetry with all gr
     target->to_opentelemetry(scope, start_ts, end_ts, {});
     CHECK(otel_gauge_value(scope, "flow_records_flows") == pre_b1 + pre_b2);
 }
+
+// The fixtures below were hand-rolled to exercise parser branches the
+// pre-existing nf5/nf9/ipfix/ecmp captures don't touch — NetflowData.h's
+// v1 and v7 dispatch arms and SflowData.h's IPv6 sample-header path.
+
+TEST_CASE("Parse netflow v1 stream", "[netflow][flow]")
+{
+    FlowInputStream stream{"netflow-v1-test"};
+    stream.config_set("flow_type", "netflow");
+    stream.config_set("pcap_file", "tests/fixtures/nf1.pcap");
+
+    visor::Config c;
+    auto stream_proxy = stream.add_event_proxy(c);
+    c.config_set<uint64_t>("num_periods", 1);
+    FlowStreamHandler flow_handler{"flow-v1", stream_proxy, &c};
+
+    flow_handler.start();
+    stream.start();
+    stream.stop();
+    flow_handler.stop();
+
+    auto event_data = flow_handler.metrics()->bucket(0)->event_data_locked();
+    CHECK(event_data.num_events->value() == 1);
+    CHECK(event_data.num_samples->value() == 1);
+
+    nlohmann::json j;
+    flow_handler.metrics()->bucket(0)->to_json(j);
+    // Fixture has 2 v1 records (UDP + TCP) sourced from 10.0.0.1.
+    CHECK(j["devices"]["10.0.0.1"]["records_flows"] == 2);
+}
+
+TEST_CASE("Parse netflow v7 stream", "[netflow][flow]")
+{
+    FlowInputStream stream{"netflow-v7-test"};
+    stream.config_set("flow_type", "netflow");
+    stream.config_set("pcap_file", "tests/fixtures/nf7.pcap");
+
+    visor::Config c;
+    auto stream_proxy = stream.add_event_proxy(c);
+    c.config_set<uint64_t>("num_periods", 1);
+    FlowStreamHandler flow_handler{"flow-v7", stream_proxy, &c};
+
+    flow_handler.start();
+    stream.start();
+    stream.stop();
+    flow_handler.stop();
+
+    auto event_data = flow_handler.metrics()->bucket(0)->event_data_locked();
+    CHECK(event_data.num_events->value() == 1);
+    CHECK(event_data.num_samples->value() == 1);
+
+    nlohmann::json j;
+    flow_handler.metrics()->bucket(0)->to_json(j);
+    // Fixture has 2 v7 records (UDP + TCP) from agent 10.0.0.1.
+    CHECK(j["devices"]["10.0.0.1"]["records_flows"] == 2);
+}
+
+TEST_CASE("Parse sflow IPv6 sample", "[sflow][flow]")
+{
+    FlowInputStream stream{"sflow-ipv6-test"};
+    stream.config_set("flow_type", "sflow");
+    stream.config_set("pcap_file", "tests/fixtures/sflow_ipv6.pcap");
+
+    visor::Config c;
+    auto stream_proxy = stream.add_event_proxy(c);
+    c.config_set<uint64_t>("num_periods", 1);
+    FlowStreamHandler flow_handler{"flow-sflow-v6", stream_proxy, &c};
+
+    flow_handler.start();
+    stream.start();
+    stream.stop();
+    flow_handler.stop();
+
+    auto event_data = flow_handler.metrics()->bucket(0)->event_data_locked();
+    // Single sFlow datagram with one flow sample carrying an IPv6 packet.
+    CHECK(event_data.num_events->value() == 1);
+    CHECK(event_data.num_samples->value() == 1);
+
+    nlohmann::json j;
+    flow_handler.metrics()->bucket(0)->to_json(j);
+    // Agent address is 10.0.0.99 (IPv4 agent address with an IPv6 payload).
+    CHECK(j["devices"]["10.0.0.99"]["records_flows"] >= 1);
+}
