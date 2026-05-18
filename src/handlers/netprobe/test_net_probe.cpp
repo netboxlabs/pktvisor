@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_test_visor.hpp>
+#include <catch2/otel_helpers.hpp>
 
 #include <sstream>
 
@@ -239,6 +240,35 @@ TEST_CASE("NetProbe to_prometheus emits configured metrics", "[netprobe][unit]")
     // Counter name is registered in Target ctor as "packets_timeout".
     CHECK(s.find("packets_timeout") != std::string::npos);
     CHECK(s.find("tprom") != std::string::npos);
+}
+
+TEST_CASE("NetProbe to_opentelemetry emits gauge values per target", "[netprobe][unit]")
+{
+    UnitFixture fx;
+
+    // tgt-ok: send (attempts++) then recv within ttl (successes++)
+    timespec ts_send{500, 0};
+    timespec ts_recv{500, 50'000'000};
+    fx.manager()->process_netprobe_tcp(true, "tgt-ok", ts_send);
+    fx.manager()->process_netprobe_tcp(false, "tgt-ok", ts_recv);
+
+    // tgt-fail: bare Timeout failure (no attempts increment per process_failure)
+    fx.manager()->process_failure(ErrorType::Timeout, "tgt-fail");
+    fx.manager()->process_failure(ErrorType::DnsLookupFailure, "tgt-fail");
+
+    opentelemetry::proto::metrics::v1::ScopeMetrics scope;
+    timespec start_ts{500, 0};
+    timespec end_ts{501, 0};
+    fx.manager()->bucket(0)->to_opentelemetry(scope, start_ts, end_ts, {});
+
+    using visor::test::otel_gauge_sum;
+    // Each Counter::to_opentelemetry emits a separate metric entry per target,
+    // so the bucket-level total for each name is the sum across all targets.
+    CHECK(otel_gauge_sum(scope, "netprobe_attempts") == 1);
+    CHECK(otel_gauge_sum(scope, "netprobe_successes") == 1);
+    CHECK(otel_gauge_sum(scope, "netprobe_packets_timeout") == 1);
+    CHECK(otel_gauge_sum(scope, "netprobe_dns_lookup_failures") == 1);
+    CHECK(otel_gauge_sum(scope, "netprobe_connect_failures") == 0);
 }
 
 TEST_CASE("NetProbe specialized_merge aggregates targets across buckets", "[netprobe][unit]")
