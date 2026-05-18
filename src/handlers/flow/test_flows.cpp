@@ -741,8 +741,13 @@ TEST_CASE("Parse sflow IPv6 sample", "[sflow][flow]")
 
     nlohmann::json j;
     flow_handler.metrics()->bucket(0)->to_json(j);
-    // Agent address is 10.0.0.99 (IPv4 agent address with an IPv6 payload).
-    CHECK(j["devices"]["10.0.0.99"]["records_flows"] >= 1);
+    auto &dev = j["devices"]["10.0.0.99"];
+    CHECK(dev["records_flows"] == 1);
+    // Embedded payload is IPv6/UDP; assert IPv6-specific counters to
+    // prove decodeIPV6 actually ran (a bare records_flows check would
+    // still pass if the protocol classification regressed).
+    CHECK(dev["interfaces"]["1"]["in_ipv6_packets"] == 1);
+    CHECK(dev["interfaces"]["1"]["in_udp_packets"] == 1);
 }
 
 TEST_CASE("Parse sflow IPv4/IPv6 keyed sample elements", "[sflow][flow]")
