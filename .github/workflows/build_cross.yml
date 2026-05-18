@@ -225,10 +225,7 @@ jobs:
     name: alpine-${{matrix.arch}}
     needs: pkvisor
     runs-on: ubuntu-latest
-    # TEMPORARY: also fire on this PR so we can validate the published image
-    # before merge. Revert to `github.event_name == 'push' && github.ref == 'refs/heads/develop'`
-    # before merging.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop' || github.head_ref == 'chore/alpine-image'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
     strategy:
       fail-fast: false
       matrix:
@@ -314,10 +311,7 @@ jobs:
   merge-alpine:
     needs: package-alpine
     runs-on: ubuntu-latest
-    # TEMPORARY: also fire on this PR so we can validate the published image
-    # before merge. Revert to `github.event_name == 'push' && github.ref == 'refs/heads/develop'`
-    # before merging.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop' || github.head_ref == 'chore/alpine-image'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
     steps:
       - name: Download digests
         uses: actions/download-artifact@v8
