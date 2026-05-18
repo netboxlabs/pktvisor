@@ -114,6 +114,8 @@ jobs:
           CC=${{github.workspace}}/toolchain/bin/${{matrix.cc}}
           CXX=${{github.workspace}}/toolchain/bin/${{matrix.cxx}}
           LDFLAGS=${{matrix.ldflags}}
+          [conf]
+          protobuf/*:tools.cmake.cmaketoolchain:extra_variables={"protobuf_LINK_LIBATOMIC": "OFF"}
           EOF
 
       - name: Setup Conan Cache
