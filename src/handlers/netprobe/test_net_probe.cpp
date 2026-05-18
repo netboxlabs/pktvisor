@@ -3,6 +3,17 @@
 
 #include <sstream>
 
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#pragma GCC diagnostic ignored "-Wold-style-cast"
+#pragma GCC diagnostic ignored "-Wzero-as-null-pointer-constant"
+#endif
+#include <pcapplusplus/IcmpLayer.h>
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
+
 #include "NetProbeInputStream.h"
 #include "NetProbeStreamHandler.h"
 
@@ -131,6 +142,76 @@ TEST_CASE("NetProbe TCP transaction timeout", "[netprobe][unit]")
 
     CHECK(j["targets"]["tcp-late"]["attempts"] == 1);
     CHECK(j["targets"]["tcp-late"]["packets_timeout"] == 1);
+}
+
+TEST_CASE("NetProbe ICMP request/reply transaction lifecycle", "[netprobe][unit]")
+{
+    // Drive process_netprobe_icmp directly with handcrafted IcmpLayers
+    // (setEchoRequestData / setEchoReplyData), covering the ICMP_ECHO_REQUEST
+    // start-transaction path and the ICMP_ECHO_REPLY end-transaction path —
+    // both branches inside NetProbeMetricsManager::process_netprobe_icmp.
+    UnitFixture fx;
+
+    const uint8_t payload[] = {0xde, 0xad, 0xbe, 0xef};
+    timespec ts_req{200, 0};
+    timespec ts_rep{200, 12'000'000}; // 12ms later, well inside the default 5s TTL
+
+    pcpp::IcmpLayer req;
+    req.setEchoRequestData(/*id=*/0x1234, /*sequence=*/1, /*timestamp=*/0, payload, sizeof(payload));
+    fx.manager()->process_netprobe_icmp(&req, "icmp-tgt", ts_req);
+
+    pcpp::IcmpLayer reply;
+    reply.setEchoReplyData(/*id=*/0x1234, /*sequence=*/1, /*timestamp=*/0, payload, sizeof(payload));
+    fx.manager()->process_netprobe_icmp(&reply, "icmp-tgt", ts_rep);
+
+    json j;
+    fx.manager()->bucket(0)->to_json(j);
+    CHECK(j["targets"]["icmp-tgt"]["attempts"] == 1);
+    CHECK(j["targets"]["icmp-tgt"]["successes"] == 1);
+}
+
+TEST_CASE("NetProbe ICMP reply that times out records a failure", "[netprobe][unit]")
+{
+    // ECHO_REQUEST → start transaction; ECHO_REPLY 6s later (default TTL is
+    // 5s) → maybe_end_transaction returns TimedOut → process_failure(Timeout).
+    UnitFixture fx;
+
+    const uint8_t payload[] = {0x00, 0x11, 0x22, 0x33};
+    timespec ts_req{100, 0};
+    timespec ts_rep{106, 0};
+
+    pcpp::IcmpLayer req;
+    req.setEchoRequestData(0xCAFE, 7, 0, payload, sizeof(payload));
+    fx.manager()->process_netprobe_icmp(&req, "icmp-slow", ts_req);
+
+    pcpp::IcmpLayer reply;
+    reply.setEchoReplyData(0xCAFE, 7, 0, payload, sizeof(payload));
+    fx.manager()->process_netprobe_icmp(&reply, "icmp-slow", ts_rep);
+
+    json j;
+    fx.manager()->bucket(0)->to_json(j);
+    CHECK(j["targets"]["icmp-slow"]["attempts"] == 1);
+    CHECK(j["targets"]["icmp-slow"]["packets_timeout"] == 1);
+}
+
+TEST_CASE("NetProbe ICMP reply with no prior request is ignored", "[netprobe][unit]")
+{
+    // ECHO_REPLY with no matching start_transaction → Result::NotExist branch
+    // in maybe_end_transaction → neither new_transaction nor process_failure
+    // fires. Counters must stay at zero.
+    UnitFixture fx;
+
+    const uint8_t payload[] = {0xAA};
+    timespec ts{300, 0};
+
+    pcpp::IcmpLayer orphan_reply;
+    orphan_reply.setEchoReplyData(0xBEEF, 99, 0, payload, sizeof(payload));
+    fx.manager()->process_netprobe_icmp(&orphan_reply, "icmp-orphan", ts);
+
+    json j;
+    fx.manager()->bucket(0)->to_json(j);
+    // No targets created — the orphan reply produced no metrics.
+    CHECK(!j.contains("targets"));
 }
 
 TEST_CASE("NetProbe process_filtered increments event count", "[netprobe][unit]")
