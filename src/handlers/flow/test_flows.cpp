@@ -744,3 +744,40 @@ TEST_CASE("Parse sflow IPv6 sample", "[sflow][flow]")
     // Agent address is 10.0.0.99 (IPv4 agent address with an IPv6 payload).
     CHECK(j["devices"]["10.0.0.99"]["records_flows"] >= 1);
 }
+
+TEST_CASE("Parse sflow IPv4/IPv6 keyed sample elements", "[sflow][flow]")
+{
+    // Two flow_samples in the datagram, each carrying a non-header element:
+    //   SFLFLOW_IPV4 (tag=3) → readFlowSample_IPv4 in SflowData.h
+    //   SFLFLOW_IPV6 (tag=4) → readFlowSample_IPv6 in SflowData.h
+    // Existing sflow fixtures only emit SFLFLOW_HEADER (tag=1).
+    FlowInputStream stream{"sflow-keyed-test"};
+    stream.config_set("flow_type", "sflow");
+    stream.config_set("pcap_file", "tests/fixtures/sflow_keyed.pcap");
+
+    visor::Config c;
+    auto stream_proxy = stream.add_event_proxy(c);
+    c.config_set<uint64_t>("num_periods", 1);
+    FlowStreamHandler flow_handler{"flow-sflow-keyed", stream_proxy, &c};
+
+    flow_handler.start();
+    stream.start();
+    stream.stop();
+    flow_handler.stop();
+
+    auto event_data = flow_handler.metrics()->bucket(0)->event_data_locked();
+    CHECK(event_data.num_events->value() == 1);
+    CHECK(event_data.num_samples->value() == 1);
+
+    nlohmann::json j;
+    flow_handler.metrics()->bucket(0)->to_json(j);
+    auto &dev = j["devices"]["10.0.0.77"];
+    CHECK(dev["records_flows"] == 2);
+    // The IPv4 element: src 192.0.2.10 → dst 192.0.2.20, TCP, length 1500.
+    // The IPv6 element: src 2001:db8::1 → dst 2001:db8::2, UDP, length 1280.
+    auto &iface = dev["interfaces"]["1"];
+    CHECK(iface["in_ipv4_packets"] == 1);
+    CHECK(iface["in_ipv6_packets"] == 1);
+    CHECK(iface["in_tcp_bytes"] == 1500);
+    CHECK(iface["in_udp_bytes"] == 1280);
+}
