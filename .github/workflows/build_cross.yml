@@ -251,6 +251,10 @@ jobs:
           name: pktvisor-reader-linux-${{matrix.arch}}-static
           path: ./
 
+      - name: Configure CMake to generate version.go
+        shell: bash
+        run: VERSION_ONLY=1 cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=Release -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=./cmake/conan_provider.cmake
+
       - name: Stage pktvisor sources for go build
         run: |
           mv src pktvisor-src
@@ -272,6 +276,9 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a #v4.0.0
 
       - name: Set up Docker Buildx
         id: buildx
