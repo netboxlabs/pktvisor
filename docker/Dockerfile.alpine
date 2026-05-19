@@ -1,0 +1,23 @@
+FROM alpine:3.21
+
+RUN apk add --no-cache ca-certificates curl wget gzip
+
+COPY ./pktvisord /usr/local/sbin/pktvisord
+COPY ./pktvisor-reader /usr/local/sbin/pktvisor-reader
+COPY ./pktvisor-cli /usr/local/bin/pktvisor-cli
+COPY ./docker/alpine/entry.sh /entry.sh
+COPY ./docker/alpine/run.sh /run.sh
+
+RUN mkdir /geo-db \
+    && wget -q -O /geo-db/asn.mmdb.gz https://github.com/orb-community/geo-asn-database/raw/main/asn.mmdb.gz \
+    && wget -q -O /geo-db/city.mmdb.gz https://github.com/orb-community/geo-asn-database/raw/main/city.mmdb.gz
+
+RUN mkdir /iana
+COPY ./custom-iana.csv /iana/custom-iana.csv
+
+RUN chmod a+x /usr/local/sbin/pktvisord \
+    /usr/local/sbin/pktvisor-reader \
+    /usr/local/bin/pktvisor-cli \
+    /entry.sh /run.sh
+
+ENTRYPOINT [ "/entry.sh" ]
