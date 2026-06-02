@@ -1,4 +1,4 @@
-FROM golang:bullseye
+FROM golang:1.26-alpine
 
 LABEL maintainer="netboxlabs"
 LABEL version="1.0.0"

@@ -30,11 +30,11 @@ RUN \
     PKG_CONFIG_PATH=/local/lib/pkgconfig cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=./cmake/conan_provider.cmake .. && \
     make all -j 4
 
-FROM golang:latest AS gobuild
+FROM golang:1.26-alpine AS gobuild
 COPY golang/ /src/
 WORKDIR /src/
 COPY --from=cppbuild /pktvisor-src/golang/pkg/client/version.go /src/pkg/client/version.go
-RUN go build -o pktvisor-cli cmd/pktvisor-cli/main.go
+RUN CGO_ENABLED=0 go build -o pktvisor-cli cmd/pktvisor-cli/main.go
 
 FROM ubuntu:noble AS runtime
 
