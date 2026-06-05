@@ -136,7 +136,7 @@ def check_port_is_available(containers_id, available=True):
         retries = 0
         while available_port is None and retries < 10:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.bind(('', 0))
+            s.bind(('127.0.0.1', 0))
             addr = s.getsockname()
             s.close()
             retries += 1
