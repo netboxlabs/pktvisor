@@ -8,12 +8,12 @@ class Pktvisor(ConanFile):
 
     def requirements(self):
         self.requires("catch2/3.15.1")
-        self.requires("cpp-httplib/0.18.3")
+        self.requires("cpp-httplib/0.27.0")
         self.requires("docopt.cpp/0.6.3")
         self.requires("fast-cpp-csv-parser/cci.20240102")
         self.requires("json-schema-validator/2.4.0")
         self.requires("libmaxminddb/1.12.2")
-        self.requires("nlohmann_json/3.11.3")
+        self.requires("nlohmann_json/3.12.0", force=True)
         self.requires("openssl/3.6.3")
         if self.settings.os != "Windows":
             self.requires("libpcap/1.10.6", force=True)
