@@ -18,7 +18,7 @@ class Pktvisor(ConanFile):
         if self.settings.os != "Windows":
             self.requires("libpcap/1.10.6", force=True)
         else:
-            self.requires("npcap/1.86")
+            self.requires("npcap/1.86", force=True)
         self.requires("opentelemetry-cpp/1.26.0")
         self.requires("pcapplusplus/25.05")
         self.requires("protobuf/6.33.5")
