@@ -14,7 +14,7 @@ class Pktvisor(ConanFile):
         self.requires("json-schema-validator/2.4.0")
         self.requires("libmaxminddb/1.12.2")
         self.requires("nlohmann_json/3.11.3")
-        self.requires("openssl/3.6.2")
+        self.requires("openssl/3.6.3")
         if self.settings.os != "Windows":
             self.requires("libpcap/1.10.6", force=True)
         else:
@@ -23,10 +23,9 @@ class Pktvisor(ConanFile):
         self.requires("pcapplusplus/25.05")
         self.requires("protobuf/6.33.5")
         self.requires("sigslot/1.2.3")
-        #self.requires("fmt/10.2.1", force=True)
         self.requires("spdlog/1.17.0")
         self.requires("uvw/3.4.0")
-        self.requires("yaml-cpp/0.8.0")
+        self.requires("yaml-cpp/0.9.0")
         self.requires("robin-hood-hashing/3.11.5")
         self.requires("libcurl/8.20.0")
         if (
