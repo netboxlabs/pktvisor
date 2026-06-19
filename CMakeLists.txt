@@ -108,12 +108,7 @@ enable_testing()
 
 message(STATUS "Building pktvisor version ${CMAKE_PROJECT_VERSION_MAJOR}.${CMAKE_PROJECT_VERSION_MINOR}.${CMAKE_PROJECT_VERSION_PATCH}${VISOR_PRERELEASE}")
 
-# opentelemetry-cpp (>= 1.26.0) generates its protobuf headers with
-# protoc --cpp_out=dllexport_decl=OPENTELEMETRY_PROTO_API. For a static build the
-# macro must expand to nothing; upstream defines it on the proto target, but the
-# Conan recipe does not propagate that definition to consumers. The generated
-# *.pb.h are included from several targets (visor-core, handler tests, visor_test
-# helpers), so define it globally here for every consumer of those headers.
+# opentelemetry-cpp 1.26.0 generates proto headers with dllexport_decl but the Conan recipe doesn't propagate the macro to consumers; define it empty (static build).
 add_compile_definitions(OPENTELEMETRY_PROTO_API=)
 
 add_subdirectory(3rd)
