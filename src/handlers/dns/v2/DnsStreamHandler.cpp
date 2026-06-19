@@ -5,6 +5,7 @@
 #include "DnsStreamHandler.h"
 #include "HandlerModulePlugin.h"
 #include "utils.h"
+#include <fmt/ranges.h>
 #ifdef __GNUC__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"

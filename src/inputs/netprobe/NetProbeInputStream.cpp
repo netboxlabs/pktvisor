@@ -7,6 +7,7 @@
 #include "PingProbe.h"
 #include "TcpProbe.h"
 #include "ThreadName.h"
+#include <fmt/ranges.h>
 #ifdef __GNUC__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"

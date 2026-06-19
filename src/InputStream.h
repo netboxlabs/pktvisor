@@ -7,6 +7,7 @@
 #include "AbstractModule.h"
 #include "InputEventProxy.h"
 #include "StreamHandler.h"
+#include <fmt/ranges.h>
 
 namespace visor {
 
