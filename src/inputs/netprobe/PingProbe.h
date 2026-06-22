@@ -91,6 +91,7 @@ class PingProbe final : public NetProbe
 {
     static std::unique_ptr<PingReceiver> _receiver;
     static thread_local SOCKET _sock;
+    static thread_local SOCKET _sock6;
 
     bool _init{false};
     bool _is_ipv6{false};

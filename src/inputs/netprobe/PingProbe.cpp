@@ -12,6 +12,7 @@ std::vector<std::pair<pcpp::Packet, timespec>> PingReceiver::recv_packets{};
 std::unique_ptr<PingReceiver> PingProbe::_receiver{nullptr};
 thread_local std::atomic<uint32_t> PingProbe::sock_count{0};
 thread_local SOCKET PingProbe::_sock{INVALID_SOCKET};
+thread_local SOCKET PingProbe::_sock6{INVALID_SOCKET};
 
 PingReceiver::PingReceiver()
 {
@@ -126,10 +127,6 @@ bool PingProbe::start(std::shared_ptr<uvw::loop> io_loop)
         return false;
     }
 
-    // TODO support ICMPv6
-    if (_ip.isIPv6()) {
-        return false;
-    }
     // add validator
     _payload_array = validator;
     if (_config.packet_payload_size < validator.size()) {
@@ -152,12 +149,11 @@ bool PingProbe::start(std::shared_ptr<uvw::loop> io_loop)
     _interval_timer->on<uvw::timer_event>([this](const auto &, auto &) {
         _internal_sequence = 0;
 
-        if (auto error = _create_socket(); error.has_value()) {
+        if (auto error = _get_addr(); error.has_value()) {
             _fail(error.value(), TestType::Ping, _name);
             return;
         }
-
-        if (auto error = _get_addr(); error.has_value()) {
+        if (auto error = _create_socket(); error.has_value()) {
             _fail(error.value(), TestType::Ping, _name);
             return;
         }
@@ -280,37 +276,37 @@ std::optional<ErrorType> PingProbe::_get_addr()
 
 std::optional<ErrorType> PingProbe::_create_socket()
 {
-    if (_sock != INVALID_SOCKET) {
+    SOCKET &sock = _is_ipv6 ? _sock6 : _sock;
+    if (sock != INVALID_SOCKET) {
         return std::nullopt;
     }
+    int domain = _is_ipv6 ? AF_INET6 : AF_INET;
+    int proto = _is_ipv6 ? IPPROTO_ICMPV6 : IPPROTO_ICMP;
 
-    int domain = AF_INET;
-    if (_is_ipv6) {
-        domain = AF_INET6;
-    }
-
-    _sock = socket(domain, SOCK_RAW, IPPROTO_ICMP);
+    sock = socket(domain, SOCK_RAW, proto);
 #ifdef _WIN32
-    if (_sock == INVALID_SOCKET) {
+    if (sock == INVALID_SOCKET) {
         return ErrorType::SocketError;
     }
     unsigned long flag = 1;
-    if (ioctlsocket(_sock, FIONBIO, &flag) == SOCKET_ERROR) {
+    if (ioctlsocket(sock, FIONBIO, &flag) == SOCKET_ERROR) {
         return ErrorType::SocketError;
     }
 #else
-    if (_sock == INVALID_SOCKET) {
-        _sock = socket(domain, SOCK_DGRAM, IPPROTO_ICMP);
+    if (sock == INVALID_SOCKET) {
+        sock = socket(domain, SOCK_DGRAM, proto); // best-effort; matching reliable on RAW only
     }
-    int flag = 1;
-    if ((flag = fcntl(_sock, F_GETFL, 0)) == SOCKET_ERROR) {
+    if (sock == INVALID_SOCKET) {
         return ErrorType::SocketError;
     }
-    if (fcntl(_sock, F_SETFL, flag | O_NONBLOCK) == SOCKET_ERROR) {
+    int flag = 1;
+    if ((flag = fcntl(sock, F_GETFL, 0)) == SOCKET_ERROR) {
+        return ErrorType::SocketError;
+    }
+    if (fcntl(sock, F_SETFL, flag | O_NONBLOCK) == SOCKET_ERROR) {
         return ErrorType::SocketError;
     }
 #endif
-
     return std::nullopt;
 }
 
@@ -336,10 +332,13 @@ void PingProbe::_close_socket()
         return;
     }
 #ifdef _WIN32
-    closesocket(_sock);
+    if (_sock != INVALID_SOCKET) closesocket(_sock);
+    if (_sock6 != INVALID_SOCKET) closesocket(_sock6);
 #else
-    close(_sock);
+    if (_sock != INVALID_SOCKET) close(_sock);
+    if (_sock6 != INVALID_SOCKET) close(_sock6);
 #endif
     _sock = INVALID_SOCKET;
+    _sock6 = INVALID_SOCKET;
 }
 }
