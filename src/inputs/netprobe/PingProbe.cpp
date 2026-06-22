@@ -185,6 +185,7 @@ void PingReceiver::_setup_receiver()
         setsockopt(_sock6, IPPROTO_ICMPV6, ICMP6_FILTER, &filt, sizeof(filt));
 #endif
         _poll6 = _io_loop->resource<uvw::poll_handle>(static_cast<uvw::os_socket_handle>(_sock6));
+        bool v6_ready = false;
         if (_poll6) {
             _poll6->on<uvw::error_event>([](const auto &, auto &handler) { handler.close(); });
             _poll6->on<uvw::poll_event>([this](const uvw::poll_event &, uvw::poll_handle &) {
@@ -207,8 +208,25 @@ void PingReceiver::_setup_receiver()
                     _recv_packets.emplace_back(*carrier, stamp);
                 }
             });
-            _poll6->init();
-            _poll6->start(uvw::poll_handle::poll_event_flags::READABLE);
+            // resource<>() already initialized the handle; start() is what actually arms polling, so
+            // gate readiness on its return rather than merely on _poll6 being non-null.
+            v6_ready = (_poll6->start(uvw::poll_handle::poll_event_flags::READABLE) == 0);
+        }
+        if (!v6_ready) {
+            // The poll handle could not be created or armed for _sock6. With no armed handler nothing
+            // ever reads replies, yet v6_active() (which only checks _sock6) would report IPv6 as
+            // working and the send path would keep emitting echoes that silently time out. Close and
+            // invalidate _sock6 so IPv6 ping is cleanly disabled instead of silently broken. The
+            // destructor closes _poll6 (if non-null) and skips _sock6 once it is INVALID_SOCKET.
+            if (auto lg = spdlog::get("visor")) {
+                lg->warn("netprobe: unable to arm ICMPv6 poll handler; IPv6 ping disabled");
+            }
+#ifdef _WIN32
+            closesocket(_sock6);
+#else
+            close(_sock6);
+#endif
+            _sock6 = INVALID_SOCKET;
         }
     }
 
@@ -380,6 +398,13 @@ std::optional<ErrorType> PingProbe::_get_addr()
 
 std::optional<ErrorType> PingProbe::_create_socket()
 {
+    // A v6 probe's send socket is separate from the shared receiver's raw ICMPv6 socket; replies are
+    // only ever read off the receiver. If the receiver has no working v6 socket, sending would just
+    // produce echoes that can never be matched (perpetual silent timeouts), so fail cleanly here and
+    // surface a socket error instead. (v4 has no such split — its receiver socket always opens.)
+    if (_is_ipv6 && !receiver_v6_active()) {
+        return ErrorType::SocketError;
+    }
     SOCKET &sock = _is_ipv6 ? _sock6 : _sock;
     if (sock != INVALID_SOCKET) {
         return std::nullopt;
