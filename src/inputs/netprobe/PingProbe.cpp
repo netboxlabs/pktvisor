@@ -6,6 +6,7 @@
 #include <pcapplusplus/TimespecTimeval.h>
 #include <spdlog/spdlog.h>
 #include <uvw/idle.h>
+#include <cstring>
 #ifndef _WIN32
 #include <netinet/icmp6.h>
 #endif
@@ -397,15 +398,11 @@ std::optional<ErrorType> PingProbe::_create_socket()
     if (ioctlsocket(sock, FIONBIO, &flag) == SOCKET_ERROR) {
         return ErrorType::SocketError;
     }
-    if (_is_ipv6) {
-        // Windows raw sockets do not auto-fill the mandatory ICMPv6 checksum, so packets would go
-        // out with checksum 0 and be dropped. IPV6_CHECKSUM makes the kernel compute and insert it
-        // (over the IPv6 pseudo-header, using the chosen source address) at the checksum field
-        // offset (2). POSIX enables this implicitly for IPPROTO_ICMPV6 and rejects setting it, so
-        // this is Windows-only. (Verify end-to-end on Windows — inbound raw ICMPv6 delivery too.)
-        int csum_offset = 2;
-        setsockopt(sock, IPPROTO_IPV6, IPV6_CHECKSUM, reinterpret_cast<const char *>(&csum_offset), sizeof(csum_offset));
-    }
+    // No IPV6_CHECKSUM setsockopt here: for an IPPROTO_ICMPV6 raw socket the kernel computes and
+    // inserts the mandatory ICMPv6 checksum unconditionally (RFC 3542 sec 3.1) on both POSIX and
+    // Windows, and attempting to set IPV6_CHECKSUM on such a socket fails. So _send_icmp_v6 leaves
+    // the checksum 0 and the kernel fills it. (The Windows v6 send/recv path still needs end-to-end
+    // verification on a real Windows host — including inbound raw ICMPv6 delivery.)
 #else
     if (sock == INVALID_SOCKET) {
         sock = socket(domain, SOCK_DGRAM, proto); // best-effort; matching reliable on RAW only
