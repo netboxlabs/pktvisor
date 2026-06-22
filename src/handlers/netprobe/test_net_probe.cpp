@@ -11,6 +11,7 @@
 #pragma GCC diagnostic ignored "-Wzero-as-null-pointer-constant"
 #endif
 #include <pcapplusplus/IcmpLayer.h>
+#include <pcapplusplus/IcmpV6Layer.h>
 #ifdef __GNUC__
 #pragma GCC diagnostic pop
 #endif
@@ -213,6 +214,130 @@ TEST_CASE("NetProbe ICMP reply with no prior request is ignored", "[netprobe][un
     fx.manager()->bucket(0)->to_json(j);
     // No targets created — the orphan reply produced no metrics.
     CHECK(!j.contains("targets"));
+}
+
+TEST_CASE("NetProbe ICMP v4 matching: single-target request+reply", "[netprobe][unit]")
+{
+    // Verifies the per-id matching contract: a REQUEST with id=0xABCD/seq=5 is
+    // matched exclusively by the REPLY carrying the same id+seq tuple. The
+    // transaction key is (id << 16) | seq — unchanged from the existing impl.
+    UnitFixture fx;
+
+    const uint8_t payload[] = {0x01, 0x02, 0x03, 0x04};
+    timespec ts_req{400, 0};
+    timespec ts_rep{400, 20'000'000}; // 20 ms later, well inside 5s TTL
+
+    pcpp::IcmpLayer req;
+    req.setEchoRequestData(/*id=*/0xABCD, /*sequence=*/5, /*timestamp=*/0, payload, sizeof(payload));
+    fx.manager()->process_netprobe_icmp(&req, "v4-match-tgt", ts_req);
+
+    pcpp::IcmpLayer reply;
+    reply.setEchoReplyData(/*id=*/0xABCD, /*sequence=*/5, /*timestamp=*/0, payload, sizeof(payload));
+    fx.manager()->process_netprobe_icmp(&reply, "v4-match-tgt", ts_rep);
+
+    json j;
+    fx.manager()->bucket(0)->to_json(j);
+    CHECK(j["targets"]["v4-match-tgt"]["attempts"] == 1);
+    CHECK(j["targets"]["v4-match-tgt"]["successes"] == 1);
+}
+
+TEST_CASE("NetProbe ICMP v4 matching: two targets with distinct ids do not cross-match", "[netprobe][unit]")
+{
+    // Two separate targets each use a distinct ping_id. Sending both requests
+    // then both replies must close each transaction against only its own target.
+    // Neither target should see the other's success.
+    UnitFixture fx;
+
+    const uint8_t payload[] = {0xFF};
+    timespec ts_req_a{500, 0};
+    timespec ts_rep_a{500, 10'000'000};
+    timespec ts_req_b{500, 1'000'000};
+    timespec ts_rep_b{500, 11'000'000};
+
+    // Target A: id=0x0001, seq=1
+    pcpp::IcmpLayer req_a;
+    req_a.setEchoRequestData(0x0001, 1, 0, payload, sizeof(payload));
+    fx.manager()->process_netprobe_icmp(&req_a, "v4-tgt-a", ts_req_a);
+
+    // Target B: id=0x0002, seq=1 (different id)
+    pcpp::IcmpLayer req_b;
+    req_b.setEchoRequestData(0x0002, 1, 0, payload, sizeof(payload));
+    fx.manager()->process_netprobe_icmp(&req_b, "v4-tgt-b", ts_req_b);
+
+    // Reply for A only
+    pcpp::IcmpLayer rep_a;
+    rep_a.setEchoReplyData(0x0001, 1, 0, payload, sizeof(payload));
+    fx.manager()->process_netprobe_icmp(&rep_a, "v4-tgt-a", ts_rep_a);
+
+    // Reply for B only
+    pcpp::IcmpLayer rep_b;
+    rep_b.setEchoReplyData(0x0002, 1, 0, payload, sizeof(payload));
+    fx.manager()->process_netprobe_icmp(&rep_b, "v4-tgt-b", ts_rep_b);
+
+    json j;
+    fx.manager()->bucket(0)->to_json(j);
+    // Each target gets exactly one success — no cross-match
+    CHECK(j["targets"]["v4-tgt-a"]["attempts"] == 1);
+    CHECK(j["targets"]["v4-tgt-a"]["successes"] == 1);
+    CHECK(j["targets"]["v4-tgt-b"]["attempts"] == 1);
+    CHECK(j["targets"]["v4-tgt-b"]["successes"] == 1);
+}
+
+TEST_CASE("NetProbe ICMPv6 matching: single-target request+reply", "[netprobe][unit]")
+{
+    // Verifies process_netprobe_icmpv6: a REQUEST with id=0x1111/seq=3 is
+    // matched exclusively by the REPLY carrying the same id+seq. successes==1.
+    UnitFixture fx;
+
+    timespec ts_req{600, 0};
+    timespec ts_rep{600, 15'000'000}; // 15 ms later, well inside 5s TTL
+
+    pcpp::ICMPv6EchoLayer req(pcpp::ICMPv6EchoLayer::REQUEST, /*id=*/0x1111, /*seq=*/3, nullptr, 0);
+    fx.manager()->process_netprobe_icmpv6(&req, "v6-match-tgt", ts_req);
+
+    pcpp::ICMPv6EchoLayer reply(pcpp::ICMPv6EchoLayer::REPLY, /*id=*/0x1111, /*seq=*/3, nullptr, 0);
+    fx.manager()->process_netprobe_icmpv6(&reply, "v6-match-tgt", ts_rep);
+
+    json j;
+    fx.manager()->bucket(0)->to_json(j);
+    CHECK(j["targets"]["v6-match-tgt"]["attempts"] == 1);
+    CHECK(j["targets"]["v6-match-tgt"]["successes"] == 1);
+}
+
+TEST_CASE("NetProbe ICMPv6 matching: two targets with distinct ids do not cross-match", "[netprobe][unit]")
+{
+    // Two separate targets each use a distinct v6 ping_id. Sending both requests
+    // then both replies must close each transaction against only its own target.
+    UnitFixture fx;
+
+    timespec ts_req_a{700, 0};
+    timespec ts_rep_a{700, 10'000'000};
+    timespec ts_req_b{700, 1'000'000};
+    timespec ts_rep_b{700, 11'000'000};
+
+    // Target A: id=0x0010, seq=1
+    pcpp::ICMPv6EchoLayer req_a(pcpp::ICMPv6EchoLayer::REQUEST, 0x0010, 1, nullptr, 0);
+    fx.manager()->process_netprobe_icmpv6(&req_a, "v6-tgt-a", ts_req_a);
+
+    // Target B: id=0x0020, seq=1 (different id)
+    pcpp::ICMPv6EchoLayer req_b(pcpp::ICMPv6EchoLayer::REQUEST, 0x0020, 1, nullptr, 0);
+    fx.manager()->process_netprobe_icmpv6(&req_b, "v6-tgt-b", ts_req_b);
+
+    // Reply for A only
+    pcpp::ICMPv6EchoLayer rep_a(pcpp::ICMPv6EchoLayer::REPLY, 0x0010, 1, nullptr, 0);
+    fx.manager()->process_netprobe_icmpv6(&rep_a, "v6-tgt-a", ts_rep_a);
+
+    // Reply for B only
+    pcpp::ICMPv6EchoLayer rep_b(pcpp::ICMPv6EchoLayer::REPLY, 0x0020, 1, nullptr, 0);
+    fx.manager()->process_netprobe_icmpv6(&rep_b, "v6-tgt-b", ts_rep_b);
+
+    json j;
+    fx.manager()->bucket(0)->to_json(j);
+    // Each target gets exactly one success — no cross-match
+    CHECK(j["targets"]["v6-tgt-a"]["attempts"] == 1);
+    CHECK(j["targets"]["v6-tgt-a"]["successes"] == 1);
+    CHECK(j["targets"]["v6-tgt-b"]["attempts"] == 1);
+    CHECK(j["targets"]["v6-tgt-b"]["successes"] == 1);
 }
 
 TEST_CASE("NetProbe process_filtered increments event count", "[netprobe][unit]")

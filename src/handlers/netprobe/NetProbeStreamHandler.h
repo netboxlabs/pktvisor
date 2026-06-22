@@ -15,6 +15,7 @@
 #pragma GCC diagnostic ignored "-Wzero-as-null-pointer-constant"
 #endif
 #include <pcapplusplus/IcmpLayer.h>
+#include <pcapplusplus/IcmpV6Layer.h>
 #include <VisorTcpLayer.h>
 #ifdef __GNUC__
 #pragma GCC diagnostic pop
@@ -123,6 +124,7 @@ public:
     void process_filtered(timespec stamp);
     void process_failure(ErrorType error, const std::string &target);
     void process_netprobe_icmp(pcpp::IcmpLayer *layer, const std::string &target, timespec stamp);
+    void process_netprobe_icmpv6(pcpp::ICMPv6EchoLayer *layer, const std::string &target, timespec stamp);
     void process_netprobe_tcp(bool send, const std::string &target, timespec stamp);
 };
 
