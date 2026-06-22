@@ -69,18 +69,26 @@ protected:
             return {std::string(), false};
         }
 
-        auto addr = response.second.get();
-        while (addr->ai_next != nullptr) {
-            if (addr->ai_family == AF_INET && (first_match || ipv4)) {
-                char buffer[INET_ADDRSTRLEN];
-                inet_ntop(AF_INET, &reinterpret_cast<struct sockaddr_in *>(addr->ai_addr)->sin_addr, buffer, INET_ADDRSTRLEN);
-                return {buffer, true};
-            } else if (addr->ai_family == AF_INET6 && (first_match || !ipv4)) {
-                char buffer[INET6_ADDRSTRLEN];
-                inet_ntop(AF_INET6, &reinterpret_cast<struct sockaddr_in6 *>(addr->ai_addr)->sin6_addr, buffer, INET6_ADDRSTRLEN);
-                return {buffer, false};
+        auto base = response.second.get();
+        // pass 1: IPv4 (preferred) unless caller forces v6
+        if (first_match || ipv4) {
+            for (auto addr = base; addr != nullptr; addr = addr->ai_next) {
+                if (addr->ai_family == AF_INET) {
+                    char buffer[INET_ADDRSTRLEN];
+                    inet_ntop(AF_INET, &reinterpret_cast<struct sockaddr_in *>(addr->ai_addr)->sin_addr, buffer, INET_ADDRSTRLEN);
+                    return {buffer, true};
+                }
             }
-            addr = addr->ai_next;
+        }
+        // pass 2: IPv6
+        if (first_match || !ipv4) {
+            for (auto addr = base; addr != nullptr; addr = addr->ai_next) {
+                if (addr->ai_family == AF_INET6) {
+                    char buffer[INET6_ADDRSTRLEN];
+                    inet_ntop(AF_INET6, &reinterpret_cast<struct sockaddr_in6 *>(addr->ai_addr)->sin6_addr, buffer, INET6_ADDRSTRLEN);
+                    return {buffer, false};
+                }
+            }
         }
         return {std::string(), false};
     }

@@ -248,20 +248,32 @@ std::optional<ErrorType> PingProbe::_get_addr()
     if (!response.first) {
         return ErrorType::DnsLookupFailure;
     }
+    const bool v6_only = _force_ipv6.has_value() && *_force_ipv6;
+    const bool v4_only = _force_ipv6.has_value() && !*_force_ipv6;
 
-    auto addr = response.second.get();
-    while (addr->ai_next != nullptr) {
-        if (addr->ai_family == AF_INET) {
-            memcpy(&_sa, reinterpret_cast<sockaddr_in *>(addr->ai_addr), sizeof(struct sockaddr_in));
-            _sin_length = sizeof(_sa);
-            _sa.sin_family = AF_INET;
-            return std::nullopt;
-        } else if (addr->ai_family == AF_INET6) {
-            memcpy(&_sa6, reinterpret_cast<sockaddr_in6 *>(addr->ai_addr), sizeof(struct sockaddr_in6));
-            _sin_length = sizeof(_sa6);
-            _sa6.sin6_family = AF_INET6;
+    if (!v6_only) { // IPv4 (preferred) unless forced v6
+        for (auto addr = response.second.get(); addr != nullptr; addr = addr->ai_next) {
+            if (addr->ai_family == AF_INET) {
+                memcpy(&_sa, reinterpret_cast<sockaddr_in *>(addr->ai_addr), sizeof(struct sockaddr_in));
+                _sa.sin_family = AF_INET;
+                _sin_length = sizeof(_sa);
+                _is_ipv6 = false;
+                _ip_set = true;
+                return std::nullopt;
+            }
         }
-        addr = addr->ai_next;
+    }
+    if (!v4_only) { // IPv6
+        for (auto addr = response.second.get(); addr != nullptr; addr = addr->ai_next) {
+            if (addr->ai_family == AF_INET6) {
+                memcpy(&_sa6, reinterpret_cast<sockaddr_in6 *>(addr->ai_addr), sizeof(struct sockaddr_in6));
+                _sa6.sin6_family = AF_INET6;
+                _sin_length = sizeof(_sa6);
+                _is_ipv6 = true;
+                _ip_set = true;
+                return std::nullopt;
+            }
+        }
     }
     return ErrorType::InvalidIp;
 }
