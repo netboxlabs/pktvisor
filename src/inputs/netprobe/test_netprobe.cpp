@@ -108,3 +108,39 @@ TEST_CASE("Netprobe invalid config", "[netprobe][config]")
 
     CHECK_THROWS_WITH(stream.start(), "invalid_config is an invalid/unsupported config or filter. The valid configs/filters are: test_type, interval_msec, timeout_msec, packets_per_test, packets_interval_msec, packet_payload_size, targets");
 }
+
+TEST_CASE("NetProbe ip_version config", "[netprobe][config][ipv6]")
+{
+    auto make = [](const std::string &tgt, std::optional<uint64_t> ipv) {
+        auto targets = std::make_shared<visor::Configurable>();
+        auto target = std::make_shared<visor::Configurable>();
+        target->config_set("target", tgt);
+        if (ipv) target->config_set<uint64_t>("ip_version", *ipv);
+        targets->config_set<std::shared_ptr<visor::Configurable>>("my_target", target);
+        return targets;
+    };
+    auto stream_with = [&](const std::shared_ptr<visor::Configurable> &targets) {
+        auto s = std::make_unique<NetProbeInputStream>("net-probe-test");
+        s->config_set("test_type", "ping");
+        s->config_set<std::shared_ptr<visor::Configurable>>("targets", targets);
+        return s;
+    };
+
+    SECTION("invalid ip_version value") {
+        auto s = stream_with(make("localhost", 5));
+        CHECK_THROWS_WITH(s->start(), "ip_version must be 4 or 6");
+    }
+    SECTION("literal IPv4 with ip_version 6 conflicts") {
+        auto s = stream_with(make("1.2.3.4", 6));
+        CHECK_THROWS_WITH(s->start(), "target 1.2.3.4 is IPv4 but ip_version is set to 6");
+    }
+    SECTION("literal IPv6 with ip_version 4 conflicts") {
+        auto s = stream_with(make("2001:db8::1", 4));
+        CHECK_THROWS_WITH(s->start(), "target 2001:db8::1 is IPv6 but ip_version is set to 4");
+    }
+    SECTION("top-level valid-keys string unchanged") {
+        NetProbeInputStream s{"net-probe-test"};
+        s.config_set("invalid_config", true);
+        CHECK_THROWS_WITH(s.start(), "invalid_config is an invalid/unsupported config or filter. The valid configs/filters are: test_type, interval_msec, timeout_msec, packets_per_test, packets_interval_msec, packet_payload_size, targets");
+    }
+}

@@ -109,12 +109,14 @@ class PingProbe final : public NetProbe
     std::optional<ErrorType> _get_addr();
     std::optional<ErrorType> _create_socket();
     void _close_socket();
+    std::optional<bool> _force_ipv6;
 
 public:
     static thread_local std::atomic<uint32_t> sock_count;
 
-    PingProbe(uint16_t id, const std::string &name, const pcpp::IPAddress &ip, const std::string &dns)
-        : NetProbe(id, name, ip, dns){};
+    PingProbe(uint16_t id, const std::string &name, const pcpp::IPAddress &ip, const std::string &dns, std::optional<bool> force_ipv6 = std::nullopt)
+        : NetProbe(id, name, ip, dns)
+        , _force_ipv6(force_ipv6){};
     ~PingProbe() = default;
     bool start(std::shared_ptr<uvw::loop> io_loop) override;
     bool stop() override;

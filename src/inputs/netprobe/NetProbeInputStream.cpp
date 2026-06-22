@@ -109,16 +109,31 @@ void NetProbeInputStream::start()
             } else if (config->config_exists("port")) {
                 port = static_cast<uint32_t>(config->config_get<uint64_t>("port"));
             }
+
+            std::optional<bool> force_ipv6;
+            if (config->config_exists("ip_version")) {
+                auto v = config->config_get<uint64_t>("ip_version");
+                if (v != 4 && v != 6) {
+                    throw NetProbeException("ip_version must be 4 or 6");
+                }
+                force_ipv6 = (v == 6);
+            }
+
             auto target = config->config_get<std::string>("target");
             if (pcpp::IPv4Address::isValidIPv4Address(target) || pcpp::IPv6Address::isValidIPv6Address(target)) {
-                _ip_list[key] = {pcpp::IPAddress(target), port};
+                bool literal_v6 = pcpp::IPv6Address::isValidIPv6Address(target);
+                if (force_ipv6.has_value() && *force_ipv6 != literal_v6) {
+                    throw NetProbeException(fmt::format("target {} is {} but ip_version is set to {}",
+                        target, literal_v6 ? "IPv6" : "IPv4", *force_ipv6 ? 6 : 4));
+                }
+                _ip_list[key] = IpEntry{pcpp::IPAddress(target), port};
                 continue;
             }
             auto dot = target.find(".");
             if (dot == std::string::npos && target != "localhost") {
                 throw NetProbeException(fmt::format("{} is an invalid/unsupported DNS", target));
             }
-            _dns_list[key] = {target, port};
+            _dns_list[key] = DnsEntry{target, port, force_ipv6};
         }
     }
 
@@ -196,9 +211,9 @@ void NetProbeInputStream::_create_netprobe_loop()
     for (const auto &ip : _ip_list) {
         std::unique_ptr<NetProbe> probe{nullptr};
         if (_type == TestType::Ping) {
-            probe = std::make_unique<PingProbe>(_id, ip.first, ip.second.first, std::string());
+            probe = std::make_unique<PingProbe>(_id, ip.first, ip.second.ip, std::string());
         } else if (_type == TestType::TCP) {
-            probe = std::make_unique<TcpProbe>(_id, ip.first, ip.second.first, std::string(), ip.second.second);
+            probe = std::make_unique<TcpProbe>(_id, ip.first, ip.second.ip, std::string(), ip.second.port);
         } else {
             throw NetProbeException(fmt::format("Test type currently not supported"));
         }
@@ -214,9 +229,9 @@ void NetProbeInputStream::_create_netprobe_loop()
     for (const auto &dns : _dns_list) {
         std::unique_ptr<NetProbe> probe{nullptr};
         if (_type == TestType::Ping) {
-            probe = std::make_unique<PingProbe>(_id, dns.first, pcpp::IPAddress(), dns.second.first);
+            probe = std::make_unique<PingProbe>(_id, dns.first, pcpp::IPAddress(), dns.second.dns, dns.second.force_ipv6);
         } else if (_type == TestType::TCP) {
-            probe = std::make_unique<TcpProbe>(_id, dns.first, pcpp::IPAddress(), dns.second.first, dns.second.second);
+            probe = std::make_unique<TcpProbe>(_id, dns.first, pcpp::IPAddress(), dns.second.dns, dns.second.port, dns.second.force_ipv6);
         } else {
             throw NetProbeException(fmt::format("Test type currently not supported"));
         }
