@@ -4,7 +4,11 @@
 #include "ThreadName.h"
 #include <pcapplusplus/Packet.h>
 #include <pcapplusplus/TimespecTimeval.h>
+#include <spdlog/spdlog.h>
 #include <uvw/idle.h>
+#ifndef _WIN32
+#include <netinet/icmp6.h>
+#endif
 
 namespace visor::input::netprobe {
 
@@ -21,6 +25,9 @@ PingReceiver::PingReceiver()
 PingReceiver::~PingReceiver()
 {
     _poll->close();
+    if (_poll6) {
+        _poll6->close();
+    }
     if (_async_h && _io_thread) {
         // we have to use AsyncHandle to stop the loop from the same thread the loop is running in
         _async_h->send();
@@ -35,6 +42,14 @@ PingReceiver::~PingReceiver()
     close(_sock);
 #endif
     _sock = INVALID_SOCKET;
+    if (_sock6 != INVALID_SOCKET) {
+#ifdef _WIN32
+        closesocket(_sock6);
+#else
+        close(_sock6);
+#endif
+        _sock6 = INVALID_SOCKET;
+    }
 }
 
 void PingReceiver::_setup_receiver()
@@ -113,6 +128,72 @@ void PingReceiver::_setup_receiver()
 
     _poll->init();
     _poll->start(uvw::poll_handle::poll_event_flags::READABLE);
+
+    // ICMPv6 receive socket — tolerant open (no throw; warn-log failure so v4-only/unprivileged hosts keep working)
+    _sock6 = socket(AF_INET6, SOCK_RAW, IPPROTO_ICMPV6);
+    bool sock6_raw = (_sock6 != INVALID_SOCKET);
+#ifndef _WIN32
+    if (_sock6 == INVALID_SOCKET) {
+        _sock6 = socket(AF_INET6, SOCK_DGRAM, IPPROTO_ICMPV6); // best-effort
+        sock6_raw = false;
+    }
+#endif
+    if (_sock6 == INVALID_SOCKET) {
+        spdlog::get("visor")->warn("netprobe: unable to open ICMPv6 receive socket; IPv6 ping disabled");
+    } else {
+#ifdef _WIN32
+        unsigned long flag6 = 1;
+        ioctlsocket(_sock6, FIONBIO, &flag6);
+#else
+        int flag6 = fcntl(_sock6, F_GETFL, 0);
+        if (flag6 != SOCKET_ERROR) {
+            fcntl(_sock6, F_SETFL, flag6 | O_NONBLOCK);
+        }
+        if (sock6_raw) { // ICMP6_FILTER is a RAW-only option
+            struct icmp6_filter filt;
+            ICMP6_FILTER_SETBLOCKALL(&filt);
+            ICMP6_FILTER_SETPASS(ICMP6_ECHO_REPLY, &filt);
+            setsockopt(_sock6, IPPROTO_ICMPV6, ICMP6_FILTER, &filt, sizeof(filt));
+        }
+#endif
+        _poll6 = _io_loop->resource<uvw::poll_handle>(static_cast<uvw::os_socket_handle>(_sock6));
+        if (_poll6) {
+            _poll6->on<uvw::error_event>([](const auto &, auto &handler) { handler.close(); });
+            _poll6->on<uvw::poll_event>([this](const uvw::poll_event &, uvw::poll_handle &) {
+                int rc{0};
+                while (rc != SOCKET_ERROR) {
+                    rc = recvfrom(_sock6, _array6.data(), _array6.size(), 0, nullptr, nullptr);
+                    if (rc == SOCKET_ERROR || rc <= 0) {
+                        break;
+                    }
+                    // raw ICMPv6 has NO IPv6 header: the buffer starts at the ICMPv6 type byte.
+                    // pcpp::Packet(&raw, ProtocolType) CANNOT build an ICMPv6 first layer
+                    // (createFirstLayer dispatches on link-layer type, not the ProtocolType arg).
+                    // So parse a READ-ONLY view over _array6, then rebuild a self-owning REPLY
+                    // layer carrying the same id/sequence. The builder ctor allocates+owns its
+                    // data (m_IsAllocatedInPacket semantics), exactly like the send path —
+                    // no manual heap buffer / no RawPacket ownership juggling.
+                    if (rc < static_cast<int>(sizeof(pcpp::icmpv6_echo_hdr))) {
+                        continue; // too short for an echo (getEchoDataLen() would underflow)
+                    }
+                    pcpp::ICMPv6EchoLayer parsed(reinterpret_cast<uint8_t *>(_array6.data()),
+                        static_cast<size_t>(rc), nullptr, nullptr); // aliases _array6; no ownership (raw-data ctor)
+                    if (parsed.getMessageType() != pcpp::ICMPv6MessageType::ICMPv6_ECHO_REPLY) {
+                        continue; // NDP/MLD/echo-request/etc. — dropped
+                    }
+                    timespec stamp;
+                    std::timespec_get(&stamp, TIME_UTC);
+                    pcpp::Packet packet;
+                    auto echo = pcpp::ICMPv6EchoLayer(pcpp::ICMPv6EchoLayer::REPLY,
+                        parsed.getIdentifier(), parsed.getSequenceNr(), nullptr, 0); // payload irrelevant to matching
+                    packet.addLayer(&echo); // stack builder layer (owns its data); mirrors _send_icmp_v6
+                    _recv_packets.emplace_back(packet, stamp); // copy-ctor deep-copies (same as the v4 recv path)
+                }
+            });
+            _poll6->init();
+            _poll6->start(uvw::poll_handle::poll_event_flags::READABLE);
+        }
+    }
 
     // spawn the loop
     _io_thread = std::make_unique<std::thread>([this] {

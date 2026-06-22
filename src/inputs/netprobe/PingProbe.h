@@ -56,6 +56,9 @@ class PingReceiver
     std::array<char, sizeof(pcpp::icmphdr) + 65507> _array;
     SOCKET _sock{INVALID_SOCKET};
     std::shared_ptr<uvw::poll_handle> _poll;
+    std::array<char, sizeof(pcpp::icmpv6_echo_hdr) + 65507> _array6;
+    SOCKET _sock6{INVALID_SOCKET};
+    std::shared_ptr<uvw::poll_handle> _poll6;
     std::unique_ptr<std::thread> _io_thread;
     std::shared_ptr<uvw::loop> _io_loop;
     std::shared_ptr<uvw::async_handle> _async_h;
@@ -65,6 +68,8 @@ class PingReceiver
     void _setup_receiver();
 
 public:
+    bool v6_active() const { return _sock6 != INVALID_SOCKET; }
+
     static std::vector<std::pair<pcpp::Packet, timespec>> recv_packets;
 
     PingReceiver();
