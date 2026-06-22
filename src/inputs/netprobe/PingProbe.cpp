@@ -14,7 +14,9 @@
 namespace visor::input::netprobe {
 
 std::vector<std::pair<pcpp::Packet, timespec>> PingReceiver::recv_packets{};
+std::mutex PingReceiver::recv_packets_mtx{};
 std::unique_ptr<PingReceiver> PingProbe::_receiver{nullptr};
+std::atomic<PingReceiver *> PingProbe::_receiver_view{nullptr};
 thread_local std::atomic<uint32_t> PingProbe::sock_count{0};
 thread_local SOCKET PingProbe::_sock{INVALID_SOCKET};
 thread_local SOCKET PingProbe::_sock6{INVALID_SOCKET};
@@ -146,8 +148,15 @@ void PingReceiver::_setup_receiver()
     _timer = _io_loop->resource<uvw::timer_handle>();
     _timer->on<uvw::timer_event>([this](const auto &, auto &) {
         if (!_recv_packets.empty()) {
-            recv_packets = _recv_packets;
+            {
+                // Publish under the lock; consumers snapshot recv_packets under the same lock, so a
+                // later publish cannot realloc the vector out from under a mid-iteration consumer.
+                std::lock_guard<std::mutex> lk(recv_packets_mtx);
+                recv_packets = _recv_packets;
+            }
             _recv_packets.clear();
+            // Guard the callback list against concurrent register/remove on control threads.
+            std::lock_guard<std::mutex> lk(_callbacks_mtx);
             for (const auto &callback : _callbacks) {
                 callback->send();
             }
@@ -239,7 +248,11 @@ void PingReceiver::_setup_receiver()
 
 bool PingProbe::receiver_v6_active()
 {
-    return _receiver && _receiver->v6_active();
+    // Read the published view rather than _receiver directly: this is called from the management/HTTP
+    // thread (via info_json) and may run concurrently with the call_once that first constructs the
+    // receiver. The acquire load pairs with the release store in that call_once.
+    auto *r = _receiver_view.load(std::memory_order_acquire);
+    return r && r->v6_active();
 }
 
 bool PingProbe::start(std::shared_ptr<uvw::loop> io_loop)
@@ -258,10 +271,16 @@ bool PingProbe::start(std::shared_ptr<uvw::loop> io_loop)
 
     _io_loop = io_loop;
 
-    if (!_receiver) {
-        // only once
+    // Construct the process-wide receiver exactly once, even if several input streams start
+    // concurrently on different threads. A plain `if (!_receiver)` would race and double-construct
+    // (each opening raw sockets + spawning an io thread) while also racing the unique_ptr itself.
+    // If the constructor throws, call_once leaves the flag unset so a later start() can retry.
+    static std::once_flag receiver_once;
+    std::call_once(receiver_once, [] {
         _receiver = std::make_unique<PingReceiver>();
-    }
+        // Publish for lock-free cross-thread readers (receiver_v6_active); release pairs with their acquire.
+        _receiver_view.store(_receiver.get(), std::memory_order_release);
+    });
 
     _interval_timer = _io_loop->resource<uvw::timer_handle>();
     if (!_interval_timer) {
@@ -303,8 +322,15 @@ bool PingProbe::start(std::shared_ptr<uvw::loop> io_loop)
     _recv_handler->on<uvw::async_event>([this](const auto &, auto &) {
         // note this processes received packets across ALL active ping probes (because of the single receiver thread)
         // the expectation is that packets which did not originate from this probe will be ignored by the handler attached to this probe,
-        // since it did not originate from it
-        for (auto &[packet, stamp] : PingReceiver::recv_packets) {
+        // since it did not originate from it.
+        // Snapshot under the lock so a concurrent publish on the receiver thread cannot reallocate the
+        // shared vector while we iterate; process the local copy without holding the lock.
+        std::vector<std::pair<pcpp::Packet, timespec>> packets;
+        {
+            std::lock_guard<std::mutex> lk(PingReceiver::recv_packets_mtx);
+            packets = PingReceiver::recv_packets;
+        }
+        for (auto &[packet, stamp] : packets) {
             _recv(packet, TestType::Ping, _name, stamp);
         }
     });
@@ -487,9 +513,18 @@ void PingProbe::_send_icmp_v6(uint8_t sequence)
 
 void PingProbe::_close_socket()
 {
-    if (--sock_count; sock_count) {
-        return;
+    // Runs on the control thread (via stop()). Only drop the per-thread probe reference count used
+    // for the ping_sockets info metric here. The actual send sockets (_sock/_sock6) are thread_local
+    // to the io thread that opened them and are closed there by close_thread_send_sockets() once the
+    // io loop has stopped; closing them from this thread would be a no-op (it sees INVALID_SOCKET)
+    // and leak the descriptors.
+    if (sock_count) {
+        --sock_count;
     }
+}
+
+void PingProbe::close_thread_send_sockets()
+{
 #ifdef _WIN32
     if (_sock != INVALID_SOCKET) closesocket(_sock);
     if (_sock6 != INVALID_SOCKET) closesocket(_sock6);

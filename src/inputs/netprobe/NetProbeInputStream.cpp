@@ -249,6 +249,13 @@ void NetProbeInputStream::_create_netprobe_loop()
         _timer->start(uvw::timer_handle::time{1000}, uvw::timer_handle::time{HEARTBEAT_INTERVAL * 1000});
         thread::change_self_name(schema_key(), name());
         _io_loop->run();
+        if (_type == TestType::Ping) {
+            // Close the ping send sockets here, on the io thread that opened them: _sock/_sock6 are
+            // thread_local, so this is the only thread that can actually close the raw descriptors.
+            // Runs after the loop has stopped (and before stop() joins this thread), so no probe is
+            // still sending.
+            PingProbe::close_thread_send_sockets();
+        }
     });
 }
 
