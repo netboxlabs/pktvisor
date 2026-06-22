@@ -121,6 +121,7 @@ class PingProbe final : public NetProbe
 
 public:
     static thread_local std::atomic<uint32_t> sock_count;
+    static bool receiver_v6_active();
 
     PingProbe(uint16_t id, const std::string &name, const pcpp::IPAddress &ip, const std::string &dns, std::optional<bool> force_ipv6 = std::nullopt)
         : NetProbe(id, name, ip, dns)

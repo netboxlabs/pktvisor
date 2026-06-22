@@ -202,6 +202,11 @@ void PingReceiver::_setup_receiver()
     });
 }
 
+bool PingProbe::receiver_v6_active()
+{
+    return _receiver && _receiver->v6_active();
+}
+
 bool PingProbe::start(std::shared_ptr<uvw::loop> io_loop)
 {
     if (_init || ((_ip.isIPv4() ? _ip.getIPv4() == pcpp::IPv4Address::Zero : _ip.getIPv6() == pcpp::IPv6Address::Zero) && _dns.empty())) {
