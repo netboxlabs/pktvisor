@@ -397,6 +397,15 @@ std::optional<ErrorType> PingProbe::_create_socket()
     if (ioctlsocket(sock, FIONBIO, &flag) == SOCKET_ERROR) {
         return ErrorType::SocketError;
     }
+    if (_is_ipv6) {
+        // Windows raw sockets do not auto-fill the mandatory ICMPv6 checksum, so packets would go
+        // out with checksum 0 and be dropped. IPV6_CHECKSUM makes the kernel compute and insert it
+        // (over the IPv6 pseudo-header, using the chosen source address) at the checksum field
+        // offset (2). POSIX enables this implicitly for IPPROTO_ICMPV6 and rejects setting it, so
+        // this is Windows-only. (Verify end-to-end on Windows — inbound raw ICMPv6 delivery too.)
+        int csum_offset = 2;
+        setsockopt(sock, IPPROTO_IPV6, IPV6_CHECKSUM, reinterpret_cast<const char *>(&csum_offset), sizeof(csum_offset));
+    }
 #else
     if (sock == INVALID_SOCKET) {
         sock = socket(domain, SOCK_DGRAM, proto); // best-effort; matching reliable on RAW only
