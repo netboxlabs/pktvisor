@@ -158,15 +158,12 @@ void PingReceiver::_setup_receiver()
     _poll->init();
     _poll->start(uvw::poll_handle::poll_event_flags::READABLE);
 
-    // ICMPv6 receive socket — tolerant open (no throw; warn-log failure so v4-only/unprivileged hosts keep working)
+    // ICMPv6 receive socket — RAW only, opened tolerantly (no throw; warn-log on failure so
+    // v4-only/unprivileged hosts keep working). No SOCK_DGRAM fallback: a datagram ICMPv6 socket
+    // only receives replies for echoes IT sent, but each probe sends on its own (separate) socket,
+    // so a DGRAM receiver would never see the replies (all reported as timeouts). IPv6 ping
+    // therefore requires raw-socket privilege (CAP_NET_RAW / root / Administrator).
     _sock6 = socket(AF_INET6, SOCK_RAW, IPPROTO_ICMPV6);
-    bool sock6_raw = (_sock6 != INVALID_SOCKET);
-#ifndef _WIN32
-    if (_sock6 == INVALID_SOCKET) {
-        _sock6 = socket(AF_INET6, SOCK_DGRAM, IPPROTO_ICMPV6); // best-effort
-        sock6_raw = false;
-    }
-#endif
     if (_sock6 == INVALID_SOCKET) {
         if (auto lg = spdlog::get("visor")) {
             lg->warn("netprobe: unable to open ICMPv6 receive socket; IPv6 ping disabled");
@@ -180,33 +177,34 @@ void PingReceiver::_setup_receiver()
         if (flag6 != SOCKET_ERROR) {
             fcntl(_sock6, F_SETFL, flag6 | O_NONBLOCK);
         }
-        if (sock6_raw) { // ICMP6_FILTER is a RAW-only option
-            struct icmp6_filter filt;
-            ICMP6_FILTER_SETBLOCKALL(&filt);
-            ICMP6_FILTER_SETPASS(ICMP6_ECHO_REPLY, &filt);
-            setsockopt(_sock6, IPPROTO_ICMPV6, ICMP6_FILTER, &filt, sizeof(filt));
-        }
+        // _sock6 is always RAW here, so ICMP6_FILTER (a RAW-only option) applies: pass only echo
+        // replies (type 129), drop everything else in-kernel.
+        struct icmp6_filter filt;
+        ICMP6_FILTER_SETBLOCKALL(&filt);
+        ICMP6_FILTER_SETPASS(ICMP6_ECHO_REPLY, &filt);
+        setsockopt(_sock6, IPPROTO_ICMPV6, ICMP6_FILTER, &filt, sizeof(filt));
 #endif
         _poll6 = _io_loop->resource<uvw::poll_handle>(static_cast<uvw::os_socket_handle>(_sock6));
         if (_poll6) {
             _poll6->on<uvw::error_event>([](const auto &, auto &handler) { handler.close(); });
             _poll6->on<uvw::poll_event>([this](const uvw::poll_event &, uvw::poll_handle &) {
-                int rc{0};
-                while (rc != SOCKET_ERROR) {
-                    rc = recvfrom(_sock6, _array6.data(), _array6.size(), 0, nullptr, nullptr);
-                    if (rc == SOCKET_ERROR || rc <= 0) {
-                        break;
-                    }
-                    // A raw ICMPv6 socket strips the IPv6 header, so pcpp::Packet cannot parse the
-                    // bare buffer (createFirstLayer dispatches on link-layer type) and a freestanding
-                    // ICMPv6EchoLayer over _array6 would make ~Layer() delete[] the std::array storage.
-                    // build_icmpv6_reply_carrier synthesizes an IPv6 header so a self-owning Packet
-                    // parses IPv6 -> ICMPv6 and survives the fan-out deep-copy.
-                    if (auto carrier = build_icmpv6_reply_carrier(reinterpret_cast<uint8_t *>(_array6.data()), rc)) {
-                        timespec stamp;
-                        std::timespec_get(&stamp, TIME_UTC);
-                        _recv_packets.emplace_back(*carrier, stamp);
-                    }
+                // Read one datagram per (level-triggered) poll event. The socket is non-blocking, but
+                // looping until EWOULDBLOCK would let a flood of replies starve the v4 poll/timer on
+                // this same thread; uvw re-fires the event while data remains, so a single read keeps
+                // the receiver fair and matches the v4 path's one-read-per-event behavior.
+                int rc = recvfrom(_sock6, _array6.data(), _array6.size(), 0, nullptr, nullptr);
+                if (rc <= 0) {
+                    return;
+                }
+                // A raw ICMPv6 socket strips the IPv6 header, so pcpp::Packet cannot parse the bare
+                // buffer (createFirstLayer dispatches on link-layer type) and a freestanding
+                // ICMPv6EchoLayer over _array6 would make ~Layer() delete[] the std::array storage.
+                // build_icmpv6_reply_carrier synthesizes an IPv6 header so a self-owning Packet
+                // parses IPv6 -> ICMPv6 and survives the fan-out deep-copy.
+                if (auto carrier = build_icmpv6_reply_carrier(reinterpret_cast<uint8_t *>(_array6.data()), rc)) {
+                    timespec stamp;
+                    std::timespec_get(&stamp, TIME_UTC);
+                    _recv_packets.emplace_back(*carrier, stamp);
                 }
             });
             _poll6->init();
@@ -404,7 +402,11 @@ std::optional<ErrorType> PingProbe::_create_socket()
     // the checksum 0 and the kernel fills it. (The Windows v6 send/recv path still needs end-to-end
     // verification on a real Windows host — including inbound raw ICMPv6 delivery.)
 #else
-    if (sock == INVALID_SOCKET) {
+    // IPv4 may fall back to an unprivileged SOCK_DGRAM "ping" socket; IPv6 must not. The shared
+    // receiver only polls a raw _sock6, and a DGRAM ICMPv6 socket delivers replies to the sending
+    // socket instead — which nothing reads — so every v6 reply would be lost. Fail v6 cleanly so the
+    // caller reports a socket error rather than silently timing out every probe.
+    if (sock == INVALID_SOCKET && !_is_ipv6) {
         sock = socket(domain, SOCK_DGRAM, proto); // best-effort; matching reliable on RAW only
     }
     if (sock == INVALID_SOCKET) {
