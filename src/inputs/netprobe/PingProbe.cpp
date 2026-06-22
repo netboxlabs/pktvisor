@@ -162,7 +162,7 @@ bool PingProbe::start(std::shared_ptr<uvw::loop> io_loop)
         _internal_timer->on<uvw::timer_event>([this](const auto &, auto &handle) {
             if (_internal_sequence < static_cast<uint8_t>(_config.packets_per_test)) {
                 _internal_sequence++;
-                _send_icmp_v4(_internal_sequence);
+                _is_ipv6 ? _send_icmp_v6(_internal_sequence) : _send_icmp_v4(_internal_sequence);
             } else {
                 handle.stop();
                 handle.close();
@@ -170,7 +170,7 @@ bool PingProbe::start(std::shared_ptr<uvw::loop> io_loop)
         });
 
         (_sequence == UCHAR_MAX) ? _sequence = 0 : _sequence++;
-        _send_icmp_v4(_internal_sequence);
+        _is_ipv6 ? _send_icmp_v6(_internal_sequence) : _send_icmp_v4(_internal_sequence);
         _internal_sequence++;
         _internal_timer->start(uvw::timer_handle::time{_config.packets_interval_msec}, uvw::timer_handle::time{_config.packets_interval_msec});
     });
@@ -322,6 +322,27 @@ void PingProbe::_send_icmp_v4(uint8_t sequence)
     if (rc != SOCKET_ERROR) {
         pcpp::Packet packet;
         packet.addLayer(&icmp);
+        _send(packet, TestType::Ping, _name, stamp);
+    }
+}
+
+void PingProbe::_send_icmp_v6(uint8_t sequence)
+{
+    timespec stamp;
+    std::timespec_get(&stamp, TIME_UTC);
+    uint16_t seq16 = (static_cast<uint16_t>(_sequence) << 8) | sequence;
+    // The 8-byte ICMPv6 echo header carries no timestamp; the transaction manager
+    // carries the send time, matched by id+sequence (same as v4). Identifier = per-probe _id.
+    auto echo = pcpp::ICMPv6EchoLayer(pcpp::ICMPv6EchoLayer::REQUEST, _id, seq16,
+        _payload_array.data(), _payload_array.size());
+    // Do NOT call computeCalculateFields(): the kernel owns the ICMPv6 checksum and pcpp
+    // cannot compute it without an IPv6 prev-layer/pseudo-header. The layer is used only for
+    // the in-process metric record (id+seq), never re-serialized to the wire.
+    int rc = sendto(_sock6, reinterpret_cast<char *>(echo.getData()), echo.getDataLen(), 0,
+        reinterpret_cast<sockaddr *>(&_sa6), _sin_length);
+    if (rc != SOCKET_ERROR) {
+        pcpp::Packet packet;
+        packet.addLayer(&echo);
         _send(packet, TestType::Ping, _name, stamp);
     }
 }

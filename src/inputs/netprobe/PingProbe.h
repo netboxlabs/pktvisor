@@ -27,6 +27,7 @@ typedef int SOCKET;
 #pragma clang diagnostic ignored "-Wc99-extensions"
 #endif
 #include <pcapplusplus/IcmpLayer.h>
+#include <pcapplusplus/IcmpV6Layer.h>
 #include <pcapplusplus/IpAddress.h>
 #ifdef __GNUC__
 #pragma GCC diagnostic pop
@@ -107,6 +108,7 @@ class PingProbe final : public NetProbe
     sockaddr_in6 _sa6;
 
     void _send_icmp_v4(uint8_t sequence);
+    void _send_icmp_v6(uint8_t sequence);
     std::optional<ErrorType> _get_addr();
     std::optional<ErrorType> _create_socket();
     void _close_socket();
