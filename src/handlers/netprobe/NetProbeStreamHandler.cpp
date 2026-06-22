@@ -406,7 +406,8 @@ void NetProbeMetricsManager::process_netprobe_icmpv6(pcpp::ICMPv6EchoLayer *laye
 {
     // base event
     new_event(stamp);
-    // getIdentifier()/getSequenceNr() return host-order values in pcpp (no ntohs).
+    // getIdentifier()/getSequenceNr() already byte-swap to host order inside pcpp (be16toh),
+    // matching the htobe16 the send side used; do not add another ntohs.
     auto ping_id = (static_cast<uint32_t>(layer->getIdentifier()) << 16) | layer->getSequenceNr();
     if (layer->getMessageType() == pcpp::ICMPv6MessageType::ICMPv6_ECHO_REQUEST) {
         _request_reply_manager->start_transaction(std::to_string(ping_id), {{stamp, {0, 0}}, target});

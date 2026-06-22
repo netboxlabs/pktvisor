@@ -45,6 +45,12 @@ typedef int SOCKET;
 
 namespace visor::input::netprobe {
 
+// Build a self-contained pcpp::Packet carrying a received ICMPv6 echo REPLY. A raw ICMPv6 socket
+// strips the IPv6 header, so this synthesizes one (DLT_RAW1) so the Packet parses IPv6 -> ICMPv6
+// and survives the fan-out deep-copy; returns nullopt if the bytes are not a valid ICMPv6 echo
+// reply. Exposed (not a private lambda) so the copy-survival contract can be unit-tested.
+std::optional<pcpp::Packet> build_icmpv6_reply_carrier(const uint8_t *data, int len);
+
 /**
  * @class PingReceiver
  * @brief PingReceiver class used for receiving ICMP Echo Responses.
@@ -109,8 +115,8 @@ class PingProbe final : public NetProbe
     std::shared_ptr<uvw::async_handle> _recv_handler;
     SOCKETLEN _sin_length{0};
     std::vector<uint8_t> _payload_array;
-    sockaddr_in _sa;
-    sockaddr_in6 _sa6;
+    sockaddr_in _sa{};
+    sockaddr_in6 _sa6{};
 
     void _send_icmp_v4(uint8_t sequence);
     void _send_icmp_v6(uint8_t sequence);

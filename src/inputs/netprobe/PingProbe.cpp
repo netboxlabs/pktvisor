@@ -18,6 +18,34 @@ thread_local std::atomic<uint32_t> PingProbe::sock_count{0};
 thread_local SOCKET PingProbe::_sock{INVALID_SOCKET};
 thread_local SOCKET PingProbe::_sock6{INVALID_SOCKET};
 
+std::optional<pcpp::Packet> build_icmpv6_reply_carrier(const uint8_t *data, int len)
+{
+    if (len < static_cast<int>(sizeof(pcpp::icmpv6_echo_hdr))) {
+        return std::nullopt; // too short to be an ICMPv6 echo
+    }
+    // A raw ICMPv6 socket delivers the bare ICMPv6 message (no IPv6 header). Synthesize a minimal
+    // 40-byte IPv6 header so a DLT_RAW1 RawPacket parses IPv6 -> ICMPv6 and the parsed layers are
+    // owned by the Packet (no bad delete[] on a freestanding layer). The Packet owns the heap
+    // RawPacket (which owns the buffer), so the returned Packet is self-contained and survives the
+    // fan-out deep-copy. Mirrors the v4 receive idiom (whose raw socket carries the IP header).
+    constexpr int IP6_HDR_LEN = 40;
+    auto *buf = new uint8_t[IP6_HDR_LEN + len];
+    std::memset(buf, 0, IP6_HDR_LEN);
+    buf[0] = 0x60;                                     // IPv6, version 6
+    buf[4] = static_cast<uint8_t>((len >> 8) & 0xff);  // payload length (high byte)
+    buf[5] = static_cast<uint8_t>(len & 0xff);         // payload length (low byte)
+    buf[6] = static_cast<uint8_t>(IPPROTO_ICMPV6);     // next header = 58 (ICMPv6)
+    buf[7] = 64;                                       // hop limit
+    std::memcpy(buf + IP6_HDR_LEN, data, static_cast<size_t>(len));
+    timeval time{};
+    auto packet = pcpp::Packet(new pcpp::RawPacket(buf, IP6_HDR_LEN + len, time, true, pcpp::LINKTYPE_DLT_RAW1), true);
+    auto *echo = packet.getLayerOfType<pcpp::ICMPv6EchoLayer>();
+    if (echo == nullptr || echo->getMessageType() != pcpp::ICMPv6MessageType::ICMPv6_ECHO_REPLY) {
+        return std::nullopt; // not an ICMPv6 echo reply
+    }
+    return packet;
+}
+
 PingReceiver::PingReceiver()
 {
     _setup_receiver();
@@ -139,7 +167,9 @@ void PingReceiver::_setup_receiver()
     }
 #endif
     if (_sock6 == INVALID_SOCKET) {
-        spdlog::get("visor")->warn("netprobe: unable to open ICMPv6 receive socket; IPv6 ping disabled");
+        if (auto lg = spdlog::get("visor")) {
+            lg->warn("netprobe: unable to open ICMPv6 receive socket; IPv6 ping disabled");
+        }
     } else {
 #ifdef _WIN32
         unsigned long flag6 = 1;
@@ -166,28 +196,16 @@ void PingReceiver::_setup_receiver()
                     if (rc == SOCKET_ERROR || rc <= 0) {
                         break;
                     }
-                    // raw ICMPv6 has NO IPv6 header: the buffer starts at the ICMPv6 type byte.
-                    // pcpp::Packet(&raw, ProtocolType) CANNOT build an ICMPv6 first layer
-                    // (createFirstLayer dispatches on link-layer type, not the ProtocolType arg).
-                    // So parse a READ-ONLY view over _array6, then rebuild a self-owning REPLY
-                    // layer carrying the same id/sequence. The builder ctor allocates+owns its
-                    // data (m_IsAllocatedInPacket semantics), exactly like the send path —
-                    // no manual heap buffer / no RawPacket ownership juggling.
-                    if (rc < static_cast<int>(sizeof(pcpp::icmpv6_echo_hdr))) {
-                        continue; // too short for an echo (getEchoDataLen() would underflow)
+                    // A raw ICMPv6 socket strips the IPv6 header, so pcpp::Packet cannot parse the
+                    // bare buffer (createFirstLayer dispatches on link-layer type) and a freestanding
+                    // ICMPv6EchoLayer over _array6 would make ~Layer() delete[] the std::array storage.
+                    // build_icmpv6_reply_carrier synthesizes an IPv6 header so a self-owning Packet
+                    // parses IPv6 -> ICMPv6 and survives the fan-out deep-copy.
+                    if (auto carrier = build_icmpv6_reply_carrier(reinterpret_cast<uint8_t *>(_array6.data()), rc)) {
+                        timespec stamp;
+                        std::timespec_get(&stamp, TIME_UTC);
+                        _recv_packets.emplace_back(*carrier, stamp);
                     }
-                    pcpp::ICMPv6EchoLayer parsed(reinterpret_cast<uint8_t *>(_array6.data()),
-                        static_cast<size_t>(rc), nullptr, nullptr); // aliases _array6; no ownership (raw-data ctor)
-                    if (parsed.getMessageType() != pcpp::ICMPv6MessageType::ICMPv6_ECHO_REPLY) {
-                        continue; // NDP/MLD/echo-request/etc. — dropped
-                    }
-                    timespec stamp;
-                    std::timespec_get(&stamp, TIME_UTC);
-                    pcpp::Packet packet;
-                    auto echo = pcpp::ICMPv6EchoLayer(pcpp::ICMPv6EchoLayer::REPLY,
-                        parsed.getIdentifier(), parsed.getSequenceNr(), nullptr, 0); // payload irrelevant to matching
-                    packet.addLayer(&echo); // stack builder layer (owns its data); mirrors _send_icmp_v6
-                    _recv_packets.emplace_back(packet, stamp); // copy-ctor deep-copies (same as the v4 recv path)
                 }
             });
             _poll6->init();
@@ -340,7 +358,8 @@ std::optional<ErrorType> PingProbe::_get_addr()
                 _sa.sin_family = AF_INET;
                 _sin_length = sizeof(_sa);
                 _is_ipv6 = false;
-                _ip_set = true;
+                // NOTE: do not set _ip_set for DNS targets — re-resolve every interval (as develop did)
+                // so round-robin / failover / short-TTL names are not pinned to the first address.
                 return std::nullopt;
             }
         }
@@ -352,7 +371,7 @@ std::optional<ErrorType> PingProbe::_get_addr()
                 _sa6.sin6_family = AF_INET6;
                 _sin_length = sizeof(_sa6);
                 _is_ipv6 = true;
-                _ip_set = true;
+                // NOTE: do not set _ip_set for DNS targets — re-resolve every interval (see above).
                 return std::nullopt;
             }
         }

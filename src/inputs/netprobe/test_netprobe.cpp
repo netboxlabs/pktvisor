@@ -1,4 +1,5 @@
 #include "NetProbeInputStream.h"
+#include "PingProbe.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
@@ -143,4 +144,30 @@ TEST_CASE("NetProbe ip_version config", "[netprobe][config][ipv6]")
         s.config_set("invalid_config", true);
         CHECK_THROWS_WITH(s.start(), "invalid_config is an invalid/unsupported config or filter. The valid configs/filters are: test_type, interval_msec, timeout_msec, packets_per_test, packets_interval_msec, packet_payload_size, targets");
     }
+}
+
+TEST_CASE("ICMPv6 reply carrier survives the fan-out Packet deep-copy", "[netprobe][ipv6]")
+{
+    // Wire bytes of an ICMPv6 echo REPLY: type=129, code=0, checksum=0, id=0xBEEF, seq=0x0102 (network order).
+    const uint8_t reply[8] = {129, 0, 0, 0, 0xBE, 0xEF, 0x01, 0x02};
+
+    auto carrier = build_icmpv6_reply_carrier(reply, sizeof(reply));
+    REQUIRE(carrier.has_value());
+
+    // The receiver enqueues a COPY of this Packet; the handler later does getLayerOfType<ICMPv6EchoLayer>()
+    // on the copy. That deep-copy is exactly where the ICMPv6 layer used to be lost (every reply dropped).
+    pcpp::Packet copy(*carrier);
+    auto *echo = copy.getLayerOfType<pcpp::ICMPv6EchoLayer>();
+    REQUIRE(echo != nullptr);
+    CHECK(echo->getMessageType() == pcpp::ICMPv6MessageType::ICMPv6_ECHO_REPLY);
+    CHECK(echo->getIdentifier() == 0xBEEF);
+    CHECK(echo->getSequenceNr() == 0x0102);
+
+    // An echo REQUEST (type 128) is not a reply and must not be enqueued.
+    const uint8_t request[8] = {128, 0, 0, 0, 0xBE, 0xEF, 0x01, 0x02};
+    CHECK_FALSE(build_icmpv6_reply_carrier(request, sizeof(request)).has_value());
+
+    // A buffer shorter than the 8-byte echo header is rejected (getEchoDataLen would underflow).
+    const uint8_t too_short[4] = {129, 0, 0, 0};
+    CHECK_FALSE(build_icmpv6_reply_carrier(too_short, sizeof(too_short)).has_value());
 }
