@@ -32,7 +32,9 @@ bool TcpProbe::start(std::shared_ptr<uvw::loop> io_loop)
 
     _interval_timer->on<uvw::timer_event>([this](const auto &, auto &) {
         if (!_dns.empty()) {
-            auto [ip, ipv4] = _resolve_dns();
+            bool first_match = !_force_ipv6.has_value();
+            bool want_ipv4 = _force_ipv6.has_value() && !*_force_ipv6;
+            auto [ip, ipv4] = _resolve_dns(first_match, want_ipv4);
             _ip_str = ip;
             _is_ipv4 = ipv4;
             if (_ip_str.empty()) {
