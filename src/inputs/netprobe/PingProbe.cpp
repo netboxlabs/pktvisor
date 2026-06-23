@@ -177,13 +177,18 @@ void PingReceiver::_setup_receiver()
             lg->warn("netprobe: unable to open ICMPv6 receive socket; IPv6 ping disabled");
         }
     } else {
+        // Track whether the socket was actually put into non-blocking mode. The poll-driven receiver
+        // does a single recvfrom() per event; if the socket stayed blocking and a READABLE event ever
+        // fired without a datagram ready (spurious wakeup / error condition), that read would block
+        // the whole receiver thread. So if non-blocking can't be set, we disable IPv6 below instead.
+        bool nonblock_ok = false;
 #ifdef _WIN32
         unsigned long flag6 = 1;
-        ioctlsocket(_sock6, FIONBIO, &flag6);
+        nonblock_ok = (ioctlsocket(_sock6, FIONBIO, &flag6) == 0);
 #else
         int flag6 = fcntl(_sock6, F_GETFL, 0);
         if (flag6 != SOCKET_ERROR) {
-            fcntl(_sock6, F_SETFL, flag6 | O_NONBLOCK);
+            nonblock_ok = (fcntl(_sock6, F_SETFL, flag6 | O_NONBLOCK) != SOCKET_ERROR);
         }
         // _sock6 is always RAW here, so ICMP6_FILTER (a RAW-only option) applies: pass only echo
         // replies (type 129), drop everything else in-kernel.
@@ -194,14 +199,20 @@ void PingReceiver::_setup_receiver()
 #endif
         _poll6 = _io_loop->resource<uvw::poll_handle>(static_cast<uvw::os_socket_handle>(_sock6));
         bool v6_ready = false;
-        if (_poll6) {
+        if (_poll6 && nonblock_ok) {
             _poll6->on<uvw::error_event>([](const auto &, auto &handler) { handler.close(); });
             _poll6->on<uvw::poll_event>([this](const uvw::poll_event &, uvw::poll_handle &) {
-                // Read one datagram per (level-triggered) poll event. The socket is non-blocking, but
-                // looping until EWOULDBLOCK would let a flood of replies starve the v4 poll/timer on
-                // this same thread; uvw re-fires the event while data remains, so a single read keeps
-                // the receiver fair and matches the v4 path's one-read-per-event behavior.
+                // Read one datagram per (level-triggered) poll event. The socket is non-blocking
+                // (verified at setup), but looping until EWOULDBLOCK would let a flood of replies
+                // starve the v4 poll/timer on this same thread; uvw re-fires the event while data
+                // remains, so a single read keeps the receiver fair and matches the v4 path. On POSIX
+                // we also pass MSG_DONTWAIT so the read can never block the receiver thread even on a
+                // spurious READABLE wakeup with no datagram ready.
+#ifdef _WIN32
                 int rc = recvfrom(_sock6, _array6.data(), _array6.size(), 0, nullptr, nullptr);
+#else
+                int rc = recvfrom(_sock6, _array6.data(), _array6.size(), MSG_DONTWAIT, nullptr, nullptr);
+#endif
                 if (rc <= 0) {
                     return;
                 }
@@ -223,12 +234,13 @@ void PingReceiver::_setup_receiver()
             v6_ready = (_poll6->start(uvw::poll_handle::poll_event_flags::READABLE) == 0);
         }
         if (!v6_ready) {
-            // The poll handle could not be created or armed for _sock6. With no armed handler nothing
-            // ever reads replies, yet v6_active() (which only checks _sock6) would report IPv6 as
-            // working and the send path would keep emitting echoes that silently time out. Close and
-            // invalidate _sock6 so IPv6 ping is cleanly disabled instead of silently broken.
+            // The socket could not be made non-blocking, or the poll handle could not be created or
+            // armed for _sock6. With no armed handler nothing ever reads replies, yet v6_active()
+            // (which only checks _sock6) would report IPv6 as working and the send path would keep
+            // emitting echoes that silently time out. Close and invalidate _sock6 so IPv6 ping is
+            // cleanly disabled instead of silently broken.
             if (auto lg = spdlog::get("visor")) {
-                lg->warn("netprobe: unable to arm ICMPv6 poll handler; IPv6 ping disabled");
+                lg->warn("netprobe: unable to set up ICMPv6 receive socket; IPv6 ping disabled");
             }
             if (_poll6) {
                 // Tear down the (never-armed) poll handle so it isn't held for the receiver's lifetime.
