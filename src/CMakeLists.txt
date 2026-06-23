@@ -40,7 +40,6 @@ target_include_directories(visor-core
 target_link_libraries(visor-core
         PUBLIC
         datasketches
-        rng
         timer
         opentelemetry-cpp::proto
         protobuf::libprotobuf

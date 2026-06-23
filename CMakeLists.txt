@@ -66,9 +66,9 @@ endif()
 if(WIN32)
     set(CUSTOM_CMAKE_OPTIONS docopt.cpp:boost_regex=True)
     # NOMINMAX prevents windows.h from defining min/max as macros, which would
-    # otherwise break headers like 3rd/rng/jsf.h that declare static min()/max()
-    # methods. Corrade's headers used to do this for us; with Corrade gone we
-    # must set it ourselves.
+    # otherwise break std::numeric_limits<>::min()/max() and any header declaring
+    # min()/max() members. Corrade's headers used to set this for us; with Corrade
+    # gone we must set it ourselves. WIN32_LEAN_AND_MEAN trims windows.h.
     add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 

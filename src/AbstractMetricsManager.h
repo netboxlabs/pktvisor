@@ -6,17 +6,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <deque>
 #include <exception>
 #include <nlohmann/json.hpp>
-#ifdef __GNUC__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wzero-as-null-pointer-constant"
-#endif
-#include <jsf.h>
-#ifdef __GNUC__
-#pragma GCC diagnostic pop
-#endif
 #include "Configurable.h"
 #include "Metrics.h"
 #include <bitset>
@@ -222,6 +215,21 @@ public:
     virtual void update_topn_metrics(size_t topn_count, uint64_t percentile_threshold) = 0;
 };
 
+// Fixed-seed PRNG for the deep-sampling gate (SplitMix64, public domain). Seed only from a fixed
+// constant, never from std::random_device or hardware entropy: RDRAND-based seeding faults and
+// throws on some hardware, and cryptographic randomness isn't needed to decide which events get
+// sampled.
+struct splitmix64 {
+    uint64_t state{0x9e3779b97f4a7c15ULL};
+    uint64_t operator()()
+    {
+        uint64_t z = (state += 0x9e3779b97f4a7c15ULL);
+        z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+        return z ^ (z >> 31);
+    }
+};
+
 template <typename MetricsBucketClass>
 class AbstractMetricsManager
 {
@@ -242,7 +250,7 @@ private:
     /**
      * sampling
      */
-    jsf32 _rng;
+    splitmix64 _rng; // fixed-seeded; never seed from entropy (see note above)
     uint32_t _deep_sample_rate{100};
     size_t _topn_count{10};
     uint64_t _topn_percentile_threshold{0};
