@@ -285,8 +285,12 @@ void NetProbeInputStream::info_json(json &j) const
 {
     common_info_json(j);
     j[schema_key()]["current_targets_total"] = _dns_list.size() + _ip_list.size();
-    if (PingProbe::sock_count) {
-        j[schema_key()]["ping_sockets"] = PingProbe::sock_count + 1 + (PingProbe::receiver_v6_active() ? 1 : 0);
+    // Report ping socket usage only for ping streams. Derive the probe count from _probes — a stable
+    // per-stream member after start() — rather than a thread_local counter, which info_json (invoked
+    // on an HTTP worker thread) could never read. The two addends are the shared receiver's v4 socket
+    // and, when active, its v6 socket.
+    if (_type == TestType::Ping && !_probes.empty()) {
+        j[schema_key()]["ping_sockets"] = _probes.size() + 1 + (PingProbe::receiver_v6_active() ? 1 : 0);
     }
 }
 

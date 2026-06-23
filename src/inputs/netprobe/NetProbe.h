@@ -61,6 +61,11 @@ protected:
     SendCallback _send;
     FailCallback _fail;
 
+    // Resolve _dns to a printable address. When unforced (first_match), return the first usable
+    // address in the resolver's OWN order — of either family — so OS/resolver policy (e.g. AAAA-first
+    // on a healthy dual-stack host) is preserved. Only when a family is forced via ip_version
+    // (first_match == false) is the result filtered: ipv4 == true picks the first A record, otherwise
+    // the first AAAA. Returns {address, is_ipv4}; {"", false} on lookup failure or no matching family.
     std::pair<std::string, bool> _resolve_dns(bool first_match = true, bool ipv4 = false)
     {
         auto request = _io_loop->resource<uvw::get_addr_info_req>();
@@ -69,25 +74,28 @@ protected:
             return {std::string(), false};
         }
 
-        auto base = response.second.get();
-        // pass 1: IPv4 (preferred) unless caller forces v6
-        if (first_match || ipv4) {
-            for (auto addr = base; addr != nullptr; addr = addr->ai_next) {
-                if (addr->ai_family == AF_INET) {
-                    char buffer[INET_ADDRSTRLEN];
-                    inet_ntop(AF_INET, &reinterpret_cast<struct sockaddr_in *>(addr->ai_addr)->sin_addr, buffer, INET_ADDRSTRLEN);
-                    return {buffer, true};
-                }
+        auto emit = [](auto *addr) -> std::pair<std::string, bool> {
+            if (addr->ai_family == AF_INET) {
+                char buffer[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, &reinterpret_cast<struct sockaddr_in *>(addr->ai_addr)->sin_addr, buffer, INET_ADDRSTRLEN);
+                return {buffer, true};
             }
-        }
-        // pass 2: IPv6
-        if (first_match || !ipv4) {
-            for (auto addr = base; addr != nullptr; addr = addr->ai_next) {
-                if (addr->ai_family == AF_INET6) {
-                    char buffer[INET6_ADDRSTRLEN];
-                    inet_ntop(AF_INET6, &reinterpret_cast<struct sockaddr_in6 *>(addr->ai_addr)->sin6_addr, buffer, INET6_ADDRSTRLEN);
-                    return {buffer, false};
+            char buffer[INET6_ADDRSTRLEN];
+            inet_ntop(AF_INET6, &reinterpret_cast<struct sockaddr_in6 *>(addr->ai_addr)->sin6_addr, buffer, INET6_ADDRSTRLEN);
+            return {buffer, false};
+        };
+
+        for (auto addr = response.second.get(); addr != nullptr; addr = addr->ai_next) {
+            if (first_match) {
+                if (addr->ai_family == AF_INET || addr->ai_family == AF_INET6) {
+                    return emit(addr);
                 }
+            } else if (ipv4) {
+                if (addr->ai_family == AF_INET) {
+                    return emit(addr);
+                }
+            } else if (addr->ai_family == AF_INET6) {
+                return emit(addr);
             }
         }
         return {std::string(), false};

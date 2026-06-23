@@ -17,7 +17,6 @@ std::vector<std::pair<pcpp::Packet, timespec>> PingReceiver::recv_packets{};
 std::mutex PingReceiver::recv_packets_mtx{};
 std::unique_ptr<PingReceiver> PingProbe::_receiver{nullptr};
 std::atomic<PingReceiver *> PingProbe::_receiver_view{nullptr};
-thread_local std::atomic<uint32_t> PingProbe::sock_count{0};
 thread_local SOCKET PingProbe::_sock{INVALID_SOCKET};
 thread_local SOCKET PingProbe::_sock6{INVALID_SOCKET};
 
@@ -225,10 +224,17 @@ void PingReceiver::_setup_receiver()
             // The poll handle could not be created or armed for _sock6. With no armed handler nothing
             // ever reads replies, yet v6_active() (which only checks _sock6) would report IPv6 as
             // working and the send path would keep emitting echoes that silently time out. Close and
-            // invalidate _sock6 so IPv6 ping is cleanly disabled instead of silently broken. The
-            // destructor closes _poll6 (if non-null) and skips _sock6 once it is INVALID_SOCKET.
+            // invalidate _sock6 so IPv6 ping is cleanly disabled instead of silently broken.
             if (auto lg = spdlog::get("visor")) {
                 lg->warn("netprobe: unable to arm ICMPv6 poll handler; IPv6 ping disabled");
+            }
+            if (_poll6) {
+                // Tear down the (never-armed) poll handle so it isn't held for the receiver's lifetime.
+                // Dropping our reference is safe: uvw's poll_handle self-retains on a successful init()
+                // (resource<>() stored an internal self_ptr), so the handle stays alive until the loop
+                // processes uv_close and the close callback clears that self-reference.
+                _poll6->close();
+                _poll6.reset();
             }
 #ifdef _WIN32
             closesocket(_sock6);
@@ -337,7 +343,6 @@ bool PingProbe::start(std::shared_ptr<uvw::loop> io_loop)
     _receiver->register_async_callback(_recv_handler);
     _recv_handler->init();
 
-    ++sock_count;
     _interval_timer->start(uvw::timer_handle::time{0}, uvw::timer_handle::time{_config.interval_msec});
     _init = true;
     return true;
@@ -353,7 +358,6 @@ bool PingProbe::stop()
         _receiver->remove_async_callback(_recv_handler);
         _recv_handler->close();
     }
-    _close_socket();
     return true;
 }
 
@@ -508,18 +512,6 @@ void PingProbe::_send_icmp_v6(uint8_t sequence)
         pcpp::Packet packet;
         packet.addLayer(&echo);
         _send(packet, TestType::Ping, _name, stamp);
-    }
-}
-
-void PingProbe::_close_socket()
-{
-    // Runs on the control thread (via stop()). Only drop the per-thread probe reference count used
-    // for the ping_sockets info metric here. The actual send sockets (_sock/_sock6) are thread_local
-    // to the io thread that opened them and are closed there by close_thread_send_sockets() once the
-    // io loop has stopped; closing them from this thread would be a no-op (it sees INVALID_SOCKET)
-    // and leak the descriptors.
-    if (sock_count) {
-        --sock_count;
     }
 }
 

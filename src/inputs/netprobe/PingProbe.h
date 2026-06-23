@@ -131,11 +131,9 @@ class PingProbe final : public NetProbe
     void _send_icmp_v6(uint8_t sequence);
     std::optional<ErrorType> _get_addr();
     std::optional<ErrorType> _create_socket();
-    void _close_socket();
     std::optional<bool> _force_ipv6;
 
 public:
-    static thread_local std::atomic<uint32_t> sock_count;
     static bool receiver_v6_active();
     // Close the per-io-thread shared send sockets. MUST run on the io thread that opened them
     // (_sock/_sock6 are thread_local); calling close from the control thread that runs start()/stop()
