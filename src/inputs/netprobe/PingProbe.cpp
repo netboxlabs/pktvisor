@@ -148,8 +148,8 @@ void PingReceiver::_setup_receiver()
     _timer->on<uvw::timer_event>([this](const auto &, auto &) {
         if (!_recv_packets.empty()) {
             {
-                // Publish under the lock; consumers snapshot recv_packets under the same lock, so a
-                // later publish cannot realloc the vector out from under a mid-iteration consumer.
+                // Publish under the lock; consumers copy recv_packets under the same lock, so a later
+                // publish cannot realloc the vector out from under a mid-iteration consumer.
                 std::lock_guard<std::mutex> lk(recv_packets_mtx);
                 recv_packets = _recv_packets;
             }
@@ -213,11 +213,13 @@ void PingReceiver::_setup_receiver()
                 if (auto carrier = build_icmpv6_reply_carrier(reinterpret_cast<uint8_t *>(_array6.data()), rc)) {
                     timespec stamp;
                     std::timespec_get(&stamp, TIME_UTC);
-                    _recv_packets.emplace_back(*carrier, stamp);
+                    _recv_packets.emplace_back(std::move(*carrier), stamp);
                 }
             });
-            // resource<>() already initialized the handle; start() is what actually arms polling, so
-            // gate readiness on its return rather than merely on _poll6 being non-null.
+            // resource<>() already initialized the handle (loop::init dispatches to poll_handle::init),
+            // but call init() explicitly to mirror the v4 receiver above and keep the two paths
+            // symmetric. start() is what actually arms polling, so gate readiness on its return.
+            _poll6->init();
             v6_ready = (_poll6->start(uvw::poll_handle::poll_event_flags::READABLE) == 0);
         }
         if (!v6_ready) {
@@ -329,8 +331,12 @@ bool PingProbe::start(std::shared_ptr<uvw::loop> io_loop)
         // note this processes received packets across ALL active ping probes (because of the single receiver thread)
         // the expectation is that packets which did not originate from this probe will be ignored by the handler attached to this probe,
         // since it did not originate from it.
-        // Snapshot under the lock so a concurrent publish on the receiver thread cannot reallocate the
-        // shared vector while we iterate; process the local copy without holding the lock.
+        // Take a private deep copy of the batch. This is required for thread-safety, not merely to
+        // avoid a realloc-under-iteration race: the v4 reply path calls pcpp::IcmpLayer::
+        // getEchoReplyData(), which MUTATES the layer's internal m_EchoData on access. The single
+        // receiver fans out to every probe across every input stream, and those callbacks run on
+        // different io threads — so sharing one pcpp::Packet would be a write/write race on that
+        // layer. A per-consumer copy isolates it. Ping reply volume is low, so the cost is small.
         std::vector<std::pair<pcpp::Packet, timespec>> packets;
         {
             std::lock_guard<std::mutex> lk(PingReceiver::recv_packets_mtx);

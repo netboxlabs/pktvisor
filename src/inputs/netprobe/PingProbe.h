@@ -77,8 +77,11 @@ class PingReceiver
 public:
     bool v6_active() const { return _sock6 != INVALID_SOCKET; }
 
+    // Published per-batch by the receiver timer and read by per-probe async callbacks on other threads
+    // (guarded by recv_packets_mtx). Each consumer takes its OWN copy — see the receive handler in
+    // PingProbe::start() for why sharing one snapshot across threads is unsafe (pcpp layer mutation).
     static std::vector<std::pair<pcpp::Packet, timespec>> recv_packets;
-    static std::mutex recv_packets_mtx; // guards recv_packets: published by the receiver timer, read by per-probe async callbacks on other threads
+    static std::mutex recv_packets_mtx;
 
     PingReceiver();
     ~PingReceiver();
