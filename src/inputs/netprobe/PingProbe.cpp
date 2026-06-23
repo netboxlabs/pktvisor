@@ -4,14 +4,49 @@
 #include "ThreadName.h"
 #include <pcapplusplus/Packet.h>
 #include <pcapplusplus/TimespecTimeval.h>
+#include <spdlog/spdlog.h>
 #include <uvw/idle.h>
+#include <cstring>
+#ifndef _WIN32
+#include <netinet/icmp6.h>
+#endif
 
 namespace visor::input::netprobe {
 
 std::vector<std::pair<pcpp::Packet, timespec>> PingReceiver::recv_packets{};
+std::mutex PingReceiver::recv_packets_mtx{};
 std::unique_ptr<PingReceiver> PingProbe::_receiver{nullptr};
-thread_local std::atomic<uint32_t> PingProbe::sock_count{0};
+std::atomic<PingReceiver *> PingProbe::_receiver_view{nullptr};
 thread_local SOCKET PingProbe::_sock{INVALID_SOCKET};
+thread_local SOCKET PingProbe::_sock6{INVALID_SOCKET};
+
+std::optional<pcpp::Packet> build_icmpv6_reply_carrier(const uint8_t *data, int len)
+{
+    if (len < static_cast<int>(sizeof(pcpp::icmpv6_echo_hdr))) {
+        return std::nullopt; // too short to be an ICMPv6 echo
+    }
+    // A raw ICMPv6 socket delivers the bare ICMPv6 message (no IPv6 header). Synthesize a minimal
+    // 40-byte IPv6 header so a DLT_RAW1 RawPacket parses IPv6 -> ICMPv6 and the parsed layers are
+    // owned by the Packet (no bad delete[] on a freestanding layer). The Packet owns the heap
+    // RawPacket (which owns the buffer), so the returned Packet is self-contained and survives the
+    // fan-out deep-copy. Mirrors the v4 receive idiom (whose raw socket carries the IP header).
+    constexpr int IP6_HDR_LEN = 40;
+    auto *buf = new uint8_t[IP6_HDR_LEN + len];
+    std::memset(buf, 0, IP6_HDR_LEN);
+    buf[0] = 0x60;                                     // IPv6, version 6
+    buf[4] = static_cast<uint8_t>((len >> 8) & 0xff);  // payload length (high byte)
+    buf[5] = static_cast<uint8_t>(len & 0xff);         // payload length (low byte)
+    buf[6] = static_cast<uint8_t>(IPPROTO_ICMPV6);     // next header = 58 (ICMPv6)
+    buf[7] = 64;                                       // hop limit
+    std::memcpy(buf + IP6_HDR_LEN, data, static_cast<size_t>(len));
+    timeval time{};
+    auto packet = pcpp::Packet(new pcpp::RawPacket(buf, IP6_HDR_LEN + len, time, true, pcpp::LINKTYPE_DLT_RAW1), true);
+    auto *echo = packet.getLayerOfType<pcpp::ICMPv6EchoLayer>();
+    if (echo == nullptr || echo->getMessageType() != pcpp::ICMPv6MessageType::ICMPv6_ECHO_REPLY) {
+        return std::nullopt; // not an ICMPv6 echo reply
+    }
+    return packet;
+}
 
 PingReceiver::PingReceiver()
 {
@@ -20,6 +55,9 @@ PingReceiver::PingReceiver()
 PingReceiver::~PingReceiver()
 {
     _poll->close();
+    if (_poll6) {
+        _poll6->close();
+    }
     if (_async_h && _io_thread) {
         // we have to use AsyncHandle to stop the loop from the same thread the loop is running in
         _async_h->send();
@@ -34,6 +72,14 @@ PingReceiver::~PingReceiver()
     close(_sock);
 #endif
     _sock = INVALID_SOCKET;
+    if (_sock6 != INVALID_SOCKET) {
+#ifdef _WIN32
+        closesocket(_sock6);
+#else
+        close(_sock6);
+#endif
+        _sock6 = INVALID_SOCKET;
+    }
 }
 
 void PingReceiver::_setup_receiver()
@@ -101,8 +147,15 @@ void PingReceiver::_setup_receiver()
     _timer = _io_loop->resource<uvw::timer_handle>();
     _timer->on<uvw::timer_event>([this](const auto &, auto &) {
         if (!_recv_packets.empty()) {
-            recv_packets = _recv_packets;
+            {
+                // Publish under the lock; consumers copy recv_packets under the same lock, so a later
+                // publish cannot realloc the vector out from under a mid-iteration consumer.
+                std::lock_guard<std::mutex> lk(recv_packets_mtx);
+                recv_packets = _recv_packets;
+            }
             _recv_packets.clear();
+            // Guard the callback list against concurrent register/remove on control threads.
+            std::lock_guard<std::mutex> lk(_callbacks_mtx);
             for (const auto &callback : _callbacks) {
                 callback->send();
             }
@@ -113,11 +166,113 @@ void PingReceiver::_setup_receiver()
     _poll->init();
     _poll->start(uvw::poll_handle::poll_event_flags::READABLE);
 
+    // ICMPv6 receive socket — RAW only, opened tolerantly (no throw; warn-log on failure so
+    // v4-only/unprivileged hosts keep working). No SOCK_DGRAM fallback: a datagram ICMPv6 socket
+    // only receives replies for echoes IT sent, but each probe sends on its own (separate) socket,
+    // so a DGRAM receiver would never see the replies (all reported as timeouts). IPv6 ping
+    // therefore requires raw-socket privilege (CAP_NET_RAW / root / Administrator).
+    _sock6 = socket(AF_INET6, SOCK_RAW, IPPROTO_ICMPV6);
+    if (_sock6 == INVALID_SOCKET) {
+        if (auto lg = spdlog::get("visor")) {
+            lg->warn("netprobe: unable to open ICMPv6 receive socket; IPv6 ping disabled");
+        }
+    } else {
+        // Track whether the socket was actually put into non-blocking mode. The poll-driven receiver
+        // does a single recvfrom() per event; if the socket stayed blocking and a READABLE event ever
+        // fired without a datagram ready (spurious wakeup / error condition), that read would block
+        // the whole receiver thread. So if non-blocking can't be set, we disable IPv6 below instead.
+        bool nonblock_ok = false;
+#ifdef _WIN32
+        unsigned long flag6 = 1;
+        nonblock_ok = (ioctlsocket(_sock6, FIONBIO, &flag6) == 0);
+#else
+        int flag6 = fcntl(_sock6, F_GETFL, 0);
+        if (flag6 != SOCKET_ERROR) {
+            nonblock_ok = (fcntl(_sock6, F_SETFL, flag6 | O_NONBLOCK) != SOCKET_ERROR);
+        }
+        // _sock6 is always RAW here, so ICMP6_FILTER (a RAW-only option) applies: pass only echo
+        // replies (type 129), drop everything else in-kernel.
+        struct icmp6_filter filt;
+        ICMP6_FILTER_SETBLOCKALL(&filt);
+        ICMP6_FILTER_SETPASS(ICMP6_ECHO_REPLY, &filt);
+        setsockopt(_sock6, IPPROTO_ICMPV6, ICMP6_FILTER, &filt, sizeof(filt));
+#endif
+        _poll6 = _io_loop->resource<uvw::poll_handle>(static_cast<uvw::os_socket_handle>(_sock6));
+        bool v6_ready = false;
+        if (_poll6 && nonblock_ok) {
+            _poll6->on<uvw::error_event>([](const auto &, auto &handler) { handler.close(); });
+            _poll6->on<uvw::poll_event>([this](const uvw::poll_event &, uvw::poll_handle &) {
+                // Read one datagram per (level-triggered) poll event. The socket is non-blocking
+                // (verified at setup), but looping until EWOULDBLOCK would let a flood of replies
+                // starve the v4 poll/timer on this same thread; uvw re-fires the event while data
+                // remains, so a single read keeps the receiver fair and matches the v4 path. On POSIX
+                // we also pass MSG_DONTWAIT so the read can never block the receiver thread even on a
+                // spurious READABLE wakeup with no datagram ready.
+#ifdef _WIN32
+                int rc = recvfrom(_sock6, _array6.data(), _array6.size(), 0, nullptr, nullptr);
+#else
+                int rc = recvfrom(_sock6, _array6.data(), _array6.size(), MSG_DONTWAIT, nullptr, nullptr);
+#endif
+                if (rc <= 0) {
+                    return;
+                }
+                // A raw ICMPv6 socket strips the IPv6 header, so pcpp::Packet cannot parse the bare
+                // buffer (createFirstLayer dispatches on link-layer type) and a freestanding
+                // ICMPv6EchoLayer over _array6 would make ~Layer() delete[] the std::array storage.
+                // build_icmpv6_reply_carrier synthesizes an IPv6 header so a self-owning Packet
+                // parses IPv6 -> ICMPv6 and survives the fan-out deep-copy.
+                if (auto carrier = build_icmpv6_reply_carrier(reinterpret_cast<uint8_t *>(_array6.data()), rc)) {
+                    timespec stamp;
+                    std::timespec_get(&stamp, TIME_UTC);
+                    _recv_packets.emplace_back(std::move(*carrier), stamp);
+                }
+            });
+            // resource<>() already initialized the handle (loop::init dispatches to poll_handle::init),
+            // but call init() explicitly to mirror the v4 receiver above and keep the two paths
+            // symmetric. start() is what actually arms polling, so gate readiness on its return.
+            _poll6->init();
+            v6_ready = (_poll6->start(uvw::poll_handle::poll_event_flags::READABLE) == 0);
+        }
+        if (!v6_ready) {
+            // The socket could not be made non-blocking, or the poll handle could not be created or
+            // armed for _sock6. With no armed handler nothing ever reads replies, yet v6_active()
+            // (which only checks _sock6) would report IPv6 as working and the send path would keep
+            // emitting echoes that silently time out. Close and invalidate _sock6 so IPv6 ping is
+            // cleanly disabled instead of silently broken.
+            if (auto lg = spdlog::get("visor")) {
+                lg->warn("netprobe: unable to set up ICMPv6 receive socket; IPv6 ping disabled");
+            }
+            if (_poll6) {
+                // Tear down the (never-armed) poll handle so it isn't held for the receiver's lifetime.
+                // Dropping our reference is safe: uvw's poll_handle self-retains on a successful init()
+                // (resource<>() stored an internal self_ptr), so the handle stays alive until the loop
+                // processes uv_close and the close callback clears that self-reference.
+                _poll6->close();
+                _poll6.reset();
+            }
+#ifdef _WIN32
+            closesocket(_sock6);
+#else
+            close(_sock6);
+#endif
+            _sock6 = INVALID_SOCKET;
+        }
+    }
+
     // spawn the loop
     _io_thread = std::make_unique<std::thread>([this] {
         thread::change_self_name("receiver", "ping");
         _io_loop->run();
     });
+}
+
+bool PingProbe::receiver_v6_active()
+{
+    // Read the published view rather than _receiver directly: this is called from the management/HTTP
+    // thread (via info_json) and may run concurrently with the call_once that first constructs the
+    // receiver. The acquire load pairs with the release store in that call_once.
+    auto *r = _receiver_view.load(std::memory_order_acquire);
+    return r && r->v6_active();
 }
 
 bool PingProbe::start(std::shared_ptr<uvw::loop> io_loop)
@@ -126,10 +281,6 @@ bool PingProbe::start(std::shared_ptr<uvw::loop> io_loop)
         return false;
     }
 
-    // TODO support ICMPv6
-    if (_ip.isIPv6()) {
-        return false;
-    }
     // add validator
     _payload_array = validator;
     if (_config.packet_payload_size < validator.size()) {
@@ -140,10 +291,16 @@ bool PingProbe::start(std::shared_ptr<uvw::loop> io_loop)
 
     _io_loop = io_loop;
 
-    if (!_receiver) {
-        // only once
+    // Construct the process-wide receiver exactly once, even if several input streams start
+    // concurrently on different threads. A plain `if (!_receiver)` would race and double-construct
+    // (each opening raw sockets + spawning an io thread) while also racing the unique_ptr itself.
+    // If the constructor throws, call_once leaves the flag unset so a later start() can retry.
+    static std::once_flag receiver_once;
+    std::call_once(receiver_once, [] {
         _receiver = std::make_unique<PingReceiver>();
-    }
+        // Publish for lock-free cross-thread readers (receiver_v6_active); release pairs with their acquire.
+        _receiver_view.store(_receiver.get(), std::memory_order_release);
+    });
 
     _interval_timer = _io_loop->resource<uvw::timer_handle>();
     if (!_interval_timer) {
@@ -152,12 +309,11 @@ bool PingProbe::start(std::shared_ptr<uvw::loop> io_loop)
     _interval_timer->on<uvw::timer_event>([this](const auto &, auto &) {
         _internal_sequence = 0;
 
-        if (auto error = _create_socket(); error.has_value()) {
+        if (auto error = _get_addr(); error.has_value()) {
             _fail(error.value(), TestType::Ping, _name);
             return;
         }
-
-        if (auto error = _get_addr(); error.has_value()) {
+        if (auto error = _create_socket(); error.has_value()) {
             _fail(error.value(), TestType::Ping, _name);
             return;
         }
@@ -166,7 +322,7 @@ bool PingProbe::start(std::shared_ptr<uvw::loop> io_loop)
         _internal_timer->on<uvw::timer_event>([this](const auto &, auto &handle) {
             if (_internal_sequence < static_cast<uint8_t>(_config.packets_per_test)) {
                 _internal_sequence++;
-                _send_icmp_v4(_internal_sequence);
+                _is_ipv6 ? _send_icmp_v6(_internal_sequence) : _send_icmp_v4(_internal_sequence);
             } else {
                 handle.stop();
                 handle.close();
@@ -174,7 +330,7 @@ bool PingProbe::start(std::shared_ptr<uvw::loop> io_loop)
         });
 
         (_sequence == UCHAR_MAX) ? _sequence = 0 : _sequence++;
-        _send_icmp_v4(_internal_sequence);
+        _is_ipv6 ? _send_icmp_v6(_internal_sequence) : _send_icmp_v4(_internal_sequence);
         _internal_sequence++;
         _internal_timer->start(uvw::timer_handle::time{_config.packets_interval_msec}, uvw::timer_handle::time{_config.packets_interval_msec});
     });
@@ -186,15 +342,25 @@ bool PingProbe::start(std::shared_ptr<uvw::loop> io_loop)
     _recv_handler->on<uvw::async_event>([this](const auto &, auto &) {
         // note this processes received packets across ALL active ping probes (because of the single receiver thread)
         // the expectation is that packets which did not originate from this probe will be ignored by the handler attached to this probe,
-        // since it did not originate from it
-        for (auto &[packet, stamp] : PingReceiver::recv_packets) {
+        // since it did not originate from it.
+        // Take a private deep copy of the batch. This is required for thread-safety, not merely to
+        // avoid a realloc-under-iteration race: the v4 reply path calls pcpp::IcmpLayer::
+        // getEchoReplyData(), which MUTATES the layer's internal m_EchoData on access. The single
+        // receiver fans out to every probe across every input stream, and those callbacks run on
+        // different io threads — so sharing one pcpp::Packet would be a write/write race on that
+        // layer. A per-consumer copy isolates it. Ping reply volume is low, so the cost is small.
+        std::vector<std::pair<pcpp::Packet, timespec>> packets;
+        {
+            std::lock_guard<std::mutex> lk(PingReceiver::recv_packets_mtx);
+            packets = PingReceiver::recv_packets;
+        }
+        for (auto &[packet, stamp] : packets) {
             _recv(packet, TestType::Ping, _name, stamp);
         }
     });
     _receiver->register_async_callback(_recv_handler);
     _recv_handler->init();
 
-    ++sock_count;
     _interval_timer->start(uvw::timer_handle::time{0}, uvw::timer_handle::time{_config.interval_msec});
     _init = true;
     return true;
@@ -210,7 +376,6 @@ bool PingProbe::stop()
         _receiver->remove_async_callback(_recv_handler);
         _recv_handler->close();
     }
-    _close_socket();
     return true;
 }
 
@@ -248,57 +413,86 @@ std::optional<ErrorType> PingProbe::_get_addr()
     if (!response.first) {
         return ErrorType::DnsLookupFailure;
     }
+    const bool v6_only = _force_ipv6.has_value() && *_force_ipv6;
+    const bool v4_only = _force_ipv6.has_value() && !*_force_ipv6;
 
-    auto addr = response.second.get();
-    while (addr->ai_next != nullptr) {
-        if (addr->ai_family == AF_INET) {
-            memcpy(&_sa, reinterpret_cast<sockaddr_in *>(addr->ai_addr), sizeof(struct sockaddr_in));
-            _sin_length = sizeof(_sa);
-            _sa.sin_family = AF_INET;
-            return std::nullopt;
-        } else if (addr->ai_family == AF_INET6) {
-            memcpy(&_sa6, reinterpret_cast<sockaddr_in6 *>(addr->ai_addr), sizeof(struct sockaddr_in6));
-            _sin_length = sizeof(_sa6);
-            _sa6.sin6_family = AF_INET6;
+    if (!v6_only) { // IPv4 (preferred) unless forced v6
+        for (auto addr = response.second.get(); addr != nullptr; addr = addr->ai_next) {
+            if (addr->ai_family == AF_INET) {
+                memcpy(&_sa, reinterpret_cast<sockaddr_in *>(addr->ai_addr), sizeof(struct sockaddr_in));
+                _sa.sin_family = AF_INET;
+                _sin_length = sizeof(_sa);
+                _is_ipv6 = false;
+                // NOTE: do not set _ip_set for DNS targets — re-resolve every interval (as develop did)
+                // so round-robin / failover / short-TTL names are not pinned to the first address.
+                return std::nullopt;
+            }
         }
-        addr = addr->ai_next;
+    }
+    if (!v4_only) { // IPv6
+        for (auto addr = response.second.get(); addr != nullptr; addr = addr->ai_next) {
+            if (addr->ai_family == AF_INET6) {
+                memcpy(&_sa6, reinterpret_cast<sockaddr_in6 *>(addr->ai_addr), sizeof(struct sockaddr_in6));
+                _sa6.sin6_family = AF_INET6;
+                _sin_length = sizeof(_sa6);
+                _is_ipv6 = true;
+                // NOTE: do not set _ip_set for DNS targets — re-resolve every interval (see above).
+                return std::nullopt;
+            }
+        }
     }
     return ErrorType::InvalidIp;
 }
 
 std::optional<ErrorType> PingProbe::_create_socket()
 {
-    if (_sock != INVALID_SOCKET) {
+    // A v6 probe's send socket is separate from the shared receiver's raw ICMPv6 socket; replies are
+    // only ever read off the receiver. If the receiver has no working v6 socket, sending would just
+    // produce echoes that can never be matched (perpetual silent timeouts), so fail cleanly here and
+    // surface a socket error instead. (v4 has no such split — its receiver socket always opens.)
+    if (_is_ipv6 && !receiver_v6_active()) {
+        return ErrorType::SocketError;
+    }
+    SOCKET &sock = _is_ipv6 ? _sock6 : _sock;
+    if (sock != INVALID_SOCKET) {
         return std::nullopt;
     }
+    int domain = _is_ipv6 ? AF_INET6 : AF_INET;
+    int proto = _is_ipv6 ? IPPROTO_ICMPV6 : IPPROTO_ICMP;
 
-    int domain = AF_INET;
-    if (_is_ipv6) {
-        domain = AF_INET6;
-    }
-
-    _sock = socket(domain, SOCK_RAW, IPPROTO_ICMP);
+    sock = socket(domain, SOCK_RAW, proto);
 #ifdef _WIN32
-    if (_sock == INVALID_SOCKET) {
+    if (sock == INVALID_SOCKET) {
         return ErrorType::SocketError;
     }
     unsigned long flag = 1;
-    if (ioctlsocket(_sock, FIONBIO, &flag) == SOCKET_ERROR) {
+    if (ioctlsocket(sock, FIONBIO, &flag) == SOCKET_ERROR) {
         return ErrorType::SocketError;
     }
+    // No IPV6_CHECKSUM setsockopt here: for an IPPROTO_ICMPV6 raw socket the kernel computes and
+    // inserts the mandatory ICMPv6 checksum unconditionally (RFC 3542 sec 3.1) on both POSIX and
+    // Windows, and attempting to set IPV6_CHECKSUM on such a socket fails. So _send_icmp_v6 leaves
+    // the checksum 0 and the kernel fills it. (The Windows v6 send/recv path still needs end-to-end
+    // verification on a real Windows host — including inbound raw ICMPv6 delivery.)
 #else
-    if (_sock == INVALID_SOCKET) {
-        _sock = socket(domain, SOCK_DGRAM, IPPROTO_ICMP);
+    // IPv4 may fall back to an unprivileged SOCK_DGRAM "ping" socket; IPv6 must not. The shared
+    // receiver only polls a raw _sock6, and a DGRAM ICMPv6 socket delivers replies to the sending
+    // socket instead — which nothing reads — so every v6 reply would be lost. Fail v6 cleanly so the
+    // caller reports a socket error rather than silently timing out every probe.
+    if (sock == INVALID_SOCKET && !_is_ipv6) {
+        sock = socket(domain, SOCK_DGRAM, proto); // best-effort; matching reliable on RAW only
+    }
+    if (sock == INVALID_SOCKET) {
+        return ErrorType::SocketError;
     }
     int flag = 1;
-    if ((flag = fcntl(_sock, F_GETFL, 0)) == SOCKET_ERROR) {
+    if ((flag = fcntl(sock, F_GETFL, 0)) == SOCKET_ERROR) {
         return ErrorType::SocketError;
     }
-    if (fcntl(_sock, F_SETFL, flag | O_NONBLOCK) == SOCKET_ERROR) {
+    if (fcntl(sock, F_SETFL, flag | O_NONBLOCK) == SOCKET_ERROR) {
         return ErrorType::SocketError;
     }
 #endif
-
     return std::nullopt;
 }
 
@@ -318,16 +512,37 @@ void PingProbe::_send_icmp_v4(uint8_t sequence)
     }
 }
 
-void PingProbe::_close_socket()
+void PingProbe::_send_icmp_v6(uint8_t sequence)
 {
-    if (--sock_count; sock_count) {
-        return;
+    timespec stamp;
+    std::timespec_get(&stamp, TIME_UTC);
+    uint16_t seq16 = (static_cast<uint16_t>(_sequence) << 8) | sequence;
+    // The 8-byte ICMPv6 echo header carries no timestamp; the transaction manager
+    // carries the send time, matched by id+sequence (same as v4). Identifier = per-probe _id.
+    auto echo = pcpp::ICMPv6EchoLayer(pcpp::ICMPv6EchoLayer::REQUEST, _id, seq16,
+        _payload_array.data(), _payload_array.size());
+    // Do NOT call computeCalculateFields(): the kernel owns the ICMPv6 checksum and pcpp
+    // cannot compute it without an IPv6 prev-layer/pseudo-header. The layer is used only for
+    // the in-process metric record (id+seq), never re-serialized to the wire.
+    int rc = sendto(_sock6, reinterpret_cast<char *>(echo.getData()), echo.getDataLen(), 0,
+        reinterpret_cast<sockaddr *>(&_sa6), _sin_length);
+    if (rc != SOCKET_ERROR) {
+        pcpp::Packet packet;
+        packet.addLayer(&echo);
+        _send(packet, TestType::Ping, _name, stamp);
     }
+}
+
+void PingProbe::close_thread_send_sockets()
+{
 #ifdef _WIN32
-    closesocket(_sock);
+    if (_sock != INVALID_SOCKET) closesocket(_sock);
+    if (_sock6 != INVALID_SOCKET) closesocket(_sock6);
 #else
-    close(_sock);
+    if (_sock != INVALID_SOCKET) close(_sock);
+    if (_sock6 != INVALID_SOCKET) close(_sock6);
 #endif
     _sock = INVALID_SOCKET;
+    _sock6 = INVALID_SOCKET;
 }
 }

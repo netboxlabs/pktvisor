@@ -6,6 +6,7 @@
 
 #include "NetProbe.h"
 
+#include <optional>
 #include <uvw/tcp.h>
 #include <uvw/timer.h>
 
@@ -18,15 +19,17 @@ class TcpProbe final : public NetProbe
     bool _is_ipv4{false};
     std::string _ip_str;
     std::shared_ptr<uvw::timer_handle> _interval_timer;
+    std::optional<bool> _force_ipv6;
 
     std::shared_ptr<uvw::tcp_handle> _client;
 
     void _perform_tcp_process();
 
 public:
-    TcpProbe(uint16_t id, const std::string &name, const pcpp::IPAddress &ip, const std::string &dns, uint32_t port)
+    TcpProbe(uint16_t id, const std::string &name, const pcpp::IPAddress &ip, const std::string &dns, uint32_t port, std::optional<bool> force_ipv6 = std::nullopt)
         : NetProbe(id, name, ip, dns)
-        , _dst_port(port) {};
+        , _dst_port(port)
+        , _force_ipv6(force_ipv6) {};
     ~TcpProbe() = default;
     bool start(std::shared_ptr<uvw::loop> io_loop) override;
     bool stop() override;

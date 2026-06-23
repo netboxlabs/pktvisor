@@ -76,6 +76,8 @@ void NetProbeStreamHandler::probe_signal_send(pcpp::Packet &payload, TestType ty
     if (type == TestType::Ping) {
         if (auto icmp = payload.getLayerOfType<pcpp::IcmpLayer>(); icmp != nullptr) {
             _metrics->process_netprobe_icmp(icmp, name, stamp);
+        } else if (auto icmp6 = payload.getLayerOfType<pcpp::ICMPv6EchoLayer>(); icmp6 != nullptr) {
+            _metrics->process_netprobe_icmpv6(icmp6, name, stamp);
         }
     } else if (type == TestType::TCP) {
         if (auto tcp = payload.getLayerOfType<pcpp::TcpLayer>(); tcp != nullptr) {
@@ -89,6 +91,8 @@ void NetProbeStreamHandler::probe_signal_recv(pcpp::Packet &payload, TestType ty
     if (type == TestType::Ping) {
         if (auto icmp = payload.getLayerOfType<pcpp::IcmpLayer>(); icmp != nullptr) {
             _metrics->process_netprobe_icmp(icmp, name, stamp);
+        } else if (auto icmp6 = payload.getLayerOfType<pcpp::ICMPv6EchoLayer>(); icmp6 != nullptr) {
+            _metrics->process_netprobe_icmpv6(icmp6, name, stamp);
         }
     } else if (type == TestType::TCP) {
         if (auto tcp = payload.getLayerOfType<pcpp::TcpLayer>(); tcp != nullptr) {
@@ -394,6 +398,26 @@ void NetProbeMetricsManager::process_netprobe_icmp(pcpp::IcmpLayer *layer, const
             } else if (xact.first == Result::TimedOut) {
                 live_bucket()->process_failure(ErrorType::Timeout, xact.second.target);
             }
+        }
+    }
+}
+
+void NetProbeMetricsManager::process_netprobe_icmpv6(pcpp::ICMPv6EchoLayer *layer, const std::string &target, timespec stamp)
+{
+    // base event
+    new_event(stamp);
+    // getIdentifier()/getSequenceNr() already byte-swap to host order inside pcpp (be16toh),
+    // matching the htobe16 the send side used; do not add another ntohs.
+    auto ping_id = (static_cast<uint32_t>(layer->getIdentifier()) << 16) | layer->getSequenceNr();
+    if (layer->getMessageType() == pcpp::ICMPv6MessageType::ICMPv6_ECHO_REQUEST) {
+        _request_reply_manager->start_transaction(std::to_string(ping_id), {{stamp, {0, 0}}, target});
+        live_bucket()->process_attempts(_deep_sampling_now, target);
+    } else if (layer->getMessageType() == pcpp::ICMPv6MessageType::ICMPv6_ECHO_REPLY) {
+        auto xact = _request_reply_manager->maybe_end_transaction(std::to_string(ping_id), stamp);
+        if (xact.first == Result::Valid) {
+            live_bucket()->new_transaction(_deep_sampling_now, xact.second);
+        } else if (xact.first == Result::TimedOut) {
+            live_bucket()->process_failure(ErrorType::Timeout, xact.second.target);
         }
     }
 }

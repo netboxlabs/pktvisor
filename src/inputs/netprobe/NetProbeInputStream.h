@@ -6,6 +6,7 @@
 
 #include "InputStream.h"
 #include "NetProbe.h"
+#include <optional>
 #include <pcapplusplus/Packet.h>
 #include <spdlog/spdlog.h>
 
@@ -27,8 +28,10 @@ class NetProbeInputStream : public visor::InputStream
     uint64_t _packets_per_test{1};
     uint64_t _packets_interval_msec{25};
     uint64_t _packet_payload_size{48};
-    std::map<std::string, std::pair<pcpp::IPAddress, uint32_t>> _ip_list;
-    std::map<std::string, std::pair<std::string, uint32_t>> _dns_list;
+    struct IpEntry { pcpp::IPAddress ip; uint32_t port{0}; };
+    struct DnsEntry { std::string dns; uint32_t port{0}; std::optional<bool> force_ipv6; };
+    std::map<std::string, IpEntry> _ip_list;
+    std::map<std::string, DnsEntry> _dns_list;
     std::shared_ptr<spdlog::logger> _logger;
 
     std::unique_ptr<std::thread> _io_thread;

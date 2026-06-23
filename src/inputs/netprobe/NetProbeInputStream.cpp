@@ -109,16 +109,31 @@ void NetProbeInputStream::start()
             } else if (config->config_exists("port")) {
                 port = static_cast<uint32_t>(config->config_get<uint64_t>("port"));
             }
+
+            std::optional<bool> force_ipv6;
+            if (config->config_exists("ip_version")) {
+                auto v = config->config_get<uint64_t>("ip_version");
+                if (v != 4 && v != 6) {
+                    throw NetProbeException("ip_version must be 4 or 6");
+                }
+                force_ipv6 = (v == 6);
+            }
+
             auto target = config->config_get<std::string>("target");
             if (pcpp::IPv4Address::isValidIPv4Address(target) || pcpp::IPv6Address::isValidIPv6Address(target)) {
-                _ip_list[key] = {pcpp::IPAddress(target), port};
+                bool literal_v6 = pcpp::IPv6Address::isValidIPv6Address(target);
+                if (force_ipv6.has_value() && *force_ipv6 != literal_v6) {
+                    throw NetProbeException(fmt::format("target {} is {} but ip_version is set to {}",
+                        target, literal_v6 ? "IPv6" : "IPv4", *force_ipv6 ? 6 : 4));
+                }
+                _ip_list[key] = IpEntry{pcpp::IPAddress(target), port};
                 continue;
             }
             auto dot = target.find(".");
             if (dot == std::string::npos && target != "localhost") {
                 throw NetProbeException(fmt::format("{} is an invalid/unsupported DNS", target));
             }
-            _dns_list[key] = {target, port};
+            _dns_list[key] = DnsEntry{target, port, force_ipv6};
         }
     }
 
@@ -196,9 +211,9 @@ void NetProbeInputStream::_create_netprobe_loop()
     for (const auto &ip : _ip_list) {
         std::unique_ptr<NetProbe> probe{nullptr};
         if (_type == TestType::Ping) {
-            probe = std::make_unique<PingProbe>(_id, ip.first, ip.second.first, std::string());
+            probe = std::make_unique<PingProbe>(_id, ip.first, ip.second.ip, std::string());
         } else if (_type == TestType::TCP) {
-            probe = std::make_unique<TcpProbe>(_id, ip.first, ip.second.first, std::string(), ip.second.second);
+            probe = std::make_unique<TcpProbe>(_id, ip.first, ip.second.ip, std::string(), ip.second.port);
         } else {
             throw NetProbeException(fmt::format("Test type currently not supported"));
         }
@@ -214,9 +229,9 @@ void NetProbeInputStream::_create_netprobe_loop()
     for (const auto &dns : _dns_list) {
         std::unique_ptr<NetProbe> probe{nullptr};
         if (_type == TestType::Ping) {
-            probe = std::make_unique<PingProbe>(_id, dns.first, pcpp::IPAddress(), dns.second.first);
+            probe = std::make_unique<PingProbe>(_id, dns.first, pcpp::IPAddress(), dns.second.dns, dns.second.force_ipv6);
         } else if (_type == TestType::TCP) {
-            probe = std::make_unique<TcpProbe>(_id, dns.first, pcpp::IPAddress(), dns.second.first, dns.second.second);
+            probe = std::make_unique<TcpProbe>(_id, dns.first, pcpp::IPAddress(), dns.second.dns, dns.second.port, dns.second.force_ipv6);
         } else {
             throw NetProbeException(fmt::format("Test type currently not supported"));
         }
@@ -234,6 +249,13 @@ void NetProbeInputStream::_create_netprobe_loop()
         _timer->start(uvw::timer_handle::time{1000}, uvw::timer_handle::time{HEARTBEAT_INTERVAL * 1000});
         thread::change_self_name(schema_key(), name());
         _io_loop->run();
+        if (_type == TestType::Ping) {
+            // Close the ping send sockets here, on the io thread that opened them: _sock/_sock6 are
+            // thread_local, so this is the only thread that can actually close the raw descriptors.
+            // Runs after the loop has stopped (and before stop() joins this thread), so no probe is
+            // still sending.
+            PingProbe::close_thread_send_sockets();
+        }
     });
 }
 
@@ -263,8 +285,12 @@ void NetProbeInputStream::info_json(json &j) const
 {
     common_info_json(j);
     j[schema_key()]["current_targets_total"] = _dns_list.size() + _ip_list.size();
-    if (PingProbe::sock_count) {
-        j[schema_key()]["ping_sockets"] = PingProbe::sock_count + 1;
+    // Report ping socket usage only for ping streams. Derive the probe count from _probes — a stable
+    // per-stream member after start() — rather than a thread_local counter, which info_json (invoked
+    // on an HTTP worker thread) could never read. The two addends are the shared receiver's v4 socket
+    // and, when active, its v6 socket.
+    if (_type == TestType::Ping && !_probes.empty()) {
+        j[schema_key()]["ping_sockets"] = _probes.size() + 1 + (PingProbe::receiver_v6_active() ? 1 : 0);
     }
 }
 
