@@ -107,6 +107,14 @@ set(VISOR_STATIC_PLUGINS)
 enable_testing()
 
 message(STATUS "Building pktvisor version ${CMAKE_PROJECT_VERSION_MAJOR}.${CMAKE_PROJECT_VERSION_MINOR}.${CMAKE_PROJECT_VERSION_PATCH}${VISOR_PRERELEASE}")
+
+# opentelemetry-cpp 1.26.0 generates proto headers with dllexport_decl=OPENTELEMETRY_PROTO_API; the Conan recipe doesn't propagate the macro. On Windows the proto package is a DLL (consumers must import); elsewhere it expands to nothing.
+if(WIN32)
+    add_compile_definitions("OPENTELEMETRY_PROTO_API=__declspec(dllimport)")
+else()
+    add_compile_definitions(OPENTELEMETRY_PROTO_API=)
+endif()
+
 add_subdirectory(3rd)
 add_subdirectory(libs)
 add_subdirectory(src)
