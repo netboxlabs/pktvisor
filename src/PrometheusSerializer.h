@@ -23,10 +23,16 @@ public:
     void write(const std::string &base, Type type, const std::string &help,
         std::initializer_list<std::string> suffix, const LabelMap &labels, V value)
     {
+        // The first write for a family fixes its Type and HELP; later writes only append series.
+        // Exception: if the family's HELP was first recorded empty, a later non-empty HELP fills it.
+        // Every caller uses one fixed Type+HELP per family (each metric has a fixed _desc), so a
+        // differing Type on a later write does not occur in practice; first-write Type wins.
         auto it = _families.find(base);
         if (it == _families.end()) {
             _order.push_back(base);
             it = _families.emplace(base, Family{type, help, {}}).first;
+        } else if (it->second.help.empty() && !help.empty()) {
+            it->second.help = help;
         }
         std::string line = base;
         for (const auto &s : suffix) {

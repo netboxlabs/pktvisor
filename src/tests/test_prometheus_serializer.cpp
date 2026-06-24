@@ -96,3 +96,18 @@ TEST_CASE("numeric formatting matches ostream operator<<", "[prometheus][seriali
         CHECK(out.find(std::string(pair.first) + "{} " + pair.second + "\n") != std::string::npos);
     }
 }
+
+TEST_CASE("a later non-empty HELP fills an initially-empty one", "[prometheus][serializer]")
+{
+    Metric::reset_static_labels();
+    PrometheusSerializer s;
+    s.write("m", Type::Gauge, "", {}, {}, 1);          // first write: empty HELP
+    s.write("m", Type::Gauge, "real help", {}, {}, 2); // later write supplies HELP
+    auto out = s.finalize();
+    // single family, one header pair, the non-empty HELP wins, both series present
+    CHECK(out ==
+        "# HELP m real help\n"
+        "# TYPE m gauge\n"
+        "m{} 1\n"
+        "m{} 2\n");
+}

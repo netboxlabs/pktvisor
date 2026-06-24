@@ -175,7 +175,7 @@ TEST_CASE("StreamMetricsHandler tests", "[metrics][handler]")
         {
             PrometheusSerializer ser;
             handler->window_prometheus(ser);
-            CHECK(ser.finalize().find("live_window") != std::string::npos);
+            CHECK(ser.finalize().find("live_window{") != std::string::npos);
         }
 
         config.config_set<uint64_t>("period", 3);
@@ -183,13 +183,13 @@ TEST_CASE("StreamMetricsHandler tests", "[metrics][handler]")
         {
             PrometheusSerializer ser;
             handler->window_prometheus(ser);
-            CHECK(ser.finalize().find("first_window") != std::string::npos);
+            CHECK(ser.finalize().find("first_window{") != std::string::npos);
         }
 
         {
             PrometheusSerializer ser;
             handler->window_prometheus(ser, nullptr);
-            CHECK(ser.finalize().find("external_window") != std::string::npos);
+            CHECK(ser.finalize().find("external_window{") != std::string::npos);
         }
     }
 

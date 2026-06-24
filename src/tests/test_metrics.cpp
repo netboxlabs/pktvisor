@@ -69,7 +69,7 @@ TEST_CASE("Abstract metrics manager", "[metrics][abstract]")
     {
         PrometheusSerializer ser;
         manager->window_single_prometheus(ser, 0, {{"policy", "default"}});
-        CHECK(ser.finalize().find("test_performed") != std::string::npos);
+        CHECK(ser.finalize().find("test_performed{") != std::string::npos);
     }
 
     SECTION("Abstract window single opentelemetry")
@@ -102,7 +102,7 @@ TEST_CASE("Abstract metrics manager", "[metrics][abstract]")
         auto live = static_cast<AbstractMetricsBucket *>(manager->live_bucket());
         PrometheusSerializer ser;
         manager->window_external_prometheus(ser, live, {{"policy", "default"}});
-        CHECK(ser.finalize().find("test_performed") != std::string::npos);
+        CHECK(ser.finalize().find("test_performed{") != std::string::npos);
     }
 
     SECTION("Abstract simple merge without bucket")
