@@ -634,11 +634,13 @@ public:
         if (!std::min(_top_count, items.size())) {
             return;
         }
-        LabelMap l(add_labels);
         auto threshold = _get_threshold(items);
         const auto base = base_name_snake();
         for (uint64_t i = 0; i < std::min(_top_count, items.size()); i++) {
             if (items[i].get_estimate() >= threshold) {
+                // Fresh label map per item: the formatter may set keys conditionally (e.g. geo
+                // lat/lon only when present), so a reused map would leak a prior item's keys.
+                LabelMap l(add_labels);
                 formatter(l, _item_key, items[i].get_item());
                 ser.write(base, PrometheusSerializer::Type::Gauge, _desc, {}, l, items[i].get_estimate());
             } else {
