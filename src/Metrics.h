@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #pragma once
+#include "MetricLabels.h"
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <timer.hpp>
@@ -67,18 +68,12 @@ static inline std::vector<T> get_quantiles(const datasketches::kll_sketch<T> &qu
 class Metric
 {
 public:
-    typedef std::map<std::string, std::string> LabelMap;
+    typedef visor::LabelMap LabelMap;
 
     enum class Aggregate {
         DEFAULT,
         SUM
     };
-
-private:
-    /**
-     * static labels which will be applied to all metrics
-     */
-    static LabelMap _static_labels;
 
 protected:
     std::vector<std::string> _name;
@@ -121,7 +116,12 @@ public:
 
     static void add_static_label(const std::string &label, const std::string &value)
     {
-        _static_labels.emplace(label, value);
+        prometheus_static_labels_mutable().emplace(label, value);
+    }
+
+    static void reset_static_labels()
+    {
+        prometheus_static_labels_mutable().clear();
     }
 
     void name_json_assign(json &j, const json &val) const;

@@ -95,8 +95,11 @@ void Cardinality::to_opentelemetry(metrics::v1::ScopeMetrics &scope, timespec &s
     }
 }
 
-// static storage for base labels
-Metric::LabelMap Metric::_static_labels;
+LabelMap &prometheus_static_labels_mutable()
+{
+    static LabelMap labels;
+    return labels;
+}
 
 void Metric::name_json_assign(json &j, const json &val) const
 {
@@ -129,8 +132,8 @@ std::string Metric::base_name_snake() const
 std::string Metric::name_snake(std::initializer_list<std::string> add_names, Metric::LabelMap add_labels) const
 {
     std::string label_text{"{"};
-    if (!_static_labels.empty()) {
-        for (const auto &[key, value] : _static_labels) {
+    if (!prometheus_static_labels().empty()) {
+        for (const auto &[key, value] : prometheus_static_labels()) {
             label_text.append(key + "=\"" + value + "\",");
         }
     }
