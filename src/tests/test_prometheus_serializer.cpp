@@ -8,6 +8,7 @@ using Type = PrometheusSerializer::Type;
 
 TEST_CASE("single gauge family", "[prometheus][serializer]")
 {
+    Metric::reset_static_labels();
     PrometheusSerializer s;
     s.write("net_packets_total", Type::Gauge, "Total packets", {}, {}, 42);
     CHECK(s.finalize() ==
@@ -18,6 +19,7 @@ TEST_CASE("single gauge family", "[prometheus][serializer]")
 
 TEST_CASE("repeated family writes one header, contiguous series", "[prometheus][serializer]")
 {
+    Metric::reset_static_labels();
     PrometheusSerializer s;
     s.write("flow_bytes", Type::Gauge, "bytes", {}, {{"device", "A"}}, 10);
     s.write("other_metric", Type::Gauge, "x", {}, {}, 1);
@@ -34,6 +36,7 @@ TEST_CASE("repeated family writes one header, contiguous series", "[prometheus][
 
 TEST_CASE("histogram suffix + le label", "[prometheus][serializer]")
 {
+    Metric::reset_static_labels();
     PrometheusSerializer s;
     s.write("dns_xact", Type::Histogram, "latency", {"bucket"}, {{"le", "10"}}, 3.0);
     s.write("dns_xact", Type::Histogram, "latency", {"count"}, {}, 7);
@@ -59,6 +62,7 @@ TEST_CASE("static labels merged before passed labels", "[prometheus][serializer]
 
 TEST_CASE("label values are escaped", "[prometheus][serializer]")
 {
+    Metric::reset_static_labels();
     PrometheusSerializer s;
     s.write("m", Type::Gauge, "d", {}, {{"desc", "a\"b\\c\nd"}}, 1);
     CHECK(s.finalize() ==
@@ -69,6 +73,7 @@ TEST_CASE("label values are escaped", "[prometheus][serializer]")
 
 TEST_CASE("numeric formatting matches ostream operator<<", "[prometheus][serializer]")
 {
+    Metric::reset_static_labels();
     auto oss = [](auto v) { std::stringstream o; o << v; return o.str(); };
     PrometheusSerializer s;
     s.write("i", Type::Gauge, "d", {}, {}, int64_t{1234567});

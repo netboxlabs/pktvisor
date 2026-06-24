@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #include "NetStreamHandler.h"
+#include "PrometheusSerializer.h"
 #include "HandlerModulePlugin.h"
 #include "utils.h"
 
@@ -328,62 +329,62 @@ void NetworkMetricsBucket::specialized_merge(const AbstractMetricsBucket &o, Met
     _payload_size.merge(other._payload_size, agg_operator);
 }
 
-void NetworkMetricsBucket::to_prometheus(std::stringstream &out, Metric::LabelMap add_labels) const
+void NetworkMetricsBucket::to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels) const
 {
 
-    _rate_in.to_prometheus(out, add_labels);
-    _rate_out.to_prometheus(out, add_labels);
-    _rate_total.to_prometheus(out, add_labels);
-    _throughput_in.to_prometheus(out, add_labels);
-    _throughput_out.to_prometheus(out, add_labels);
-    _throughput_total.to_prometheus(out, add_labels);
+    _rate_in.to_prometheus(ser, add_labels);
+    _rate_out.to_prometheus(ser, add_labels);
+    _rate_total.to_prometheus(ser, add_labels);
+    _throughput_in.to_prometheus(ser, add_labels);
+    _throughput_out.to_prometheus(ser, add_labels);
+    _throughput_total.to_prometheus(ser, add_labels);
 
     {
         auto [num_events, num_samples, event_rate, event_lock] = event_data_locked(); // thread safe
 
-        event_rate->to_prometheus(out, add_labels);
-        num_events->to_prometheus(out, add_labels);
-        num_samples->to_prometheus(out, add_labels);
+        event_rate->to_prometheus(ser, add_labels);
+        num_events->to_prometheus(ser, add_labels);
+        num_samples->to_prometheus(ser, add_labels);
     }
 
     std::shared_lock r_lock(_mutex);
 
     if (group_enabled(group::NetMetrics::Counters)) {
-        _counters.UDP.to_prometheus(out, add_labels);
-        _counters.TCP.to_prometheus(out, add_labels);
-        _counters.TCP_SYN.to_prometheus(out, add_labels);
-        _counters.OtherL4.to_prometheus(out, add_labels);
-        _counters.IPv4.to_prometheus(out, add_labels);
-        _counters.IPv6.to_prometheus(out, add_labels);
-        _counters.total_in.to_prometheus(out, add_labels);
-        _counters.total_out.to_prometheus(out, add_labels);
-        _counters.total_unk.to_prometheus(out, add_labels);
-        _counters.total.to_prometheus(out, add_labels);
-        _counters.filtered.to_prometheus(out, add_labels);
+        _counters.UDP.to_prometheus(ser, add_labels);
+        _counters.TCP.to_prometheus(ser, add_labels);
+        _counters.TCP_SYN.to_prometheus(ser, add_labels);
+        _counters.OtherL4.to_prometheus(ser, add_labels);
+        _counters.IPv4.to_prometheus(ser, add_labels);
+        _counters.IPv6.to_prometheus(ser, add_labels);
+        _counters.total_in.to_prometheus(ser, add_labels);
+        _counters.total_out.to_prometheus(ser, add_labels);
+        _counters.total_unk.to_prometheus(ser, add_labels);
+        _counters.total.to_prometheus(ser, add_labels);
+        _counters.filtered.to_prometheus(ser, add_labels);
     }
 
     if (group_enabled(group::NetMetrics::Cardinality)) {
-        _srcIPCard.to_prometheus(out, add_labels);
-        _dstIPCard.to_prometheus(out, add_labels);
+        _srcIPCard.to_prometheus(ser, add_labels);
+        _dstIPCard.to_prometheus(ser, add_labels);
     }
 
     if (group_enabled(group::NetMetrics::TopIps)) {
-        _topIPv4.to_prometheus(out, add_labels, [](const uint32_t &val) { return pcpp::IPv4Address(val).toString(); });
-        _topIPv6.to_prometheus(out, add_labels);
+        _topIPv4.to_prometheus(ser, add_labels, [](const uint32_t &val) { return pcpp::IPv4Address(val).toString(); });
+        _topIPv6.to_prometheus(ser, add_labels);
     }
 
     if (group_enabled(group::NetMetrics::TopGeo)) {
-        _topGeoLoc.to_prometheus(out, add_labels, [](Metric::LabelMap &l, const std::string &key, const visor::geo::City &val) {
+        _topGeoLoc.to_prometheus(ser, add_labels, [](Metric::LabelMap &l, const std::string &key, const visor::geo::City &val) {
             l[key] = val.location;
             if (!val.latitude.empty() && !val.longitude.empty()) {
                 l["lat"] = val.latitude;
                 l["lon"] = val.longitude;
             }
         });
-        _topASN.to_prometheus(out, add_labels);
+        _topASN.to_prometheus(ser, add_labels);
     }
 
-    _payload_size.to_prometheus(out, add_labels);
+    _payload_size.to_prometheus(ser, add_labels);
 }
 
 void NetworkMetricsBucket::to_opentelemetry(metrics::v1::ScopeMetrics &scope, timespec &start_ts, timespec &end_ts, Metric::LabelMap add_labels) const

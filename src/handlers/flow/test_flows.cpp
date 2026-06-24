@@ -9,6 +9,7 @@
 #include "FlowInputStream.h"
 #include "FlowStreamHandler.h"
 #include "IpPort.h"
+#include "PrometheusSerializer.h"
 
 using namespace visor::handler::flow;
 
@@ -592,14 +593,57 @@ TEST_CASE("flow to_prometheus and to_opentelemetry backends", "[sflow][flow][bac
     handler.stop();
     stream.stop();
 
-    std::stringstream prom;
+    visor::PrometheusSerializer prom;
     handler.metrics()->bucket(0)->to_prometheus(prom, {});
-    CHECK(prom.str().find("flow_") != std::string::npos);
+    CHECK(prom.finalize().find("flow_") != std::string::npos);
 
     opentelemetry::proto::metrics::v1::ScopeMetrics scope;
     timespec start_ts{}, end_ts{};
     handler.metrics()->bucket(0)->to_opentelemetry(scope, start_ts, end_ts, {});
     CHECK(scope.metrics_size() > 0);
+}
+
+TEST_CASE("flow prometheus: one HELP/TYPE per family, contiguous series (#716)", "[flow][prometheus][regression]")
+{
+    visor::input::flow::FlowInputStream stream{"flow-test"};
+    stream.config_set("pcap_file", "tests/fixtures/ecmp.pcap");
+    stream.config_set("flow_type", "sflow");
+
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    auto stream_proxy = stream.add_event_proxy(c);
+    visor::handler::flow::FlowStreamHandler handler{"flow-test", stream_proxy, &c};
+    // Enable every group so counters + top_ports emit per-interface families.
+    handler.config_set<visor::Configurable::StringList>("enable", visor::Configurable::StringList({"all"}));
+
+    handler.start();
+    stream.start();
+    handler.stop();
+    stream.stop();
+
+    visor::PrometheusSerializer ser;
+    handler.metrics()->bucket(0)->to_prometheus(ser, {});
+    const std::string out = ser.finalize();
+
+    const std::string family = "flow_top_out_dst_ports_bytes";
+    auto count = [&](const std::string &needle) {
+        size_t n = 0, pos = 0;
+        while ((pos = out.find(needle, pos)) != std::string::npos) {
+            ++n;
+            pos += needle.size();
+        }
+        return n;
+    };
+    // Exactly one HELP and one TYPE for the family.
+    CHECK(count("# HELP " + family + " ") == 1);
+    CHECK(count("# TYPE " + family + " ") == 1);
+    // The fixture must emit this family for >=2 interfaces, else the test is vacuous.
+    CHECK(count(family + "{") >= 2);
+    // Series are contiguous: no other family's "# TYPE " appears between first and last series.
+    auto first = out.find(family + "{");
+    auto last = out.rfind(family + "{");
+    REQUIRE(first != std::string::npos);
+    CHECK(out.find("# TYPE ", first) > last);
 }
 
 TEST_CASE("Flow specialized_merge + to_prometheus + to_opentelemetry with all groups enabled", "[sflow][flow][unit]")
@@ -650,11 +694,11 @@ TEST_CASE("Flow specialized_merge + to_prometheus + to_opentelemetry with all gr
 
     // After merging both runs of ecmp.pcap, the flow records counter must equal
     // the sum of the two input buckets' counts.
-    std::stringstream prom;
+    visor::PrometheusSerializer prom;
     target->to_prometheus(prom, {});
     // Flow's prometheus output decorates per-device/per-interface labels, so
     // grep the line by name+value rather than an exact-prefix match.
-    CHECK(prom.str().find("flow_records_flows") != std::string::npos);
+    CHECK(prom.finalize().find("flow_records_flows") != std::string::npos);
 
     opentelemetry::proto::metrics::v1::ScopeMetrics scope;
     timespec start_ts{}, end_ts{};

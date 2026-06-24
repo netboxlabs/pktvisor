@@ -358,9 +358,9 @@ TEST_CASE("NetProbe to_prometheus emits configured metrics", "[netprobe][unit]")
 
     fx.manager()->process_failure(ErrorType::Timeout, "tprom");
 
-    std::stringstream out;
+    visor::PrometheusSerializer out;
     fx.manager()->bucket(0)->to_prometheus(out, {});
-    auto s = out.str();
+    auto s = out.finalize();
 
     // Counter name is registered in Target ctor as "packets_timeout".
     CHECK(s.find("packets_timeout") != std::string::npos);

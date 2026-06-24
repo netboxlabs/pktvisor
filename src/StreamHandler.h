@@ -8,6 +8,7 @@
 #include "AbstractModule.h"
 #include "CoreRegistry.h"
 #include "InputEventProxy.h"
+#include "PrometheusSerializer.h"
 #include <ctime>
 #include <fmt/ostream.h>
 #include <fmt/ranges.h>
@@ -71,8 +72,8 @@ public:
 
     virtual void window_json(json &j, uint64_t period, bool merged) = 0;
     virtual void window_json(json &j, AbstractMetricsBucket *bucket) = 0;
-    virtual void window_prometheus(std::stringstream &out, Metric::LabelMap add_labels = {}) = 0;
-    virtual void window_prometheus(std::stringstream &out, AbstractMetricsBucket *bucket, Metric::LabelMap add_labels = {}) = 0;
+    virtual void window_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels = {}) = 0;
+    virtual void window_prometheus(PrometheusSerializer &ser, AbstractMetricsBucket *bucket, Metric::LabelMap add_labels = {}) = 0;
     virtual void window_opentelemetry(metrics::v1::ScopeMetrics &scope, Metric::LabelMap add_labels = {}) = 0;
     virtual void window_opentelemetry(metrics::v1::ScopeMetrics &scope, AbstractMetricsBucket *bucket, Metric::LabelMap add_labels = {}) = 0;
     virtual std::unique_ptr<AbstractMetricsBucket> merge(AbstractMetricsBucket *bucket, uint64_t period, bool prometheus, bool merged) = 0;
@@ -224,18 +225,18 @@ public:
         _metrics->window_external_json(j, schema_key(), bucket);
     }
 
-    void window_prometheus(std::stringstream &out, Metric::LabelMap add_labels = {}) override
+    void window_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels = {}) override
     {
         if (_metrics->current_periods() > 1) {
-            _metrics->window_single_prometheus(out, 1, add_labels);
+            _metrics->window_single_prometheus(ser, 1, add_labels);
         } else {
-            _metrics->window_single_prometheus(out, 0, add_labels);
+            _metrics->window_single_prometheus(ser, 0, add_labels);
         }
     }
 
-    void window_prometheus(std::stringstream &out, AbstractMetricsBucket *bucket, Metric::LabelMap add_labels = {}) override
+    void window_prometheus(PrometheusSerializer &ser, AbstractMetricsBucket *bucket, Metric::LabelMap add_labels = {}) override
     {
-        _metrics->window_external_prometheus(out, bucket, add_labels);
+        _metrics->window_external_prometheus(ser, bucket, add_labels);
     };
 
     void window_opentelemetry(metrics::v1::ScopeMetrics &scope, Metric::LabelMap add_labels = {}) override

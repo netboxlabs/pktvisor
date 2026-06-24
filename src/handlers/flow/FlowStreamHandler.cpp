@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #include "FlowStreamHandler.h"
+#include "PrometheusSerializer.h"
 #include "HandlerModulePlugin.h"
 #include "Tos.h"
 #include <fmt/format.h>
@@ -716,7 +717,7 @@ void FlowMetricsBucket::specialized_merge(const AbstractMetricsBucket &o, [[mayb
     }
 }
 
-void FlowMetricsBucket::to_prometheus(std::stringstream &out, Metric::LabelMap add_labels) const
+void FlowMetricsBucket::to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels) const
 {
     std::shared_lock r_lock(_mutex);
 
@@ -733,12 +734,12 @@ void FlowMetricsBucket::to_prometheus(std::stringstream &out, Metric::LabelMap a
         device_labels["device"] = deviceId;
 
         if (group_enabled(group::FlowMetrics::Counters)) {
-            device.second->total.to_prometheus(out, device_labels);
-            device.second->filtered.to_prometheus(out, device_labels);
+            device.second->total.to_prometheus(ser, device_labels);
+            device.second->filtered.to_prometheus(ser, device_labels);
         }
 
         if (group_enabled(group::FlowMetrics::ByBytes) && group_enabled(group::FlowMetrics::TopInterfaces)) {
-            device.second->topInIfIndexBytes.to_prometheus(out, device_labels, [dev](const uint32_t &val) {
+            device.second->topInIfIndexBytes.to_prometheus(ser, device_labels, [dev](const uint32_t &val) {
                 if (dev) {
                     if (auto it = dev->interfaces.find(val); it != dev->interfaces.end()) {
                         return it->second.name;
@@ -746,7 +747,7 @@ void FlowMetricsBucket::to_prometheus(std::stringstream &out, Metric::LabelMap a
                 }
                 return std::to_string(val);
             });
-            device.second->topOutIfIndexBytes.to_prometheus(out, device_labels, [dev](const uint32_t &val) {
+            device.second->topOutIfIndexBytes.to_prometheus(ser, device_labels, [dev](const uint32_t &val) {
                 if (dev) {
                     if (auto it = dev->interfaces.find(val); it != dev->interfaces.end()) {
                         return it->second.name;
@@ -757,7 +758,7 @@ void FlowMetricsBucket::to_prometheus(std::stringstream &out, Metric::LabelMap a
         }
 
         if (group_enabled(group::FlowMetrics::ByPackets) && group_enabled(group::FlowMetrics::TopInterfaces)) {
-            device.second->topInIfIndexPackets.to_prometheus(out, device_labels, [dev](const uint32_t &val) {
+            device.second->topInIfIndexPackets.to_prometheus(ser, device_labels, [dev](const uint32_t &val) {
                 if (dev) {
                     if (auto it = dev->interfaces.find(val); it != dev->interfaces.end()) {
                         return it->second.name;
@@ -765,7 +766,7 @@ void FlowMetricsBucket::to_prometheus(std::stringstream &out, Metric::LabelMap a
                 }
                 return std::to_string(val);
             });
-            device.second->topOutIfIndexPackets.to_prometheus(out, device_labels, [dev](const uint32_t &val) {
+            device.second->topOutIfIndexPackets.to_prometheus(ser, device_labels, [dev](const uint32_t &val) {
                 if (dev) {
                     if (auto it = dev->interfaces.find(val); it != dev->interfaces.end()) {
                         return it->second.name;
@@ -787,12 +788,12 @@ void FlowMetricsBucket::to_prometheus(std::stringstream &out, Metric::LabelMap a
 
             if (group_enabled(group::FlowMetrics::Cardinality)) {
                 if (group_enabled(group::FlowMetrics::Conversations)) {
-                    interface.second->conversationsCard.to_prometheus(out, device_labels);
+                    interface.second->conversationsCard.to_prometheus(ser, device_labels);
                 }
-                interface.second->srcIPCard.to_prometheus(out, interface_labels);
-                interface.second->dstIPCard.to_prometheus(out, interface_labels);
-                interface.second->srcPortCard.to_prometheus(out, interface_labels);
-                interface.second->dstPortCard.to_prometheus(out, interface_labels);
+                interface.second->srcIPCard.to_prometheus(ser, interface_labels);
+                interface.second->dstIPCard.to_prometheus(ser, interface_labels);
+                interface.second->srcPortCard.to_prometheus(ser, interface_labels);
+                interface.second->dstPortCard.to_prometheus(ser, interface_labels);
             }
 
             for (auto &count_dir : interface.second->counters) {
@@ -803,12 +804,12 @@ void FlowMetricsBucket::to_prometheus(std::stringstream &out, Metric::LabelMap a
                     continue;
                 }
                 if (group_enabled(group::FlowMetrics::Counters)) {
-                    count_dir.second.UDP.to_prometheus(out, interface_labels);
-                    count_dir.second.TCP.to_prometheus(out, interface_labels);
-                    count_dir.second.OtherL4.to_prometheus(out, interface_labels);
-                    count_dir.second.IPv4.to_prometheus(out, interface_labels);
-                    count_dir.second.IPv6.to_prometheus(out, interface_labels);
-                    count_dir.second.total.to_prometheus(out, interface_labels);
+                    count_dir.second.UDP.to_prometheus(ser, interface_labels);
+                    count_dir.second.TCP.to_prometheus(ser, interface_labels);
+                    count_dir.second.OtherL4.to_prometheus(ser, interface_labels);
+                    count_dir.second.IPv4.to_prometheus(ser, interface_labels);
+                    count_dir.second.IPv6.to_prometheus(ser, interface_labels);
+                    count_dir.second.total.to_prometheus(ser, interface_labels);
                 }
             }
 
@@ -820,26 +821,26 @@ void FlowMetricsBucket::to_prometheus(std::stringstream &out, Metric::LabelMap a
                     continue;
                 }
                 if (group_enabled(group::FlowMetrics::TopIPs)) {
-                    top_dir.second.topSrcIP.to_prometheus(out, interface_labels);
-                    top_dir.second.topDstIP.to_prometheus(out, interface_labels);
+                    top_dir.second.topSrcIP.to_prometheus(ser, interface_labels);
+                    top_dir.second.topDstIP.to_prometheus(ser, interface_labels);
                 }
                 if (group_enabled(group::FlowMetrics::TopPorts)) {
-                    top_dir.second.topSrcPort.to_prometheus(out, interface_labels);
-                    top_dir.second.topDstPort.to_prometheus(out, interface_labels);
+                    top_dir.second.topSrcPort.to_prometheus(ser, interface_labels);
+                    top_dir.second.topDstPort.to_prometheus(ser, interface_labels);
                 }
                 if (group_enabled(group::FlowMetrics::TopIPPorts)) {
-                    top_dir.second.topSrcIPPort.to_prometheus(out, interface_labels);
-                    top_dir.second.topDstIPPort.to_prometheus(out, interface_labels);
+                    top_dir.second.topSrcIPPort.to_prometheus(ser, interface_labels);
+                    top_dir.second.topDstIPPort.to_prometheus(ser, interface_labels);
                 }
                 if (group_enabled(group::FlowMetrics::TopTos)) {
-                    top_dir.second.topDSCP.to_prometheus(out, interface_labels, [](const uint8_t &val) {
+                    top_dir.second.topDSCP.to_prometheus(ser, interface_labels, [](const uint8_t &val) {
                         if (DscpNames.find(val) != DscpNames.end()) {
                             return DscpNames[val];
                         } else {
                             return std::to_string(val);
                         }
                     });
-                    top_dir.second.topECN.to_prometheus(out, interface_labels, [](const uint8_t &val) {
+                    top_dir.second.topECN.to_prometheus(ser, interface_labels, [](const uint8_t &val) {
                         if (EcnNames.find(val) != EcnNames.end()) {
                             return EcnNames[val];
                         } else {
@@ -851,33 +852,33 @@ void FlowMetricsBucket::to_prometheus(std::stringstream &out, Metric::LabelMap a
 
             if (group_enabled(group::FlowMetrics::ByBytes)) {
                 if (group_enabled(group::FlowMetrics::TopGeo)) {
-                    interface.second->topN.first.topGeoLoc.to_prometheus(out, interface_labels, [](Metric::LabelMap &l, const std::string &key, const visor::geo::City &val) {
+                    interface.second->topN.first.topGeoLoc.to_prometheus(ser, interface_labels, [](Metric::LabelMap &l, const std::string &key, const visor::geo::City &val) {
                         l[key] = val.location;
                         if (!val.latitude.empty() && !val.longitude.empty()) {
                             l["lat"] = val.latitude;
                             l["lon"] = val.longitude;
                         }
                     });
-                    interface.second->topN.first.topASN.to_prometheus(out, interface_labels);
+                    interface.second->topN.first.topASN.to_prometheus(ser, interface_labels);
                 }
                 if (group_enabled(group::FlowMetrics::Conversations)) {
-                    interface.second->topN.first.topConversations.to_prometheus(out, interface_labels);
+                    interface.second->topN.first.topConversations.to_prometheus(ser, interface_labels);
                 }
             }
 
             if (group_enabled(group::FlowMetrics::ByPackets)) {
                 if (group_enabled(group::FlowMetrics::TopGeo)) {
-                    interface.second->topN.second.topGeoLoc.to_prometheus(out, interface_labels, [](Metric::LabelMap &l, const std::string &key, const visor::geo::City &val) {
+                    interface.second->topN.second.topGeoLoc.to_prometheus(ser, interface_labels, [](Metric::LabelMap &l, const std::string &key, const visor::geo::City &val) {
                         l[key] = val.location;
                         if (!val.latitude.empty() && !val.longitude.empty()) {
                             l["lat"] = val.latitude;
                             l["lon"] = val.longitude;
                         }
                     });
-                    interface.second->topN.second.topASN.to_prometheus(out, interface_labels);
+                    interface.second->topN.second.topASN.to_prometheus(ser, interface_labels);
                 }
                 if (group_enabled(group::FlowMetrics::Conversations)) {
-                    interface.second->topN.second.topConversations.to_prometheus(out, interface_labels);
+                    interface.second->topN.second.topConversations.to_prometheus(ser, interface_labels);
                 }
             }
         }

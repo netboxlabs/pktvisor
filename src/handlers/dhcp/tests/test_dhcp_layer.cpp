@@ -115,9 +115,9 @@ TEST_CASE("DHCP to_prometheus and to_opentelemetry backends", "[pcap][dhcp][back
 
     // Counter values come from "Parse DHCP tests": DISCOVER=1, OFFER=1,
     // REQUEST=3, ACK=3. Round-trip through both backends.
-    std::stringstream prom;
+    visor::PrometheusSerializer prom;
     dhcp_handler.metrics()->bucket(0)->to_prometheus(prom, {});
-    auto prom_text = prom.str();
+    auto prom_text = prom.finalize();
     CHECK(prom_text.find("dhcp_wire_packets_discover{} 1") != std::string::npos);
     CHECK(prom_text.find("dhcp_wire_packets_offer{} 1") != std::string::npos);
     CHECK(prom_text.find("dhcp_wire_packets_request{} 3") != std::string::npos);

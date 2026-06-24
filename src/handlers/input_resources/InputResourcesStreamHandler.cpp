@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #include "InputResourcesStreamHandler.h"
+#include "PrometheusSerializer.h"
 #include "Policies.h"
 
 namespace visor::handler::resources {
@@ -147,22 +148,22 @@ void InputResourcesMetricsBucket::specialized_merge(const AbstractMetricsBucket 
     }
 }
 
-void InputResourcesMetricsBucket::to_prometheus(std::stringstream &out, Metric::LabelMap add_labels) const
+void InputResourcesMetricsBucket::to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels) const
 {
     {
         auto [num_events, num_samples, event_rate, event_lock] = event_data_locked(); // thread safe
 
-        event_rate->to_prometheus(out, add_labels);
-        num_events->to_prometheus(out, add_labels);
-        num_samples->to_prometheus(out, add_labels);
+        event_rate->to_prometheus(ser, add_labels);
+        num_events->to_prometheus(ser, add_labels);
+        num_samples->to_prometheus(ser, add_labels);
     }
 
     std::shared_lock r_lock(_mutex);
 
-    _cpu_usage.to_prometheus(out, add_labels);
-    _memory_bytes.to_prometheus(out, add_labels);
-    _policy_count.to_prometheus(out, add_labels);
-    _handler_count.to_prometheus(out, add_labels);
+    _cpu_usage.to_prometheus(ser, add_labels);
+    _memory_bytes.to_prometheus(ser, add_labels);
+    _policy_count.to_prometheus(ser, add_labels);
+    _handler_count.to_prometheus(ser, add_labels);
 }
 
 void InputResourcesMetricsBucket::to_opentelemetry(metrics::v1::ScopeMetrics &scope, timespec &start_ts, timespec &end_ts, Metric::LabelMap add_labels) const

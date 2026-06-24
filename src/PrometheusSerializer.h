@@ -45,6 +45,8 @@ public:
         it->second.series.push_back(std::move(line));
     }
 
+    // Renders all accumulated families into the Prometheus text exposition format.
+    // Single-use per response: build one serializer, write all series, call finalize() once.
     std::string finalize() const
     {
         std::string out;

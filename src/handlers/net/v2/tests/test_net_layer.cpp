@@ -593,9 +593,9 @@ TEST_CASE("netv2 to_prometheus and to_opentelemetry backends", "[pcap][netv2][ba
     // v2 slices counters by `direction` label, so individual metric lines
     // in prom output look like `net_udp_packets{direction="out"} 140` — sum
     // across directions for the project total.
-    std::stringstream prom;
+    visor::PrometheusSerializer prom;
     handler.metrics()->bucket(0)->to_prometheus(prom, {});
-    auto prom_text = prom.str();
+    auto prom_text = prom.finalize();
     CHECK(prom_text.find("net_udp_packets{") != std::string::npos);
     CHECK(prom_text.find("net_ipv4_packets{") != std::string::npos);
 
@@ -645,9 +645,9 @@ TEST_CASE("Net v2 process_net_layer shallow overload + specialized_merge", "[net
     // individual per-direction packet counts that to_prometheus emits.
     REQUIRE_NOTHROW(b1->specialized_merge(*b2, visor::Metric::Aggregate::DEFAULT));
 
-    std::stringstream prom_after;
+    visor::PrometheusSerializer prom_after;
     b1->to_prometheus(prom_after, {});
-    auto prom_after_text = prom_after.str();
+    auto prom_after_text = prom_after.finalize();
     // 4 calls total to process_net_layer across the two buckets, verify the
     // summed packet count via the otel backend (more robust to label fmt).
     opentelemetry::proto::metrics::v1::ScopeMetrics scope_after;

@@ -600,9 +600,9 @@ TEST_CASE("net to_prometheus and to_opentelemetry backends", "[pcap][net][backen
 
     // Counter values match the existing "Parse net (dns) UDP IPv4 tests"
     // case for the same fixture: UDP=140, IPv4=140, IPv6=0.
-    std::stringstream prom;
+    visor::PrometheusSerializer prom;
     handler.metrics()->bucket(0)->to_prometheus(prom, {});
-    auto prom_text = prom.str();
+    auto prom_text = prom.finalize();
     CHECK(prom_text.find("packets_udp{} 140") != std::string::npos);
     CHECK(prom_text.find("packets_ipv4{} 140") != std::string::npos);
     CHECK(prom_text.find("packets_ipv6{} 0") != std::string::npos);

@@ -4,6 +4,7 @@
 
 #pragma once
 #include "MetricLabels.h"
+#include "PrometheusSerializer.h"
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <timer.hpp>
@@ -128,10 +129,9 @@ public:
     void name_json_assign(json &j, std::initializer_list<std::string> add_names, const json &val) const;
 
     [[nodiscard]] std::string base_name_snake() const;
-    [[nodiscard]] std::string name_snake(std::initializer_list<std::string> add_names = {}, LabelMap add_labels = {}) const;
 
     virtual void to_json(json &j) const = 0;
-    virtual void to_prometheus(std::stringstream &out, LabelMap add_labels = {}) const = 0;
+    virtual void to_prometheus(PrometheusSerializer &ser, LabelMap add_labels = {}) const = 0;
     virtual void to_opentelemetry(metrics::v1::ScopeMetrics &scope, timespec &start, timespec &end, LabelMap add_labels = {}) const = 0;
 };
 
@@ -177,7 +177,7 @@ public:
 
     // Metric
     void to_json(json &j) const override;
-    void to_prometheus(std::stringstream &out, Metric::LabelMap add_labels = {}) const override;
+    void to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels = {}) const override;
     void to_opentelemetry(metrics::v1::ScopeMetrics &scope, timespec &start, timespec &end, LabelMap add_labels = {}) const override;
 };
 
@@ -261,7 +261,7 @@ public:
         name_json_assign(j, {"buckets", "+Inf"}, histogram[bins.size()] * _sketch.get_n());
     }
 
-    void to_prometheus(std::stringstream &out, Metric::LabelMap add_labels = {}) const override
+    void to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels = {}) const override
     {
         if (_sketch.is_empty()) {
             return;
@@ -275,17 +275,16 @@ public:
             }
         }
         auto histogram = _sketch.get_CDF(bins.data(), bins.size());
-        out << "# HELP " << base_name_snake() << ' ' << _desc << std::endl;
-        out << "# TYPE " << base_name_snake() << " histogram" << std::endl;
+        const auto base = base_name_snake();
         for (std::size_t i = 0; i < bins.size(); ++i) {
             LabelMap le(add_labels);
             le["le"] = std::to_string(bins[i]);
-            out << name_snake({"bucket"}, le) << ' ' << histogram[i] * _sketch.get_n() << std::endl;
+            ser.write(base, PrometheusSerializer::Type::Histogram, _desc, {"bucket"}, le, histogram[i] * _sketch.get_n());
         }
         LabelMap le(add_labels);
         le["le"] = "+Inf";
-        out << name_snake({"bucket"}, le) << ' ' << histogram[bins.size()] * _sketch.get_n() << std::endl;
-        out << name_snake({"count"}, add_labels) << ' ' << _sketch.get_n() << std::endl;
+        ser.write(base, PrometheusSerializer::Type::Histogram, _desc, {"bucket"}, le, histogram[bins.size()] * _sketch.get_n());
+        ser.write(base, PrometheusSerializer::Type::Histogram, _desc, {"count"}, add_labels, _sketch.get_n());
     }
 
     void to_opentelemetry(metrics::v1::ScopeMetrics &scope, timespec &start, timespec &end, LabelMap add_labels = {}) const override
@@ -413,7 +412,7 @@ public:
         }
     }
 
-    void to_prometheus(std::stringstream &out, Metric::LabelMap add_labels = {}) const override
+    void to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels = {}) const override
     {
         if (_quantile.is_empty()) {
             return;
@@ -436,14 +435,13 @@ public:
         l99["quantile"] = "0.99";
 
         if (quantiles.size()) {
-            out << "# HELP " << base_name_snake() << ' ' << _desc << std::endl;
-            out << "# TYPE " << base_name_snake() << " summary" << std::endl;
-            out << name_snake({}, l5) << ' ' << quantiles[0] << std::endl;
-            out << name_snake({}, l9) << ' ' << quantiles[1] << std::endl;
-            out << name_snake({}, l95) << ' ' << quantiles[2] << std::endl;
-            out << name_snake({}, l99) << ' ' << quantiles[3] << std::endl;
-            out << name_snake({"sum"}, add_labels) << ' ' << _quantile.get_max_item() << std::endl;
-            out << name_snake({"count"}, add_labels) << ' ' << _quantile.get_n() << std::endl;
+            const auto base = base_name_snake();
+            ser.write(base, PrometheusSerializer::Type::Summary, _desc, {}, l5, quantiles[0]);
+            ser.write(base, PrometheusSerializer::Type::Summary, _desc, {}, l9, quantiles[1]);
+            ser.write(base, PrometheusSerializer::Type::Summary, _desc, {}, l95, quantiles[2]);
+            ser.write(base, PrometheusSerializer::Type::Summary, _desc, {}, l99, quantiles[3]);
+            ser.write(base, PrometheusSerializer::Type::Summary, _desc, {"sum"}, add_labels, _quantile.get_max_item());
+            ser.write(base, PrometheusSerializer::Type::Summary, _desc, {"count"}, add_labels, _quantile.get_n());
         }
     }
 
@@ -611,7 +609,7 @@ public:
         name_json_assign(j, section);
     }
 
-    void to_prometheus(std::stringstream &out, Metric::LabelMap add_labels, std::function<std::string(const T &)> formatter) const
+    void to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels, std::function<std::string(const T &)> formatter) const
     {
         auto items = _fi.get_frequent_items(datasketches::frequent_items_error_type::NO_FALSE_NEGATIVES);
         if (!std::min(_top_count, items.size())) {
@@ -619,19 +617,18 @@ public:
         }
         LabelMap l(add_labels);
         auto threshold = _get_threshold(items);
-        out << "# HELP " << base_name_snake() << ' ' << _desc << std::endl;
-        out << "# TYPE " << base_name_snake() << " gauge" << std::endl;
+        const auto base = base_name_snake();
         for (uint64_t i = 0; i < std::min(_top_count, items.size()); i++) {
             if (items[i].get_estimate() >= threshold) {
                 l[_item_key] = formatter(items[i].get_item());
-                out << name_snake({}, l) << ' ' << items[i].get_estimate() << std::endl;
+                ser.write(base, PrometheusSerializer::Type::Gauge, _desc, {}, l, items[i].get_estimate());
             } else {
                 break;
             }
         }
     }
 
-    void to_prometheus(std::stringstream &out, Metric::LabelMap add_labels, std::function<void(LabelMap &, const std::string &, const T &)> formatter) const
+    void to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels, std::function<void(LabelMap &, const std::string &, const T &)> formatter) const
     {
         auto items = _fi.get_frequent_items(datasketches::frequent_items_error_type::NO_FALSE_NEGATIVES);
         if (!std::min(_top_count, items.size())) {
@@ -639,12 +636,11 @@ public:
         }
         LabelMap l(add_labels);
         auto threshold = _get_threshold(items);
-        out << "# HELP " << base_name_snake() << ' ' << _desc << std::endl;
-        out << "# TYPE " << base_name_snake() << " gauge" << std::endl;
+        const auto base = base_name_snake();
         for (uint64_t i = 0; i < std::min(_top_count, items.size()); i++) {
             if (items[i].get_estimate() >= threshold) {
                 formatter(l, _item_key, items[i].get_item());
-                out << name_snake({}, l) << ' ' << items[i].get_estimate() << std::endl;
+                ser.write(base, PrometheusSerializer::Type::Gauge, _desc, {}, l, items[i].get_estimate());
             } else {
                 break;
             }
@@ -668,7 +664,7 @@ public:
         name_json_assign(j, section);
     }
 
-    void to_prometheus(std::stringstream &out, Metric::LabelMap add_labels = {}) const override
+    void to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels = {}) const override
     {
         auto items = _fi.get_frequent_items(datasketches::frequent_items_error_type::NO_FALSE_NEGATIVES);
         if (!std::min(_top_count, items.size())) {
@@ -676,14 +672,13 @@ public:
         }
         LabelMap l(add_labels);
         auto threshold = _get_threshold(items);
-        out << "# HELP " << base_name_snake() << ' ' << _desc << std::endl;
-        out << "# TYPE " << base_name_snake() << " gauge" << std::endl;
+        const auto base = base_name_snake();
         for (uint64_t i = 0; i < std::min(_top_count, items.size()); i++) {
             if (items[i].get_estimate() >= threshold) {
                 std::stringstream name_text;
                 name_text << items[i].get_item();
                 l[_item_key] = name_text.str();
-                out << name_snake({}, l) << ' ' << items[i].get_estimate() << std::endl;
+                ser.write(base, PrometheusSerializer::Type::Gauge, _desc, {}, l, items[i].get_estimate());
             } else {
                 break;
             }
@@ -804,7 +799,7 @@ public:
 
     // Metric
     void to_json(json &j) const override;
-    void to_prometheus(std::stringstream &out, Metric::LabelMap add_labels = {}) const override;
+    void to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels = {}) const override;
     void to_opentelemetry(metrics::v1::ScopeMetrics &scope, timespec &start, timespec &end, LabelMap add_labels = {}) const override;
 };
 
@@ -905,7 +900,7 @@ public:
     // Metric
     void to_json(json &j) const override;
 
-    void to_prometheus(std::stringstream &out, Metric::LabelMap add_labels = {}) const override;
+    void to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels = {}) const override;
     void to_opentelemetry(metrics::v1::ScopeMetrics &scope, timespec &start, timespec &end, LabelMap add_labels = {}) const override;
 };
 }

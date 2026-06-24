@@ -1076,9 +1076,9 @@ TEST_CASE("dns to_prometheus and to_opentelemetry backends", "[pcap][dns][backen
 
     // Counter values match the existing "Parse DNS UDP IPv4 tests" case:
     // UDP=140, IPv4=140, queries=70, replies=70.
-    std::stringstream prom;
+    visor::PrometheusSerializer prom;
     handler.metrics()->bucket(0)->to_prometheus(prom, {});
-    auto prom_text = prom.str();
+    auto prom_text = prom.finalize();
     CHECK(prom_text.find("dns_wire_packets_udp{} 140") != std::string::npos);
     CHECK(prom_text.find("dns_wire_packets_ipv4{} 140") != std::string::npos);
     CHECK(prom_text.find("dns_wire_packets_queries{} 70") != std::string::npos);

@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #include "DhcpStreamHandler.h"
+#include "PrometheusSerializer.h"
 
 namespace visor::handler::dhcp {
 
@@ -120,34 +121,34 @@ void DhcpMetricsBucket::specialized_merge(const AbstractMetricsBucket &o, Metric
     _dhcp_topServers.merge(other._dhcp_topServers);
 }
 
-void DhcpMetricsBucket::to_prometheus(std::stringstream &out, Metric::LabelMap add_labels) const
+void DhcpMetricsBucket::to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels) const
 {
 
-    _rate_total.to_prometheus(out, add_labels);
+    _rate_total.to_prometheus(ser, add_labels);
 
     {
         auto [num_events, num_samples, event_rate, event_lock] = event_data_locked(); // thread safe
 
-        event_rate->to_prometheus(out, add_labels);
-        num_events->to_prometheus(out, add_labels);
-        num_samples->to_prometheus(out, add_labels);
+        event_rate->to_prometheus(ser, add_labels);
+        num_events->to_prometheus(ser, add_labels);
+        num_samples->to_prometheus(ser, add_labels);
     }
 
     std::shared_lock r_lock(_mutex);
 
-    _counters.DISCOVER.to_prometheus(out, add_labels);
-    _counters.OFFER.to_prometheus(out, add_labels);
-    _counters.REQUEST.to_prometheus(out, add_labels);
-    _counters.ACK.to_prometheus(out, add_labels);
-    _counters.SOLICIT.to_prometheus(out, add_labels);
-    _counters.ADVERTISE.to_prometheus(out, add_labels);
-    _counters.REQUESTV6.to_prometheus(out, add_labels);
-    _counters.REPLY.to_prometheus(out, add_labels);
-    _counters.total.to_prometheus(out, add_labels);
-    _counters.filtered.to_prometheus(out, add_labels);
+    _counters.DISCOVER.to_prometheus(ser, add_labels);
+    _counters.OFFER.to_prometheus(ser, add_labels);
+    _counters.REQUEST.to_prometheus(ser, add_labels);
+    _counters.ACK.to_prometheus(ser, add_labels);
+    _counters.SOLICIT.to_prometheus(ser, add_labels);
+    _counters.ADVERTISE.to_prometheus(ser, add_labels);
+    _counters.REQUESTV6.to_prometheus(ser, add_labels);
+    _counters.REPLY.to_prometheus(ser, add_labels);
+    _counters.total.to_prometheus(ser, add_labels);
+    _counters.filtered.to_prometheus(ser, add_labels);
 
-    _dhcp_topClients.to_prometheus(out, add_labels);
-    _dhcp_topServers.to_prometheus(out, add_labels);
+    _dhcp_topClients.to_prometheus(ser, add_labels);
+    _dhcp_topServers.to_prometheus(ser, add_labels);
 }
 
 void DhcpMetricsBucket::to_opentelemetry(metrics::v1::ScopeMetrics &scope, timespec &start_ts, timespec &end_ts, Metric::LabelMap add_labels) const

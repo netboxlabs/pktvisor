@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #include "BgpStreamHandler.h"
+#include "PrometheusSerializer.h"
 #include <pcapplusplus/TimespecTimeval.h>
 
 namespace visor::handler::bgp {
@@ -165,28 +166,28 @@ void BgpMetricsBucket::specialized_merge(const AbstractMetricsBucket &o, Metric:
     _counters.filtered += other._counters.filtered;
 }
 
-void BgpMetricsBucket::to_prometheus(std::stringstream &out, Metric::LabelMap add_labels) const
+void BgpMetricsBucket::to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels) const
 {
 
-    _rate_total.to_prometheus(out, add_labels);
+    _rate_total.to_prometheus(ser, add_labels);
 
     {
         auto [num_events, num_samples, event_rate, event_lock] = event_data_locked(); // thread safe
 
-        event_rate->to_prometheus(out, add_labels);
-        num_events->to_prometheus(out, add_labels);
-        num_samples->to_prometheus(out, add_labels);
+        event_rate->to_prometheus(ser, add_labels);
+        num_events->to_prometheus(ser, add_labels);
+        num_samples->to_prometheus(ser, add_labels);
     }
 
     std::shared_lock r_lock(_mutex);
 
-    _counters.OPEN.to_prometheus(out, add_labels);
-    _counters.UPDATE.to_prometheus(out, add_labels);
-    _counters.NOTIFICATION.to_prometheus(out, add_labels);
-    _counters.KEEPALIVE.to_prometheus(out, add_labels);
-    _counters.ROUTEREFRESH.to_prometheus(out, add_labels);
-    _counters.total.to_prometheus(out, add_labels);
-    _counters.filtered.to_prometheus(out, add_labels);
+    _counters.OPEN.to_prometheus(ser, add_labels);
+    _counters.UPDATE.to_prometheus(ser, add_labels);
+    _counters.NOTIFICATION.to_prometheus(ser, add_labels);
+    _counters.KEEPALIVE.to_prometheus(ser, add_labels);
+    _counters.ROUTEREFRESH.to_prometheus(ser, add_labels);
+    _counters.total.to_prometheus(ser, add_labels);
+    _counters.filtered.to_prometheus(ser, add_labels);
 }
 
 void BgpMetricsBucket::to_opentelemetry(metrics::v1::ScopeMetrics &scope, timespec &start_ts, timespec &end_ts, Metric::LabelMap add_labels) const

@@ -6,6 +6,7 @@
 #include "HandlerManager.h"
 #include "Metrics.h"
 #include "Policies.h"
+#include "PrometheusSerializer.h"
 #include "Taps.h"
 #include "visor_config.h"
 #include <chrono>
@@ -173,15 +174,17 @@ void CoreServer::_setup_routes(const PrometheusConfig &prom_config)
             }
             try {
                 std::stringstream output;
+                PrometheusSerializer ser;
                 auto [policy, lock] = _registry->policy_manager()->module_get_locked("default");
                 for (auto &mod : policy->modules()) {
                     auto hmod = dynamic_cast<StreamHandler *>(mod);
                     if (hmod) {
                         spdlog::stopwatch sw;
-                        hmod->window_prometheus(output, {{"policy", "default"}});
+                        hmod->window_prometheus(ser, {{"policy", "default"}});
                         _logger->debug("{} window_prometheus elapsed time: {}", hmod->name(), sw);
                     }
                 }
+                output << ser.finalize();
                 res.set_content(output.str(), "text/plain");
             } catch (const std::exception &e) {
                 res.status = 500;
