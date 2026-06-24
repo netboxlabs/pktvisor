@@ -176,14 +176,10 @@ void CoreServer::_setup_routes(const PrometheusConfig &prom_config)
                 std::stringstream output;
                 PrometheusSerializer ser;
                 auto [policy, lock] = _registry->policy_manager()->module_get_locked("default");
-                for (auto &mod : policy->modules()) {
-                    auto hmod = dynamic_cast<StreamHandler *>(mod);
-                    if (hmod) {
-                        spdlog::stopwatch sw;
-                        hmod->window_prometheus(ser, {{"policy", "default"}});
-                        _logger->debug("{} window_prometheus elapsed time: {}", hmod->name(), sw);
-                    }
-                }
+                // Reuse Policy::prometheus_metrics so each handler's shared base_* families carry a
+                // distinct {handler=...} label (and merge_like_handlers is honored consistently);
+                // a bare {policy="default"} would collapse them into duplicate same-label series.
+                policy->prometheus_metrics(ser);
                 output << ser.finalize();
                 res.set_content(output.str(), "text/plain");
             } catch (const std::exception &e) {
