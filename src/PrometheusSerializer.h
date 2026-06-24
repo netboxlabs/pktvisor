@@ -34,21 +34,25 @@ public:
         } else if (it->second.help.empty() && !help.empty()) {
             it->second.help = help;
         }
-        std::string line = base;
+        // Append the series line directly into the family's single body buffer (one growing
+        // allocation per family) instead of materializing a separate std::string per series — this
+        // avoids O(series) small heap allocations while keeping the rendered bytes identical.
+        std::string &body = it->second.body;
+        body.append(base);
         for (const auto &s : suffix) {
-            line.push_back('_');
-            line.append(s);
+            body.push_back('_');
+            body.append(s);
         }
-        append_labels(line, labels);
-        line.push_back(' ');
+        append_labels(body, labels);
+        body.push_back(' ');
         if constexpr (std::is_floating_point_v<V>) {
             std::ostringstream oss;
             oss << value;
-            line.append(oss.str());
+            body.append(oss.str());
         } else {
-            fmt::format_to(std::back_inserter(line), "{}", value);
+            fmt::format_to(std::back_inserter(body), "{}", value);
         }
-        it->second.series.push_back(std::move(line));
+        body.push_back('\n');
     }
 
     // Renders all accumulated families into the Prometheus text exposition format.
@@ -60,10 +64,7 @@ public:
             const auto &fam = _families.at(base);
             fmt::format_to(std::back_inserter(out), "# HELP {} {}\n", base, fam.help);
             fmt::format_to(std::back_inserter(out), "# TYPE {} {}\n", base, type_str(fam.type));
-            for (const auto &series : fam.series) {
-                out.append(series);
-                out.push_back('\n');
-            }
+            out.append(fam.body);
         }
         return out;
     }
@@ -72,7 +73,7 @@ private:
     struct Family {
         Type type;
         std::string help;
-        std::vector<std::string> series;
+        std::string body; // all series lines for this family, each terminated with '\n'
     };
     std::vector<std::string> _order;
     std::map<std::string, Family> _families;
