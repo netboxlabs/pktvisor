@@ -5,6 +5,7 @@
 #include "InputStream.h"
 #include "InputStreamManager.h"
 #include "Policies.h"
+#include "PrometheusSerializer.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
@@ -1408,5 +1409,95 @@ TEST_CASE("Policies and Metrics", "[policies][metrics]")
         auto [policy, lock] = registry.policy_manager()->module_get_locked("default_merge");
         metrics::v1::ScopeMetrics scope;
         REQUIRE_NOTHROW(policy->opentelemetry_metrics(scope));
+    }
+}
+
+static auto policies_config_two_policies = R"(
+version: "1.0"
+
+visor:
+  taps:
+    tap_multi:
+      input_type: mock
+      config:
+        iface: eth0
+  policies:
+    policy_alpha:
+      kind: collection
+      input:
+        tap: tap_multi
+        input_type: mock
+      handlers:
+        window_config:
+          num_periods: 5
+          deep_sample_rate: 100
+        modules:
+          net:
+            type: net
+    policy_beta:
+      kind: collection
+      input:
+        tap: tap_multi
+        input_type: mock
+      handlers:
+        window_config:
+          num_periods: 5
+          deep_sample_rate: 100
+        modules:
+          net:
+            type: net
+)";
+
+// Count non-overlapping occurrences of needle in haystack.
+static int count_occurrences(const std::string &haystack, const std::string &needle)
+{
+    int count = 0;
+    std::string::size_type pos = 0;
+    while ((pos = haystack.find(needle, pos)) != std::string::npos) {
+        ++count;
+        pos += needle.size();
+    }
+    return count;
+}
+
+TEST_CASE("Multi-policy Prometheus shared serializer", "[policies][prometheus][multi-policy]")
+{
+    // Regression test for #716: rendering two policies through a shared PrometheusSerializer
+    // must produce exactly one # HELP / # TYPE line per metric family, not one per policy.
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+
+    YAML::Node config_file = YAML::Load(policies_config_two_policies);
+    REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"]));
+    REQUIRE_NOTHROW(registry.policy_manager()->load(config_file["visor"]["policies"]));
+    REQUIRE(registry.policy_manager()->module_exists("policy_alpha"));
+    REQUIRE(registry.policy_manager()->module_exists("policy_beta"));
+
+    SECTION("Shared serializer produces unique # HELP and # TYPE headers")
+    {
+        PrometheusSerializer ser;
+
+        {
+            auto [policy, lock] = registry.policy_manager()->module_get_locked("policy_alpha");
+            REQUIRE_NOTHROW(policy->prometheus_metrics(ser));
+        }
+        {
+            auto [policy, lock] = registry.policy_manager()->module_get_locked("policy_beta");
+            REQUIRE_NOTHROW(policy->prometheus_metrics(ser));
+        }
+
+        std::string output = ser.finalize();
+        REQUIRE(!output.empty());
+
+        // Every metric family must have its # HELP and # TYPE header emitted exactly once,
+        // even when two policies contribute series to the same family.
+        CHECK(count_occurrences(output, "# HELP packets_udp ") == 1);
+        CHECK(count_occurrences(output, "# TYPE packets_udp ") == 1);
+        CHECK(count_occurrences(output, "# HELP packets_tcp ") == 1);
+        CHECK(count_occurrences(output, "# TYPE packets_tcp ") == 1);
+        // Each policy must still contribute its own series (two distinct policy= label values).
+        CHECK(count_occurrences(output, "policy=\"policy_alpha\"") >= 1);
+        CHECK(count_occurrences(output, "policy=\"policy_beta\"") >= 1);
     }
 }

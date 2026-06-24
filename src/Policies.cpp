@@ -380,9 +380,8 @@ void Policy::json_metrics(json &j, uint64_t period, bool merge)
     }
 }
 
-void Policy::prometheus_metrics(std::stringstream &out)
+void Policy::prometheus_metrics(PrometheusSerializer &ser)
 {
-    PrometheusSerializer ser;
     if (_merge_like_handlers) {
         auto bucket_map = _get_merged_buckets();
         for (auto &[bucket, hmod] : bucket_map) {
@@ -398,6 +397,12 @@ void Policy::prometheus_metrics(std::stringstream &out)
             }
         }
     }
+}
+
+void Policy::prometheus_metrics(std::stringstream &out)
+{
+    PrometheusSerializer ser;
+    prometheus_metrics(ser);
     out << ser.finalize();
 }
 

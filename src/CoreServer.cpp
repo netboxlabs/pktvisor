@@ -434,16 +434,19 @@ void CoreServer::_setup_routes(const PrometheusConfig &prom_config)
             }
         }
         std::stringstream output;
-        for (const auto &p_mname : plist) {
-            try {
+        PrometheusSerializer ser;
+        try {
+            for (const auto &p_mname : plist) {
                 auto [policy, lock] = _registry->policy_manager()->module_get_locked(p_mname);
-                policy->prometheus_metrics(output);
-            } catch (const std::exception &e) {
-                res.status = 500;
-                res.set_content(e.what(), "text/plain");
+                policy->prometheus_metrics(ser);
             }
-            res.set_content(output.str(), "text/plain");
+        } catch (const std::exception &e) {
+            res.status = 500;
+            res.set_content(e.what(), "text/plain");
+            return;
         }
+        output << ser.finalize();
+        res.set_content(output.str(), "text/plain");
     });
     if (_otel) {
         _otel->OnInterval([&](metrics::v1::ResourceMetrics &resource) {
