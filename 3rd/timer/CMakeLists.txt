@@ -1,7 +1,7 @@
 
 add_library(timer INTERFACE)
 
-target_include_directories(rng
+target_include_directories(timer
         INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         )
