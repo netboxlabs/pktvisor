@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #include "NetStreamHandler.h"
+#include "PrometheusSerializer.h"
 #include "HandlerModulePlugin.h"
 #include "utils.h"
 
@@ -329,55 +330,55 @@ void NetworkMetricsBucket::specialized_merge(const AbstractMetricsBucket &o, Met
     }
 }
 
-void NetworkMetricsBucket::to_prometheus(std::stringstream &out, Metric::LabelMap add_labels) const
+void NetworkMetricsBucket::to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels) const
 {
 
     if (group_enabled(group::NetMetrics::Quantiles)) {
         for (auto &net : _net) {
             auto dir_labels = add_labels;
             dir_labels["direction"] = _dir_str.at(net.first);
-            net.second.rate.to_prometheus(out, dir_labels);
-            net.second.throughput.to_prometheus(out, dir_labels);
+            net.second.rate.to_prometheus(ser, dir_labels);
+            net.second.throughput.to_prometheus(ser, dir_labels);
         }
     }
 
     {
         auto [num_events, num_samples, event_rate, event_lock] = event_data_locked(); // thread safe
 
-        event_rate->to_prometheus(out, add_labels);
-        num_events->to_prometheus(out, add_labels);
-        num_samples->to_prometheus(out, add_labels);
+        event_rate->to_prometheus(ser, add_labels);
+        num_events->to_prometheus(ser, add_labels);
+        num_samples->to_prometheus(ser, add_labels);
     }
 
     std::shared_lock r_lock(_mutex);
 
-    group_enabled(group::NetMetrics::Counters) ? _filtered.to_prometheus(out, add_labels) : void();
+    group_enabled(group::NetMetrics::Counters) ? _filtered.to_prometheus(ser, add_labels) : void();
 
     for (auto &net : _net) {
         auto dir_labels = add_labels;
         dir_labels["direction"] = _dir_str.at(net.first);
 
-        group_enabled(group::NetMetrics::Counters) ? net.second.counters.to_prometheus(out, dir_labels) : void();
+        group_enabled(group::NetMetrics::Counters) ? net.second.counters.to_prometheus(ser, dir_labels) : void();
 
-        group_enabled(group::NetMetrics::Cardinality) ? net.second.ipCard.to_prometheus(out, dir_labels) : void();
+        group_enabled(group::NetMetrics::Cardinality) ? net.second.ipCard.to_prometheus(ser, dir_labels) : void();
 
         if (group_enabled(group::NetMetrics::TopIps)) {
-            net.second.topIPv4.to_prometheus(out, dir_labels, [](const uint32_t &val) { return pcpp::IPv4Address(val).toString(); });
-            net.second.topIPv6.to_prometheus(out, dir_labels);
+            net.second.topIPv4.to_prometheus(ser, dir_labels, [](const uint32_t &val) { return pcpp::IPv4Address(val).toString(); });
+            net.second.topIPv6.to_prometheus(ser, dir_labels);
         }
 
         if (group_enabled(group::NetMetrics::TopGeo)) {
-            net.second.topGeoLoc.to_prometheus(out, dir_labels, [](Metric::LabelMap &l, const std::string &key, const visor::geo::City &val) {
+            net.second.topGeoLoc.to_prometheus(ser, dir_labels, [](Metric::LabelMap &l, const std::string &key, const visor::geo::City &val) {
                 l[key] = val.location;
                 if (!val.latitude.empty() && !val.longitude.empty()) {
                     l["lat"] = val.latitude;
                     l["lon"] = val.longitude;
                 }
             });
-            net.second.topASN.to_prometheus(out, dir_labels);
+            net.second.topASN.to_prometheus(ser, dir_labels);
         }
 
-        group_enabled(group::NetMetrics::Quantiles) ? net.second.payload_size.to_prometheus(out, dir_labels) : void();
+        group_enabled(group::NetMetrics::Quantiles) ? net.second.payload_size.to_prometheus(ser, dir_labels) : void();
     }
 }
 

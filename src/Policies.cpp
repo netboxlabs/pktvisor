@@ -6,6 +6,7 @@
 #include "CoreRegistry.h"
 #include "HandlerManager.h"
 #include "InputStreamManager.h"
+#include "PrometheusSerializer.h"
 #include "Taps.h"
 #include <algorithm>
 #include <fmt/format.h>
@@ -379,23 +380,30 @@ void Policy::json_metrics(json &j, uint64_t period, bool merge)
     }
 }
 
-void Policy::prometheus_metrics(std::stringstream &out)
+void Policy::prometheus_metrics(PrometheusSerializer &ser)
 {
     if (_merge_like_handlers) {
         auto bucket_map = _get_merged_buckets();
         for (auto &[bucket, hmod] : bucket_map) {
-            hmod->window_prometheus(out, bucket.get(), {{"policy", name()}, {"handler", hmod->schema_key() + "_merged"}});
+            hmod->window_prometheus(ser, bucket.get(), {{"policy", name()}, {"handler", hmod->schema_key() + "_merged"}});
         }
     } else {
         for (auto &mod : modules()) {
             auto hmod = dynamic_cast<StreamHandler *>(mod);
             if (hmod) {
                 spdlog::stopwatch sw;
-                hmod->window_prometheus(out, {{"policy", name()}, {"handler", hmod->name()}});
+                hmod->window_prometheus(ser, {{"policy", name()}, {"handler", hmod->name()}});
                 spdlog::get("visor")->debug("{} window_prometheus elapsed time: {}", hmod->name(), sw);
             }
         }
     }
+}
+
+void Policy::prometheus_metrics(std::stringstream &out)
+{
+    PrometheusSerializer ser;
+    prometheus_metrics(ser);
+    out << ser.finalize();
 }
 
 void Policy::opentelemetry_metrics(metrics::v1::ScopeMetrics &scope)

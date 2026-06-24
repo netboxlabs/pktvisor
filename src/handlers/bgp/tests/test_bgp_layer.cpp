@@ -74,9 +74,9 @@ TEST_CASE("BGP to_prometheus and to_opentelemetry backends", "[pcap][bgp][backen
     // Counter values come from the existing parse test: total=9, OPEN=2,
     // UPDATE=4, KEEPALIVE=3. They must round-trip identically through both
     // backends.
-    std::stringstream prom;
+    visor::PrometheusSerializer prom;
     bgp_handler.metrics()->bucket(0)->to_prometheus(prom, {});
-    auto prom_text = prom.str();
+    auto prom_text = prom.finalize();
     CHECK(prom_text.find("bgp_wire_packets_total{} 9") != std::string::npos);
     CHECK(prom_text.find("bgp_wire_packets_open{} 2") != std::string::npos);
     CHECK(prom_text.find("bgp_wire_packets_update{} 4") != std::string::npos);

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "AbstractMetricsManager.h"
+#include "PrometheusSerializer.h"
 #include "DnstapInputStream.h"
 #include "GeoDB.h"
 #include "MockInputStream.h"
@@ -99,15 +100,15 @@ struct NetworkDirection {
             total.to_json(j);
         }
 
-        void to_prometheus(std::stringstream &out, const Metric::LabelMap &add_labels) const
+        void to_prometheus(PrometheusSerializer &ser, const Metric::LabelMap &add_labels) const
         {
-            UDP.to_prometheus(out, add_labels);
-            TCP.to_prometheus(out, add_labels);
-            OtherL4.to_prometheus(out, add_labels);
-            IPv4.to_prometheus(out, add_labels);
-            IPv6.to_prometheus(out, add_labels);
-            TCP_SYN.to_prometheus(out, add_labels);
-            total.to_prometheus(out, add_labels);
+            UDP.to_prometheus(ser, add_labels);
+            TCP.to_prometheus(ser, add_labels);
+            OtherL4.to_prometheus(ser, add_labels);
+            IPv4.to_prometheus(ser, add_labels);
+            IPv6.to_prometheus(ser, add_labels);
+            TCP_SYN.to_prometheus(ser, add_labels);
+            total.to_prometheus(ser, add_labels);
         }
 
         void to_opentelemetry(metrics::v1::ScopeMetrics &scope, timespec &start, timespec &end, Metric::LabelMap add_labels) const
@@ -190,7 +191,7 @@ public:
     // visor::AbstractMetricsBucket
     void specialized_merge(const AbstractMetricsBucket &other, Metric::Aggregate agg_operator) override;
     void to_json(json &j) const override;
-    void to_prometheus(std::stringstream &out, Metric::LabelMap add_labels = {}) const override;
+    void to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels = {}) const override;
     void to_opentelemetry(metrics::v1::ScopeMetrics &scope, timespec &start_ts, timespec &end_ts, Metric::LabelMap add_labels = {}) const override;
     void update_topn_metrics(size_t topn_count, uint64_t percentile_threshold) override
     {

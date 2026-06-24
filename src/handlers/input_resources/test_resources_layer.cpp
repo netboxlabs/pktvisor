@@ -47,7 +47,9 @@ TEST_CASE("Check resources for pcap input", "[pcap][resources]")
 
     std::stringstream output;
     std::string line;
-    resources_handler.metrics()->bucket(0)->to_prometheus(output, {{"policy", "default"}});
+    visor::PrometheusSerializer ser;
+    resources_handler.metrics()->bucket(0)->to_prometheus(ser, {{"policy", "default"}});
+    output << ser.finalize();
     std::getline(output, line);
     CHECK(line == "# HELP base_total Total number of events");
     std::getline(output, line);
@@ -129,11 +131,11 @@ TEST_CASE("input_resources to_prometheus and to_opentelemetry backends", "[pcap]
     handler.stop();
     stream.stop();
 
-    std::stringstream prom;
+    visor::PrometheusSerializer prom;
     handler.metrics()->bucket(0)->to_prometheus(prom, {});
     // input_resources emits cross-schema metrics (base_, cpu_usage, memory_bytes,
     // etc.) so just assert the backend produced something.
-    CHECK(!prom.str().empty());
+    CHECK(!prom.finalize().empty());
 
     opentelemetry::proto::metrics::v1::ScopeMetrics scope;
     timespec start_ts{}, end_ts{};

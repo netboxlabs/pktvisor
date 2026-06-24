@@ -19,6 +19,7 @@ namespace visor {
 
 class CoreRegistry;
 class AbstractMetricsBucket;
+class PrometheusSerializer;
 
 class PolicyException : public std::runtime_error
 {
@@ -108,6 +109,7 @@ public:
 
     void json_metrics(json &j, uint64_t period, bool merge);
     void prometheus_metrics(std::stringstream &out);
+    void prometheus_metrics(PrometheusSerializer &ser);
     void opentelemetry_metrics(metrics::v1::ScopeMetrics &scope);
 };
 

@@ -998,9 +998,9 @@ TEST_CASE("dnsv2 to_prometheus and to_opentelemetry backends", "[pcap][dnsv2][ba
     // DNS v2 slices counters by `direction` label (in/out/unknown), so we
     // sum across all data points to get the project total. The fixture has
     // 70 query/reply pairs over UDP IPv4 → 70 xacts total.
-    std::stringstream prom;
+    visor::PrometheusSerializer prom;
     handler.metrics()->bucket(0)->to_prometheus(prom, {});
-    CHECK(prom.str().find("dns_xacts{") != std::string::npos);
+    CHECK(prom.finalize().find("dns_xacts{") != std::string::npos);
 
     opentelemetry::proto::metrics::v1::ScopeMetrics scope;
     timespec start_ts{}, end_ts{};

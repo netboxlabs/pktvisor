@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #include "DnsStreamHandler.h"
+#include "PrometheusSerializer.h"
 #include "HandlerModulePlugin.h"
 #include "utils.h"
 #include <fmt/ranges.h>
@@ -756,53 +757,53 @@ void DnsMetricsBucket::to_json(json &j) const
     }
 }
 
-void DnsMetricsBucket::to_prometheus(std::stringstream &out, Metric::LabelMap add_labels) const
+void DnsMetricsBucket::to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels) const
 {
     for (auto &dns : _dns) {
         auto dir_labels = add_labels;
         dir_labels["direction"] = _dir_str.at(dns.first);
-        group_enabled(group::DnsMetrics::Quantiles) ? dns.second.dnsRate.to_prometheus(out, dir_labels) : void();
+        group_enabled(group::DnsMetrics::Quantiles) ? dns.second.dnsRate.to_prometheus(ser, dir_labels) : void();
     }
 
     {
         auto [num_events, num_samples, event_rate, event_lock] = event_data_locked(); // thread safe
 
-        event_rate->to_prometheus(out, add_labels);
-        num_events->to_prometheus(out, add_labels);
-        num_samples->to_prometheus(out, add_labels);
+        event_rate->to_prometheus(ser, add_labels);
+        num_events->to_prometheus(ser, add_labels);
+        num_samples->to_prometheus(ser, add_labels);
     }
 
     std::shared_lock r_lock(_mutex);
 
-    group_enabled(group::DnsMetrics::Counters) ? _filtered.to_prometheus(out, add_labels) : void();
+    group_enabled(group::DnsMetrics::Counters) ? _filtered.to_prometheus(ser, add_labels) : void();
 
     for (auto &dns : _dns) {
         auto dir_labels = add_labels;
         dir_labels["direction"] = _dir_str.at(dns.first);
 
-        group_enabled(group::DnsMetrics::Counters) ? dns.second.counters.to_prometheus(out, dir_labels) : void();
-        group_enabled(group::DnsMetrics::Cardinality) ? dns.second.qnameCard.to_prometheus(out, dir_labels) : void();
-        group_enabled(group::DnsMetrics::TopPorts) ? dns.second.topUDPPort.to_prometheus(out, dir_labels, [](const uint16_t &val) { return std::to_string(val); }) : void();
+        group_enabled(group::DnsMetrics::Counters) ? dns.second.counters.to_prometheus(ser, dir_labels) : void();
+        group_enabled(group::DnsMetrics::Cardinality) ? dns.second.qnameCard.to_prometheus(ser, dir_labels) : void();
+        group_enabled(group::DnsMetrics::TopPorts) ? dns.second.topUDPPort.to_prometheus(ser, dir_labels, [](const uint16_t &val) { return std::to_string(val); }) : void();
 
         if (group_enabled(group::DnsMetrics::TopEcs)) {
-            dns.second.topGeoLocECS.to_prometheus(out, dir_labels, [](Metric::LabelMap &l, const std::string &key, const visor::geo::City &val) {
+            dns.second.topGeoLocECS.to_prometheus(ser, dir_labels, [](Metric::LabelMap &l, const std::string &key, const visor::geo::City &val) {
                 l[key] = val.location;
                 if (!val.latitude.empty() && !val.longitude.empty()) {
                     l["lat"] = val.latitude;
                     l["lon"] = val.longitude;
                 }
             });
-            dns.second.topASNECS.to_prometheus(out, dir_labels);
-            dns.second.topQueryECS.to_prometheus(out, dir_labels);
+            dns.second.topASNECS.to_prometheus(ser, dir_labels);
+            dns.second.topQueryECS.to_prometheus(ser, dir_labels);
         }
 
         if (group_enabled(group::DnsMetrics::TopRcodes)) {
-            dns.second.topNX.to_prometheus(out, dir_labels);
-            dns.second.topREFUSED.to_prometheus(out, dir_labels);
-            dns.second.topSRVFAIL.to_prometheus(out, dir_labels);
-            dns.second.topNODATA.to_prometheus(out, dir_labels);
-            dns.second.topNOERROR.to_prometheus(out, dir_labels);
-            dns.second.topRCode.to_prometheus(out, dir_labels, [](const uint16_t &val) {
+            dns.second.topNX.to_prometheus(ser, dir_labels);
+            dns.second.topREFUSED.to_prometheus(ser, dir_labels);
+            dns.second.topSRVFAIL.to_prometheus(ser, dir_labels);
+            dns.second.topNODATA.to_prometheus(ser, dir_labels);
+            dns.second.topNOERROR.to_prometheus(ser, dir_labels);
+            dns.second.topRCode.to_prometheus(ser, dir_labels, [](const uint16_t &val) {
                 if (RCodeNames.find(val) != RCodeNames.end()) {
                     return RCodeNames[val];
                 } else {
@@ -812,17 +813,17 @@ void DnsMetricsBucket::to_prometheus(std::stringstream &out, Metric::LabelMap ad
         }
 
         if (group_enabled(group::DnsMetrics::TopQnames)) {
-            dns.second.topQname2.to_prometheus(out, dir_labels);
-            dns.second.topQname3.to_prometheus(out, dir_labels);
+            dns.second.topQname2.to_prometheus(ser, dir_labels);
+            dns.second.topQname3.to_prometheus(ser, dir_labels);
         }
 
         if (group_enabled(group::DnsMetrics::TopSize)) {
-            dns.second.topSizedQnameResp.to_prometheus(out, dir_labels);
-            dns.second.dnsRatio.to_prometheus(out, dir_labels);
+            dns.second.topSizedQnameResp.to_prometheus(ser, dir_labels);
+            dns.second.dnsRatio.to_prometheus(ser, dir_labels);
         }
 
         if (group_enabled(group::DnsMetrics::TopQtypes)) {
-            dns.second.topQType.to_prometheus(out, dir_labels, [](const uint16_t &val) {
+            dns.second.topQType.to_prometheus(ser, dir_labels, [](const uint16_t &val) {
                 if (QTypeNames.find(val) != QTypeNames.end()) {
                     return QTypeNames[val];
                 } else {
@@ -832,9 +833,9 @@ void DnsMetricsBucket::to_prometheus(std::stringstream &out, Metric::LabelMap ad
         }
 
         if (group_enabled(group::DnsMetrics::XactTimes)) {
-            dns.second.dnsTimeUs.to_prometheus(out, dir_labels);
-            dns.second.dnsHistTimeUs.to_prometheus(out, dir_labels);
-            dns.second.topSlow.to_prometheus(out, dir_labels);
+            dns.second.dnsTimeUs.to_prometheus(ser, dir_labels);
+            dns.second.dnsHistTimeUs.to_prometheus(ser, dir_labels);
+            dns.second.topSlow.to_prometheus(ser, dir_labels);
         }
     }
 }

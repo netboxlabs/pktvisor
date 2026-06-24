@@ -12,6 +12,7 @@
 #include <nlohmann/json.hpp>
 #include "Configurable.h"
 #include "Metrics.h"
+#include "PrometheusSerializer.h"
 #include <bitset>
 #include <shared_mutex>
 #include <sstream>
@@ -210,7 +211,7 @@ public:
     }
 
     virtual void to_json(json &j) const = 0;
-    virtual void to_prometheus(std::stringstream &out, Metric::LabelMap add_labels = {}) const = 0;
+    virtual void to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels = {}) const = 0;
     virtual void to_opentelemetry(metrics::v1::ScopeMetrics &scope, timespec &start_ts, timespec &end_ts, Metric::LabelMap add_labels = {}) const = 0;
     virtual void update_topn_metrics(size_t topn_count, uint64_t percentile_threshold) = 0;
 };
@@ -511,7 +512,7 @@ public:
         _metric_buckets.at(period)->to_json(j[key]);
     }
 
-    void window_single_prometheus(std::stringstream &out, uint64_t period = 0, Metric::LabelMap add_labels = {}) const
+    void window_single_prometheus(PrometheusSerializer &ser, uint64_t period = 0, Metric::LabelMap add_labels = {}) const
     {
         std::shared_lock rl(_base_mutex);
         std::shared_lock rbl(_bucket_mutex);
@@ -535,7 +536,7 @@ public:
             add_labels["tap"] = _tap_name;
         }
 
-        _metric_buckets.at(period)->to_prometheus(out, add_labels);
+        _metric_buckets.at(period)->to_prometheus(ser, add_labels);
     }
 
     void window_single_opentelemetry(metrics::v1::ScopeMetrics &scope, uint64_t period = 0, Metric::LabelMap add_labels = {}) const
@@ -585,13 +586,13 @@ public:
         sbucket->to_opentelemetry(scope, start_ts, end_ts, add_labels);
     }
 
-    void window_external_prometheus(std::stringstream &out, AbstractMetricsBucket *bucket, Metric::LabelMap add_labels = {}) const
+    void window_external_prometheus(PrometheusSerializer &ser, AbstractMetricsBucket *bucket, Metric::LabelMap add_labels = {}) const
     {
         if (_groups && _groups->none()) {
             return;
         }
         // static because caller guarantees only our own bucket type
-        static_cast<MetricsBucketClass *>(bucket)->to_prometheus(out, add_labels);
+        static_cast<MetricsBucketClass *>(bucket)->to_prometheus(ser, add_labels);
     }
 
     void window_external_json(json &j, const std::string &key, AbstractMetricsBucket *bucket) const

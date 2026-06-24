@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #include "PcapStreamHandler.h"
+#include "PrometheusSerializer.h"
 
 namespace visor::handler::pcap {
 
@@ -89,13 +90,13 @@ void PcapMetricsBucket::specialized_merge(const AbstractMetricsBucket &o, [[mayb
     _counters.pcap_if_drop += other._counters.pcap_if_drop;
 }
 
-void PcapMetricsBucket::to_prometheus(std::stringstream &out, Metric::LabelMap add_labels) const
+void PcapMetricsBucket::to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels) const
 {
     std::shared_lock r_lock(_mutex);
 
-    _counters.pcap_TCP_reassembly_errors.to_prometheus(out, add_labels);
-    _counters.pcap_os_drop.to_prometheus(out, add_labels);
-    _counters.pcap_if_drop.to_prometheus(out, add_labels);
+    _counters.pcap_TCP_reassembly_errors.to_prometheus(ser, add_labels);
+    _counters.pcap_os_drop.to_prometheus(ser, add_labels);
+    _counters.pcap_if_drop.to_prometheus(ser, add_labels);
 }
 
 void PcapMetricsBucket::to_opentelemetry(metrics::v1::ScopeMetrics &scope, timespec &start_ts, timespec &end_ts, Metric::LabelMap add_labels) const

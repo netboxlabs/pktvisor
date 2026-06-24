@@ -16,7 +16,7 @@ public:
     std::string type;
     void specialized_merge(const AbstractMetricsBucket &, Metric::Aggregate) override{};
     void to_json(json &) const override{};
-    void to_prometheus(std::stringstream &,
+    void to_prometheus(PrometheusSerializer &,
         Metric::LabelMap) const override{};
     void to_opentelemetry(metrics::v1::ScopeMetrics &, timespec &, timespec &, Metric::LabelMap) const override{};
     void update_topn_metrics(size_t, uint64_t) override{};
@@ -43,12 +43,12 @@ public:
     {
         j["window"] = "single";
     }
-    void window_single_prometheus(std::stringstream &out, uint64_t period, Metric::LabelMap) const
+    void window_single_prometheus(PrometheusSerializer &ser, uint64_t period, Metric::LabelMap) const
     {
         if (period) {
-            out << "first_window";
+            ser.write("first_window", PrometheusSerializer::Type::Gauge, "", {}, {}, 1);
         } else {
-            out << "live_window";
+            ser.write("live_window", PrometheusSerializer::Type::Gauge, "", {}, {}, 1);
         }
     }
     void window_single_opentelemetry(metrics::v1::ScopeMetrics &scope, uint64_t period, Metric::LabelMap) const
@@ -63,9 +63,9 @@ public:
     {
         scope.add_metrics()->set_name("external_window");
     }
-    void window_external_prometheus(std::stringstream &out, AbstractMetricsBucket *, Metric::LabelMap) const
+    void window_external_prometheus(PrometheusSerializer &ser, AbstractMetricsBucket *, Metric::LabelMap) const
     {
-        out << "external_window";
+        ser.write("external_window", PrometheusSerializer::Type::Gauge, "", {}, {}, 1);
     }
     void window_external_json(json &j, const std::string &, AbstractMetricsBucket *) const
     {
@@ -170,26 +170,27 @@ TEST_CASE("StreamMetricsHandler tests", "[metrics][handler]")
 
     SECTION("Prometheus window")
     {
-        std::string line;
-        std::stringstream out;
         config.config_set<uint64_t>("period", 0);
         auto handler = std::make_unique<TestStreamMetricsHandler>("my_handler", &config);
-        handler->window_prometheus(out);
-        std::getline(out, line);
-        CHECK(line == "live_window");
-        out.clear();
+        {
+            PrometheusSerializer ser;
+            handler->window_prometheus(ser);
+            CHECK(ser.finalize().find("live_window{") != std::string::npos);
+        }
 
         config.config_set<uint64_t>("period", 3);
         handler = std::make_unique<TestStreamMetricsHandler>("my_handler", &config);
-        handler->window_prometheus(out);
-        std::getline(out, line);
-        CHECK(line == "first_window");
-        out.clear();
+        {
+            PrometheusSerializer ser;
+            handler->window_prometheus(ser);
+            CHECK(ser.finalize().find("first_window{") != std::string::npos);
+        }
 
-        handler->window_prometheus(out, nullptr);
-        std::getline(out, line);
-        CHECK(line == "external_window");
-        out.clear();
+        {
+            PrometheusSerializer ser;
+            handler->window_prometheus(ser, nullptr);
+            CHECK(ser.finalize().find("external_window{") != std::string::npos);
+        }
     }
 
     SECTION("Opentelemetry window")

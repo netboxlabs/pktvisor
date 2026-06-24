@@ -5,6 +5,7 @@
 #pragma once
 
 #include "AbstractMetricsManager.h"
+#include "PrometheusSerializer.h"
 #include "DnstapInputStream.h"
 #include "GeoDB.h"
 #include "MockInputStream.h"
@@ -180,29 +181,29 @@ struct DnsDirection {
             orphan.to_json(j);
         }
 
-        void to_prometheus(std::stringstream &out, const Metric::LabelMap &add_labels) const
+        void to_prometheus(PrometheusSerializer &ser, const Metric::LabelMap &add_labels) const
         {
-            xacts.to_prometheus(out, add_labels);
-            UDP.to_prometheus(out, add_labels);
-            TCP.to_prometheus(out, add_labels);
-            DOT.to_prometheus(out, add_labels);
-            DOH.to_prometheus(out, add_labels);
-            cryptUDP.to_prometheus(out, add_labels);
-            cryptTCP.to_prometheus(out, add_labels);
-            DOQ.to_prometheus(out, add_labels);
-            IPv4.to_prometheus(out, add_labels);
-            IPv6.to_prometheus(out, add_labels);
-            NX.to_prometheus(out, add_labels);
-            ECS.to_prometheus(out, add_labels);
-            REFUSED.to_prometheus(out, add_labels);
-            SRVFAIL.to_prometheus(out, add_labels);
-            RNOERROR.to_prometheus(out, add_labels);
-            NODATA.to_prometheus(out, add_labels);
-            authData.to_prometheus(out, add_labels);
-            authAnswer.to_prometheus(out, add_labels);
-            checkDisabled.to_prometheus(out, add_labels);
-            timeout.to_prometheus(out, add_labels);
-            orphan.to_prometheus(out, add_labels);
+            xacts.to_prometheus(ser, add_labels);
+            UDP.to_prometheus(ser, add_labels);
+            TCP.to_prometheus(ser, add_labels);
+            DOT.to_prometheus(ser, add_labels);
+            DOH.to_prometheus(ser, add_labels);
+            cryptUDP.to_prometheus(ser, add_labels);
+            cryptTCP.to_prometheus(ser, add_labels);
+            DOQ.to_prometheus(ser, add_labels);
+            IPv4.to_prometheus(ser, add_labels);
+            IPv6.to_prometheus(ser, add_labels);
+            NX.to_prometheus(ser, add_labels);
+            ECS.to_prometheus(ser, add_labels);
+            REFUSED.to_prometheus(ser, add_labels);
+            SRVFAIL.to_prometheus(ser, add_labels);
+            RNOERROR.to_prometheus(ser, add_labels);
+            NODATA.to_prometheus(ser, add_labels);
+            authData.to_prometheus(ser, add_labels);
+            authAnswer.to_prometheus(ser, add_labels);
+            checkDisabled.to_prometheus(ser, add_labels);
+            timeout.to_prometheus(ser, add_labels);
+            orphan.to_prometheus(ser, add_labels);
         }
 
         void to_opentelemetry(metrics::v1::ScopeMetrics &scope, timespec &start, timespec &end, Metric::LabelMap add_labels) const
@@ -371,7 +372,7 @@ public:
     // visor::AbstractMetricsBucket
     void specialized_merge(const AbstractMetricsBucket &other, Metric::Aggregate agg_operator) override;
     void to_json(json &j) const override;
-    void to_prometheus(std::stringstream &out, Metric::LabelMap add_labels = {}) const override;
+    void to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels = {}) const override;
     void to_opentelemetry(metrics::v1::ScopeMetrics &scope, timespec &start_ts, timespec &end_ts, Metric::LabelMap add_labels = {}) const override;
     void update_topn_metrics(size_t topn_count, uint64_t percentile_threshold) override
     {

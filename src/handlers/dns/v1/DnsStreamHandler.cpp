@@ -3,6 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #include "DnsStreamHandler.h"
+#include "PrometheusSerializer.h"
 #include "HandlerModulePlugin.h"
 #include "utils.h"
 #include <fmt/ranges.h>
@@ -1136,91 +1137,91 @@ void DnsMetricsBucket::new_dns_transaction(bool deep, float to90th, float from90
         }
     }
 }
-void DnsMetricsBucket::to_prometheus(std::stringstream &out, Metric::LabelMap add_labels) const
+void DnsMetricsBucket::to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels) const
 {
-    _rate_total.to_prometheus(out, add_labels);
+    _rate_total.to_prometheus(ser, add_labels);
 
     {
         auto [num_events, num_samples, event_rate, event_lock] = event_data_locked(); // thread safe
 
-        event_rate->to_prometheus(out, add_labels);
-        num_events->to_prometheus(out, add_labels);
-        num_samples->to_prometheus(out, add_labels);
+        event_rate->to_prometheus(ser, add_labels);
+        num_events->to_prometheus(ser, add_labels);
+        num_samples->to_prometheus(ser, add_labels);
     }
 
     std::shared_lock r_lock(_mutex);
     if (group_enabled(group::DnsMetrics::Counters)) {
-        _counters.queries.to_prometheus(out, add_labels);
-        _counters.replies.to_prometheus(out, add_labels);
-        _counters.TCP.to_prometheus(out, add_labels);
-        _counters.UDP.to_prometheus(out, add_labels);
-        _counters.IPv4.to_prometheus(out, add_labels);
-        _counters.IPv6.to_prometheus(out, add_labels);
-        _counters.NX.to_prometheus(out, add_labels);
-        _counters.REFUSED.to_prometheus(out, add_labels);
-        _counters.SRVFAIL.to_prometheus(out, add_labels);
-        _counters.RNOERROR.to_prometheus(out, add_labels);
-        _counters.NODATA.to_prometheus(out, add_labels);
-        _counters.total.to_prometheus(out, add_labels);
-        _counters.filtered.to_prometheus(out, add_labels);
+        _counters.queries.to_prometheus(ser, add_labels);
+        _counters.replies.to_prometheus(ser, add_labels);
+        _counters.TCP.to_prometheus(ser, add_labels);
+        _counters.UDP.to_prometheus(ser, add_labels);
+        _counters.IPv4.to_prometheus(ser, add_labels);
+        _counters.IPv6.to_prometheus(ser, add_labels);
+        _counters.NX.to_prometheus(ser, add_labels);
+        _counters.REFUSED.to_prometheus(ser, add_labels);
+        _counters.SRVFAIL.to_prometheus(ser, add_labels);
+        _counters.RNOERROR.to_prometheus(ser, add_labels);
+        _counters.NODATA.to_prometheus(ser, add_labels);
+        _counters.total.to_prometheus(ser, add_labels);
+        _counters.filtered.to_prometheus(ser, add_labels);
     }
 
     if (group_enabled(group::DnsMetrics::Cardinality)) {
-        _dns_qnameCard.to_prometheus(out, add_labels);
+        _dns_qnameCard.to_prometheus(ser, add_labels);
     }
 
     if (group_enabled(group::DnsMetrics::DnsTransactions)) {
-        _counters.xacts_total.to_prometheus(out, add_labels);
-        _counters.xacts_timed_out.to_prometheus(out, add_labels);
+        _counters.xacts_total.to_prometheus(ser, add_labels);
+        _counters.xacts_timed_out.to_prometheus(ser, add_labels);
 
-        _counters.xacts_in.to_prometheus(out, add_labels);
-        _dns_slowXactIn.to_prometheus(out, add_labels);
+        _counters.xacts_in.to_prometheus(ser, add_labels);
+        _dns_slowXactIn.to_prometheus(ser, add_labels);
 
         if (group_enabled(group::DnsMetrics::Quantiles)) {
-            _dnsXactFromTimeUs.to_prometheus(out, add_labels);
-            _dnsXactToTimeUs.to_prometheus(out, add_labels);
-            _dnsXactRatio.to_prometheus(out, add_labels);
+            _dnsXactFromTimeUs.to_prometheus(ser, add_labels);
+            _dnsXactToTimeUs.to_prometheus(ser, add_labels);
+            _dnsXactRatio.to_prometheus(ser, add_labels);
         }
 
         if (group_enabled(group::DnsMetrics::Histograms)) {
-            _dnsXactFromHistTimeUs.to_prometheus(out, add_labels);
-            _dnsXactToHistTimeUs.to_prometheus(out, add_labels);
+            _dnsXactFromHistTimeUs.to_prometheus(ser, add_labels);
+            _dnsXactToHistTimeUs.to_prometheus(ser, add_labels);
         }
 
-        _counters.xacts_out.to_prometheus(out, add_labels);
-        _dns_slowXactOut.to_prometheus(out, add_labels);
+        _counters.xacts_out.to_prometheus(ser, add_labels);
+        _dns_slowXactOut.to_prometheus(ser, add_labels);
     }
 
     if (group_enabled(group::DnsMetrics::TopPorts)) {
-        _dns_topUDPPort.to_prometheus(out, add_labels, [](const uint16_t &val) { return std::to_string(val); });
+        _dns_topUDPPort.to_prometheus(ser, add_labels, [](const uint16_t &val) { return std::to_string(val); });
     }
     if (group_enabled(group::DnsMetrics::TopEcs)) {
-        group_enabled(group::DnsMetrics::Counters) ? _counters.queryECS.to_prometheus(out, add_labels) : void();
-        _dns_topGeoLocECS.to_prometheus(out, add_labels, [](Metric::LabelMap &l, const std::string &key, const visor::geo::City &val) {
+        group_enabled(group::DnsMetrics::Counters) ? _counters.queryECS.to_prometheus(ser, add_labels) : void();
+        _dns_topGeoLocECS.to_prometheus(ser, add_labels, [](Metric::LabelMap &l, const std::string &key, const visor::geo::City &val) {
             l[key] = val.location;
             if (!val.latitude.empty() && !val.longitude.empty()) {
                 l["lat"] = val.latitude;
                 l["lon"] = val.longitude;
             }
         });
-        _dns_topASNECS.to_prometheus(out, add_labels);
-        _dns_topQueryECS.to_prometheus(out, add_labels);
+        _dns_topASNECS.to_prometheus(ser, add_labels);
+        _dns_topQueryECS.to_prometheus(ser, add_labels);
     }
 
     if (group_enabled(group::DnsMetrics::TopQnames)) {
-        _dns_topQname2.to_prometheus(out, add_labels);
-        _dns_topQname3.to_prometheus(out, add_labels);
-        _dns_topNX.to_prometheus(out, add_labels);
-        _dns_topREFUSED.to_prometheus(out, add_labels);
+        _dns_topQname2.to_prometheus(ser, add_labels);
+        _dns_topQname3.to_prometheus(ser, add_labels);
+        _dns_topNX.to_prometheus(ser, add_labels);
+        _dns_topREFUSED.to_prometheus(ser, add_labels);
 
-        _dns_topSRVFAIL.to_prometheus(out, add_labels);
-        _dns_topNODATA.to_prometheus(out, add_labels);
+        _dns_topSRVFAIL.to_prometheus(ser, add_labels);
+        _dns_topNODATA.to_prometheus(ser, add_labels);
         if (group_enabled(group::DnsMetrics::TopQnamesDetails)) {
-            _dns_topSizedQnameResp.to_prometheus(out, add_labels);
-            _dns_topNOERROR.to_prometheus(out, add_labels);
+            _dns_topSizedQnameResp.to_prometheus(ser, add_labels);
+            _dns_topNOERROR.to_prometheus(ser, add_labels);
         }
     }
-    _dns_topRCode.to_prometheus(out, add_labels, [](const uint16_t &val) {
+    _dns_topRCode.to_prometheus(ser, add_labels, [](const uint16_t &val) {
         if (RCodeNames.find(val) != RCodeNames.end()) {
             return RCodeNames[val];
         } else {
@@ -1228,7 +1229,7 @@ void DnsMetricsBucket::to_prometheus(std::stringstream &out, Metric::LabelMap ad
         }
     });
 
-    _dns_topQType.to_prometheus(out, add_labels, [](const uint16_t &val) {
+    _dns_topQType.to_prometheus(ser, add_labels, [](const uint16_t &val) {
         if (QTypeNames.find(val) != QTypeNames.end()) {
             return QTypeNames[val];
         } else {

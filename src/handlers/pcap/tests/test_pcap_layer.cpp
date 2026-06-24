@@ -57,9 +57,9 @@ TEST_CASE("pcap to_prometheus and to_opentelemetry backends", "[pcap][pcap][back
     handler.stop();
     stream.stop();
 
-    std::stringstream prom;
+    visor::PrometheusSerializer prom;
     handler.metrics()->bucket(0)->to_prometheus(prom, {});
-    CHECK(prom.str().find("pcap_") != std::string::npos);
+    CHECK(prom.finalize().find("pcap_") != std::string::npos);
 
     opentelemetry::proto::metrics::v1::ScopeMetrics scope;
     timespec start_ts{}, end_ts{};

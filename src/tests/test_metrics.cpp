@@ -14,10 +14,10 @@ public:
     void to_json([[maybe_unused]] json &j) const
     {
     }
-    void to_prometheus([[maybe_unused]] std::stringstream &out,
+    void to_prometheus([[maybe_unused]] PrometheusSerializer &ser,
         [[maybe_unused]] Metric::LabelMap add_labels = {}) const
     {
-        out << "test_performed" << std::endl;
+        ser.write("test_performed", PrometheusSerializer::Type::Gauge, "", {}, {}, 1);
     }
     void to_opentelemetry(metrics::v1::ScopeMetrics &scope, timespec &, timespec &, Metric::LabelMap) const
     {
@@ -67,9 +67,9 @@ TEST_CASE("Abstract metrics manager", "[metrics][abstract]")
 
     SECTION("Abstract window single prometheus")
     {
-        manager->window_single_prometheus(output, 0, {{"policy", "default"}});
-        std::getline(output, line);
-        CHECK(line == "test_performed");
+        PrometheusSerializer ser;
+        manager->window_single_prometheus(ser, 0, {{"policy", "default"}});
+        CHECK(ser.finalize().find("test_performed{") != std::string::npos);
     }
 
     SECTION("Abstract window single opentelemetry")
@@ -80,7 +80,8 @@ TEST_CASE("Abstract metrics manager", "[metrics][abstract]")
 
     SECTION("Abstract window single prometheus failed")
     {
-        CHECK_THROWS_WITH(manager->window_single_prometheus(output, 2, {{"policy", "default"}}),
+        PrometheusSerializer ser;
+        CHECK_THROWS_WITH(manager->window_single_prometheus(ser, 2, {{"policy", "default"}}),
             "invalid metrics period, specify [0, 0]");
     }
 
@@ -99,9 +100,9 @@ TEST_CASE("Abstract metrics manager", "[metrics][abstract]")
     SECTION("Abstract window external prometheus")
     {
         auto live = static_cast<AbstractMetricsBucket *>(manager->live_bucket());
-        manager->window_external_prometheus(output, live, {{"policy", "default"}});
-        std::getline(output, line);
-        CHECK(line == "test_performed");
+        PrometheusSerializer ser;
+        manager->window_external_prometheus(ser, live, {{"policy", "default"}});
+        CHECK(ser.finalize().find("test_performed{") != std::string::npos);
     }
 
     SECTION("Abstract simple merge without bucket")
@@ -160,7 +161,9 @@ TEST_CASE("Counter metrics", "[metrics][counter]")
     SECTION("Counter prometheus")
     {
         ++c;
-        c.to_prometheus(output, {{"policy", "default"}});
+        PrometheusSerializer ser;
+        c.to_prometheus(ser, {{"policy", "default"}});
+        output << ser.finalize();
         std::getline(output, line);
         CHECK(line == "# HELP root_test_metric A counter test metric");
         std::getline(output, line);
@@ -219,7 +222,9 @@ TEST_CASE("Quantile metrics", "[metrics][quantile]")
     SECTION("Quantile prometheus")
     {
         q.update(12);
-        q.to_prometheus(output, {{"policy", "default"}});
+        PrometheusSerializer ser;
+        q.to_prometheus(ser, {{"policy", "default"}});
+        output << ser.finalize();
         std::getline(output, line);
         CHECK(line == "# HELP root_test_metric A quantile test metric");
         std::getline(output, line);
@@ -289,7 +294,9 @@ TEST_CASE("Histogram int metrics", "[metrics][histogram]")
         h.update(1);
         h.update(8);
         h.update(12);
-        h.to_prometheus(output, {{"policy", "default"}});
+        PrometheusSerializer ser;
+        h.to_prometheus(ser, {{"policy", "default"}});
+        output << ser.finalize();
         std::getline(output, line);
         CHECK(line == "# HELP root_test_metric A histogram test metric");
         std::getline(output, line);
@@ -356,7 +363,9 @@ TEST_CASE("Histogram double metrics", "[metrics][histogram]")
         h.update(1);
         h.update(8);
         h.update(12);
-        h.to_prometheus(output, {{"policy", "default"}});
+        PrometheusSerializer ser;
+        h.to_prometheus(ser, {{"policy", "default"}});
+        output << ser.finalize();
         std::getline(output, line);
         CHECK(line == "# HELP root_test_metric A histogram test metric");
         std::getline(output, line);
@@ -423,7 +432,9 @@ TEST_CASE("TopN metrics", "[metrics][topn]")
         top_sting.update("top1");
         top_sting.update("top2");
         top_sting.update("top1");
-        top_sting.to_prometheus(output, {{"policy", "default"}});
+        PrometheusSerializer ser;
+        top_sting.to_prometheus(ser, {{"policy", "default"}});
+        output << ser.finalize();
         std::getline(output, line);
         CHECK(line == "# HELP root_test_metric A topn test metric");
         std::getline(output, line);
@@ -452,8 +463,10 @@ TEST_CASE("TopN metrics", "[metrics][topn]")
         top_int.update(123);
         top_int.update(10);
         top_int.update(123);
-        top_int.to_prometheus(output, {{"policy", "default"}},
+        PrometheusSerializer ser;
+        top_int.to_prometheus(ser, {{"policy", "default"}},
             [](const uint16_t &val) { return std::to_string(val); });
+        output << ser.finalize();
         std::getline(output, line);
         CHECK(line == "# HELP root_test_metric A topn test metric");
         std::getline(output, line);
@@ -525,7 +538,9 @@ TEST_CASE("Cardinality metrics", "[metrics][cardinality]")
     SECTION("Cardinality prometheus")
     {
         c.update("metric");
-        c.to_prometheus(output, {{"policy", "default"}});
+        PrometheusSerializer ser;
+        c.to_prometheus(ser, {{"policy", "default"}});
+        output << ser.finalize();
         std::getline(output, line);
         CHECK(line == "# HELP root_test_metric A cardinality test metric");
         std::getline(output, line);
@@ -575,7 +590,9 @@ TEST_CASE("Rate metrics", "[metrics][rate]")
 
     SECTION("rate prometheus")
     {
-        r.to_prometheus(output, {{"policy", "default"}});
+        PrometheusSerializer ser;
+        r.to_prometheus(ser, {{"policy", "default"}});
+        output << ser.finalize();
     }
 
     SECTION("rate opentelemetry")
