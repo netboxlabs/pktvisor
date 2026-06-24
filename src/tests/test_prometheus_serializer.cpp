@@ -111,3 +111,24 @@ TEST_CASE("a later non-empty HELP fills an initially-empty one", "[prometheus][s
         "m{} 1\n"
         "m{} 2\n");
 }
+
+TEST_CASE("HELP text escapes backslash and newline but not quotes", "[prometheus][serializer]")
+{
+    Metric::reset_static_labels();
+    PrometheusSerializer s;
+    s.write("m", Type::Gauge, "a\\b\nc\"d", {}, {}, 1); // help = a \ b <newline> c " d
+    auto out = s.finalize();
+    CHECK(out.find("# HELP m a\\\\b\\nc\"d\n") != std::string::npos);
+}
+
+TEST_CASE("per-call label overrides static label of the same key (no duplicate)", "[prometheus][serializer]")
+{
+    Metric::reset_static_labels();
+    Metric::add_static_label("instance", "static_inst");
+    PrometheusSerializer s;
+    s.write("m", Type::Gauge, "d", {}, {{"instance", "call_inst"}}, 1);
+    auto out = s.finalize();
+    CHECK(out.find("m{instance=\"call_inst\"} 1\n") != std::string::npos);
+    CHECK(out.find("static_inst") == std::string::npos); // static value suppressed; key emitted once
+    Metric::reset_static_labels();
+}

@@ -62,7 +62,10 @@ public:
         std::string out;
         for (const auto &base : _order) {
             const auto &fam = _families.at(base);
-            fmt::format_to(std::back_inserter(out), "# HELP {} {}\n", base, fam.help);
+            // HELP text escapes backslash and newline (but NOT quotes — unlike label values).
+            fmt::format_to(std::back_inserter(out), "# HELP {} ", base);
+            append_help_escaped(out, fam.help);
+            out.push_back('\n');
             fmt::format_to(std::back_inserter(out), "# TYPE {} {}\n", base, type_str(fam.type));
             out.append(fam.body);
         }
@@ -89,6 +92,7 @@ private:
         }
     }
 
+    // Label-value escaping: backslash, double-quote, newline.
     static void append_escaped(std::string &out, const std::string &v)
     {
         for (char c : v) {
@@ -101,21 +105,39 @@ private:
         }
     }
 
+    // HELP-text escaping: backslash and newline only (quotes are literal in HELP lines).
+    static void append_help_escaped(std::string &out, const std::string &v)
+    {
+        for (char c : v) {
+            switch (c) {
+            case '\\': out.append("\\\\"); break;
+            case '\n': out.append("\\n"); break;
+            default: out.push_back(c);
+            }
+        }
+    }
+
     static void append_labels(std::string &line, const LabelMap &labels)
     {
         line.push_back('{');
         bool any = false;
-        auto emit = [&](const LabelMap &m) {
-            for (const auto &[k, v] : m) {
-                line.append(k);
-                line.append("=\"");
-                append_escaped(line, v);
-                line.append("\",");
-                any = true;
-            }
+        auto append_one = [&](const std::string &k, const std::string &v) {
+            line.append(k);
+            line.append("=\"");
+            append_escaped(line, v);
+            line.append("\",");
+            any = true;
         };
-        emit(prometheus_static_labels());
-        emit(labels);
+        // Static labels first, but skip any key also given per-call so the per-call value wins —
+        // emitting the same label name twice in one sample is invalid exposition.
+        for (const auto &[k, v] : prometheus_static_labels()) {
+            if (labels.find(k) == labels.end()) {
+                append_one(k, v);
+            }
+        }
+        for (const auto &[k, v] : labels) {
+            append_one(k, v);
+        }
         if (any) {
             line.pop_back();
         }
