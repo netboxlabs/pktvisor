@@ -20,9 +20,13 @@ the same `eth0` as your application container.
 ## Prerequisites
 
 - A Kubernetes cluster and `kubectl`.
-- The target namespace must allow the `NET_RAW` capability — PodSecurity
-  `baseline` or `privileged`, **not** `restricted`. pktvisord needs `NET_RAW`
-  for packet capture; it does **not** need `privileged`.
+- The target namespace must allow pods to **add the `NET_RAW` capability**. Under
+  the Pod Security Standards only the `privileged` level permits this (or an
+  exemption / custom admission policy that allows `NET_RAW`); both `baseline` and
+  `restricted` reject it — `baseline` only allows adding `NET_BIND_SERVICE`. This
+  is about the namespace PSS *level*; the container itself is **not** run as
+  `privileged: true` — it only adds the single `NET_RAW` capability pktvisord
+  needs to capture packets.
 - Prometheus (or Grafana Agent) configured to scrape pods by annotation — see
   [Prometheus scrape configuration](#prometheus-scrape-configuration).
 - The example captures `eth0`, the pod's primary interface on most CNIs. If your
@@ -33,7 +37,8 @@ the same `eth0` as your application container.
 ## Deploy
 
 ```shell
-kubectl apply -f pktvisor-sidecar.yaml
+# from the repo root (or use the bare filename from inside k8s/)
+kubectl apply -f k8s/pktvisor-sidecar.yaml
 ```
 
 Creates a `pktvisor-demo` Deployment with three containers: your app (`nginx`
@@ -108,6 +113,14 @@ scrape_configs:
         target_label: pod
 ```
 
+`role: pod` generates one target per declared container port, so a
+multi-container pod (here `app` + `pktvisord`) is discovered as several targets
+that these rules all rewrite to the same `POD_IP:10853`. Prometheus deduplicates
+targets whose final label sets are identical, so the endpoint is still scraped
+only **once**. Don't add a container-name/port `keep` to this shared job to
+"fix" the duplication — it would drop every other annotated pod; if you want
+explicit selection, do it inside a pktvisor-only scrape job.
+
 > Using the Prometheus Operator (kube-prometheus-stack)? Expose the sidecar with
 > a `Service` on port `10853` and create a `ServiceMonitor` selecting it, instead
 > of using annotations.
@@ -130,9 +143,12 @@ Add the sidecar to any existing pod spec:
 
 ## Security note
 
-The sidecar adds only `NET_RAW` (not `privileged`) — the minimum capability
-libpcap/AF_PACKET needs to capture packets. Promiscuous mode (which would need
-`NET_ADMIN`) is not required to see the pod's own traffic. The PodSecurity
-`restricted` profile disallows `NET_RAW`; use `baseline`/`privileged` or a
-tailored policy. Note `-l 0.0.0.0` exposes `/metrics` on the pod IP (no auth) so
-Prometheus can scrape it — restrict with a `NetworkPolicy` if needed.
+The sidecar adds only the `NET_RAW` capability (it is **not** run as a
+`privileged` container) — the minimum libpcap/AF_PACKET needs to capture packets.
+Promiscuous mode (which would need `NET_ADMIN`) is not required to see the pod's
+own traffic. Under the Pod Security Standards, both the `baseline` and
+`restricted` levels reject adding `NET_RAW` (baseline only allows adding
+`NET_BIND_SERVICE`), so run this in a namespace at the `privileged` level or with
+an exemption / custom policy that permits it. Note `-l 0.0.0.0` exposes
+`/metrics` on the pod IP (no auth) so Prometheus can scrape it — restrict with a
+`NetworkPolicy` if needed.
