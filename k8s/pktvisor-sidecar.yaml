@@ -65,7 +65,10 @@ spec:
               containerPort: 10853
           securityContext:
             capabilities:
-              add: ["NET_RAW"] # minimum capability for packet capture; NOT privileged
+              # NET_RAW opens the AF_PACKET/raw capture socket; NET_ADMIN is needed
+              # because pktvisord captures in promiscuous mode (matches the project's
+              # documented `setcap cap_net_raw,cap_net_admin`). Still NOT privileged.
+              add: ["NET_RAW", "NET_ADMIN"]
           resources:
             requests:
               cpu: "50m"

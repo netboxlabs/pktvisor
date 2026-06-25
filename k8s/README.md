@@ -20,19 +20,21 @@ the same `eth0` as your application container.
 ## Prerequisites
 
 - A Kubernetes cluster and `kubectl`.
-- The target namespace must allow pods to **add the `NET_RAW` capability**. Under
-  the Pod Security Standards only the `privileged` level permits this (or an
-  exemption / custom admission policy that allows `NET_RAW`); both `baseline` and
-  `restricted` reject it — `baseline` only allows adding `NET_BIND_SERVICE`. This
-  is about the namespace PSS *level*; the container itself is **not** run as
-  `privileged: true` — it only adds the single `NET_RAW` capability pktvisord
-  needs to capture packets.
+- The target namespace must allow pods to **add the `NET_RAW` and `NET_ADMIN`
+  capabilities** (pktvisord captures in promiscuous mode — see the security note).
+  Under the Pod Security Standards only the `privileged` level permits adding
+  these (or an exemption / custom admission policy that allows them); both
+  `baseline` and `restricted` reject them — `baseline` only allows adding
+  `NET_BIND_SERVICE`. This is about the namespace PSS *level*; the container
+  itself is **not** run as `privileged: true` — it only adds those two
+  capabilities pktvisord needs to capture packets.
 - Prometheus (or Grafana Agent) configured to scrape pods by annotation — see
   [Prometheus scrape configuration](#prometheus-scrape-configuration).
 - The example captures `eth0`, the pod's primary interface on most CNIs. If your
   pods use a different name, change `eth0` in the manifest args (or use `auto` to
   let pktvisord pick the busiest interface). Find the name with
-  `kubectl exec <pod> -c app -- ip -o link`.
+  `kubectl exec <pod> -c app -- ls /sys/class/net` (works without `iproute2`,
+  which the minimal demo images don't ship).
 
 ## Deploy
 
@@ -60,7 +62,7 @@ seconds and retry. Note: the
 published image redirects pktvisord's own stdout to a file, so
 `kubectl logs deploy/pktvisor-demo -c pktvisord` is usually **empty** — rely on
 `/metrics`, not logs. (If the sidecar `CrashLoopBackOff`s instead, re-check the
-`NET_RAW` capability and the `-H .../32` CIDR.)
+`NET_RAW`/`NET_ADMIN` capabilities and the `-H .../32` CIDR.)
 
 ## Generating observable traffic
 
@@ -104,7 +106,8 @@ scrape_configs:
         regex: (.+)
       - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
         action: replace
-        regex: ([^:]+)(?::\d+)?;(\d+)
+        # first group matches a bracketed IPv6 literal or an IPv4/host (no colons)
+        regex: (\[.+\]|[^:]+)(?::\d+)?;(\d+)
         replacement: $1:$2
         target_label: __address__
       - source_labels: [__meta_kubernetes_namespace]
@@ -138,17 +141,18 @@ Add the sidecar to any existing pod spec:
    they go on the **pod template** (`spec.template.metadata.annotations`), not the
    top-level object metadata; for a bare Pod they go on `metadata.annotations`.
 2. Add the `pktvisord` container — including the `POD_IP` downward-API env, the
-   `NET_RAW` capability, and `args: ["pktvisord", "-l", "0.0.0.0", "-H", "$(POD_IP)/32", "eth0"]`.
+   `NET_RAW` and `NET_ADMIN` capabilities, and `args: ["pktvisord", "-l", "0.0.0.0", "-H", "$(POD_IP)/32", "eth0"]`.
 3. Remove the demo `app` and `traffic-gen` containers.
 
 ## Security note
 
-The sidecar adds only the `NET_RAW` capability (it is **not** run as a
-`privileged` container) — the minimum libpcap/AF_PACKET needs to capture packets.
-Promiscuous mode (which would need `NET_ADMIN`) is not required to see the pod's
-own traffic. Under the Pod Security Standards, both the `baseline` and
-`restricted` levels reject adding `NET_RAW` (baseline only allows adding
-`NET_BIND_SERVICE`), so run this in a namespace at the `privileged` level or with
-an exemption / custom policy that permits it. Note `-l 0.0.0.0` exposes
+The sidecar adds the `NET_RAW` and `NET_ADMIN` capabilities (it is **not** run as
+a `privileged` container): `NET_RAW` opens the AF_PACKET/raw capture socket, and
+`NET_ADMIN` is required because pktvisord opens the interface in **promiscuous
+mode** — matching the project's documented bare-metal `setcap
+cap_net_raw,cap_net_admin`. Under the Pod Security Standards, both the `baseline`
+and `restricted` levels reject adding these capabilities (baseline only allows
+adding `NET_BIND_SERVICE`), so run this in a namespace at the `privileged` level
+or with an exemption / custom policy that permits them. Note `-l 0.0.0.0` exposes
 `/metrics` on the pod IP (no auth) so Prometheus can scrape it — restrict with a
 `NetworkPolicy` if needed.
