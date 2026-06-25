@@ -68,15 +68,20 @@ published image redirects pktvisord's own stdout to a file, so
 
 pktvisord watches **`eth0`**, so it sees the pod's **ingress/egress** — not
 loopback. The optional `traffic-gen` container produces egress by `wget`-ing an
-external URL (`TARGET_URL`, default `http://example.com`). To see ingress, send
-requests to the app from outside the pod (e.g. the `port-forward` above, or a
-Service). Repoint with `TARGET_URL`/`INTERVAL`, or delete the `traffic-gen`
-container for real workloads.
+external URL (`TARGET_URL`, default `http://example.com`). To generate observable
+**ingress**, drive the app from *another* pod or through a Service so the request
+enters over `eth0` — e.g.
+`kubectl run client --rm -it --image=busybox --restart=Never -- wget -qO- <pod-ip>:80`.
+(`kubectl port-forward` reaches the app over the pod's *loopback*, so that
+traffic does **not** appear on `eth0`.) Repoint with `TARGET_URL`/`INTERVAL`, or
+delete the `traffic-gen` container for real workloads.
 
-No internet egress (air-gapped, or a default-deny `NetworkPolicy`)? The
-per-iteration DNS lookups still go to cluster DNS over `eth0`, so `dns_*`
-populates regardless; for richer `packets_*`, point `TARGET_URL` at an in-cluster
-Service, or drive the app via the `port-forward` above.
+No internet egress? If only *external* egress is blocked but in-cluster traffic
+is allowed, the generator's DNS lookups still reach cluster DNS over `eth0`, so
+`dns_*` populates; for richer `packets_*`, point `TARGET_URL` at an in-cluster
+Service. Under a **default-deny `NetworkPolicy`**, egress to kube-dns is blocked
+too — add an egress rule allowing DNS (UDP/TCP `53` to the kube-dns/CoreDNS pods),
+otherwise name resolution itself fails and the metrics stay empty.
 
 ## Prometheus scrape configuration
 
