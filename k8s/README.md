@@ -35,6 +35,10 @@ the same `eth0` as your application container.
   let pktvisord pick the busiest interface). Find the name with
   `kubectl exec <pod> -c app -- ls /sys/class/net` (works without `iproute2`,
   which the minimal demo images don't ship).
+- The manifest's args are **IPv4** — the default `status.podIP` family, including
+  on dual-stack clusters. On an **IPv6-only or IPv6-primary** cluster, change the
+  sidecar args to bind IPv6 and use a `/128` host spec: `-l ::` (in place of
+  `-l 0.0.0.0`) and `-H $(POD_IP)/128` (in place of `/32`).
 
 ## Deploy
 

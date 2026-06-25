@@ -49,11 +49,13 @@ spec:
           # The image ENTRYPOINT (/entry-cp.sh) selects the binary from the first
           # arg and forwards the rest to pktvisord (adding crashpad/geo defaults).
           # Keep the leading "pktvisord".
-          #   -l 0.0.0.0   : bind the metrics server on all interfaces; the default
-          #                  is localhost, which Prometheus could not reach at POD_IP.
+          #   -l 0.0.0.0   : bind the metrics server on all IPv4 interfaces; the
+          #                  default is localhost, unreachable by Prometheus at POD_IP.
           #   -H .../32    : single-host CIDR so pktvisord attributes in/out direction
-          #                  (a bare IP throws "invalid CIDR"; use /128 on IPv6 clusters).
+          #                  (a bare IP throws "invalid CIDR").
           #   eth0         : run the default net+dhcp+dns+pcap policy on the pod NIC.
+          # These values are IPv4 (the default status.podIP family). On an IPv6-only
+          # or IPv6-primary cluster, use -l :: and -H $(POD_IP)/128 instead.
           args: ["pktvisord", "-l", "0.0.0.0", "-H", "$(POD_IP)/32", "eth0"]
           env:
             - name: POD_IP
