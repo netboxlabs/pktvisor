@@ -94,8 +94,11 @@ void PingReceiver::_setup_receiver()
         throw NetProbeException("unable to initialize AsyncHandle");
     }
     _async_h->on<uvw::async_event>([this](const auto &, auto &handle) {
+        // Stop the loop so uv_run() returns. Do NOT close the loop here:
+        // uv_loop_close() while uv_run() is still on the stack frees structures
+        // that uv__io_poll keeps using, crashing with SIGSEGV/SIGBUS. The loop is
+        // closed in the io thread after run() returns.
         _io_loop->stop();
-        _io_loop->close();
         handle.close();
     });
 
@@ -263,6 +266,8 @@ void PingReceiver::_setup_receiver()
     _io_thread = std::make_unique<std::thread>([this] {
         thread::change_self_name("receiver", "ping");
         _io_loop->run();
+        // run() has returned and every handle is closed; safe to close the loop.
+        _io_loop->close();
     });
 }
 
