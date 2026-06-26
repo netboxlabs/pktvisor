@@ -669,6 +669,14 @@ std::unique_ptr<InputEventProxy> PcapInputStream::create_event_proxy(const Confi
 
 void PcapInputStream::parse_host_spec()
 {
+    // Recompute the host set from scratch on every call. start() calls this each
+    // time, and stop() does not clear these lists, so without this a stopped/
+    // restarted stream would accumulate stale entries: a no-host_spec restart
+    // would keep the previous start's auto-detected interface subnets (and the
+    // _get_hosts_from_libpcap_iface() early return would then skip refreshing
+    // them via getifaddrs), and a host_spec restart would duplicate entries.
+    _hostIPv4.clear();
+    _hostIPv6.clear();
     if (config_exists("host_spec")) {
         lib::utils::parse_host_specs(lib::utils::split_str_to_vec_str(config_get<std::string>("host_spec"), ','),
             _hostIPv4, _hostIPv6);
