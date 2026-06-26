@@ -30,6 +30,8 @@
 #include <cstdint>
 #include <pcapplusplus/IpUtils.h>
 #include <sstream>
+#include <utility>
+#include <vector>
 
 using namespace std::chrono;
 
@@ -582,24 +584,22 @@ void PcapInputStream::_get_hosts_from_libpcap_iface()
         return;
     }
     const std::string devName = _pcapDevice->getName();
+    std::vector<std::pair<in_addr, uint8_t>> v4_addrs;
+    std::vector<std::pair<in6_addr, uint8_t>> v6_addrs;
     for (ifaddrs *i = ifap; i != nullptr; i = i->ifa_next) {
         if (i->ifa_addr == nullptr || i->ifa_name == nullptr || devName != i->ifa_name) {
             continue;
         }
-        char buf[INET6_ADDRSTRLEN];
         if (i->ifa_addr->sa_family == AF_INET) {
             auto ip4 = reinterpret_cast<sockaddr_in *>(i->ifa_addr);
-            inet_ntop(AF_INET, &ip4->sin_addr, buf, sizeof(buf));
             uint8_t prefix = 32;
             if (i->ifa_netmask) {
                 auto nm = reinterpret_cast<sockaddr_in *>(i->ifa_netmask);
                 prefix = static_cast<uint8_t>(__builtin_popcount(ntohl(nm->sin_addr.s_addr)));
             }
-            std::string cidr = std::string(buf) + "/" + std::to_string(prefix);
-            _hostIPv4.push_back({ip4->sin_addr, prefix, cidr});
+            v4_addrs.emplace_back(ip4->sin_addr, prefix);
         } else if (i->ifa_addr->sa_family == AF_INET6) {
             auto ip6 = reinterpret_cast<sockaddr_in6 *>(i->ifa_addr);
-            inet_ntop(AF_INET6, &ip6->sin6_addr, buf, sizeof(buf));
             uint8_t prefix = 128;
             if (i->ifa_netmask) {
                 auto nm6 = reinterpret_cast<sockaddr_in6 *>(i->ifa_netmask);
@@ -608,11 +608,19 @@ void PcapInputStream::_get_hosts_from_libpcap_iface()
                     prefix += static_cast<uint8_t>(__builtin_popcount(nm6->sin6_addr.s6_addr[b]));
                 }
             }
-            std::string cidr = std::string(buf) + "/" + std::to_string(prefix);
-            _hostIPv6.push_back({ip6->sin6_addr, prefix, cidr});
+            v6_addrs.emplace_back(ip6->sin6_addr, prefix);
         }
     }
     freeifaddrs(ifap);
+
+    // An explicit host_spec is authoritative; only auto-add interface hosts when
+    // parse_host_spec() (run earlier in start()) did NOT already populate a host
+    // set. Do NOT gate on config_exists("host_spec"): the CLI default tap always
+    // sets host_spec (empty string when -H is omitted), so config_exists would be
+    // true for a plain `pktvisord <iface>` and wrongly skip auto-detection,
+    // leaving the host set empty and classifying every packet as unknown.
+    const bool host_set_provided = !_hostIPv4.empty() || !_hostIPv6.empty();
+    lib::utils::append_interface_host_subnets(host_set_provided, v4_addrs, v6_addrs, _hostIPv4, _hostIPv6);
 #endif
 }
 
