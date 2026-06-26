@@ -183,11 +183,15 @@ void append_interface_host_subnets(
     }
     char buf[INET6_ADDRSTRLEN];
     for (const auto &[addr, prefix] : v4_addrs) {
-        inet_ntop(AF_INET, &addr, buf, sizeof(buf));
+        if (inet_ntop(AF_INET, &addr, buf, sizeof(buf)) == nullptr) {
+            continue;
+        }
         host_ipv4.push_back({addr, prefix, std::string(buf) + "/" + std::to_string(prefix)});
     }
     for (const auto &[addr, prefix] : v6_addrs) {
-        inet_ntop(AF_INET6, &addr, buf, sizeof(buf));
+        if (inet_ntop(AF_INET6, &addr, buf, sizeof(buf)) == nullptr) {
+            continue;
+        }
         host_ipv6.push_back({addr, prefix, std::string(buf) + "/" + std::to_string(prefix)});
     }
 }

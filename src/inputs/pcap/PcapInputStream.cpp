@@ -579,6 +579,15 @@ void PcapInputStream::_open_libpcap_iface(const std::string &bpfFilter)
 void PcapInputStream::_get_hosts_from_libpcap_iface()
 {
 #ifndef _WIN32
+    // An explicit host_spec is authoritative; skip interface auto-detection
+    // entirely (don't even call getifaddrs) when parse_host_spec() — run earlier
+    // in start() — already populated the host set. We gate on the parsed lists,
+    // NOT config_exists("host_spec"): the CLI default tap always sets host_spec
+    // (empty string when -H is omitted), so config_exists would be true for a
+    // plain `pktvisord <iface>` and wrongly skip auto-detection.
+    if (!_hostIPv4.empty() || !_hostIPv6.empty()) {
+        return;
+    }
     ifaddrs *ifap = nullptr;
     if (getifaddrs(&ifap) != 0 || ifap == nullptr) {
         return;
@@ -613,14 +622,10 @@ void PcapInputStream::_get_hosts_from_libpcap_iface()
     }
     freeifaddrs(ifap);
 
-    // An explicit host_spec is authoritative; only auto-add interface hosts when
-    // parse_host_spec() (run earlier in start()) did NOT already populate a host
-    // set. Do NOT gate on config_exists("host_spec"): the CLI default tap always
-    // sets host_spec (empty string when -H is omitted), so config_exists would be
-    // true for a plain `pktvisord <iface>` and wrongly skip auto-detection,
-    // leaving the host set empty and classifying every packet as unknown.
-    const bool host_set_provided = !_hostIPv4.empty() || !_hostIPv6.empty();
-    lib::utils::append_interface_host_subnets(host_set_provided, v4_addrs, v6_addrs, _hostIPv4, _hostIPv6);
+    // No explicit host_spec (guaranteed by the early return above): auto-add the
+    // interface's own addresses at their subnet prefix so direction classification
+    // works out of the box. The helper also self-guards on this flag.
+    lib::utils::append_interface_host_subnets(false, v4_addrs, v6_addrs, _hostIPv4, _hostIPv6);
 #endif
 }
 
