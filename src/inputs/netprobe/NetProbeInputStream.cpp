@@ -180,11 +180,19 @@ void NetProbeInputStream::_create_netprobe_loop()
     }
     _async_h->on<uvw::async_event>([this](const auto &, auto &handle) {
         // Stop and close the handles, then stop the loop so uv_run() returns.
-        // Do NOT close the loop here: uv_loop_close() while uv_run() is still on
-        // the stack frees structures that uv__io_poll keeps using, crashing with
-        // SIGSEGV/SIGBUS. The loop is closed in the io thread after run() returns.
+        // Tear down the probe-owned handles here too, on the loop thread, so no
+        // active handle remains when the loop is closed (uv_loop_close would
+        // otherwise return EBUSY). Do NOT close the loop here: uv_loop_close()
+        // while uv_run() is still on the stack frees structures that uv__io_poll
+        // keeps using, crashing with SIGSEGV/SIGBUS. The loop is closed in the io
+        // thread after run() returns.
         _timer->stop();
         _timer->close();
+        for (const auto &probe : _probes) {
+            if (probe) {
+                probe->stop();
+            }
+        }
         _io_loop->stop();
         handle.close();
     });
@@ -259,10 +267,10 @@ void NetProbeInputStream::_create_netprobe_loop()
             // still sending.
             PingProbe::close_thread_send_sockets();
         }
-        // run() has returned, so close the loop here (outside the running loop) —
+        // run() has returned, so close the loop here (outside the running loop),
         // never from inside the async callback, which would crash uv__io_poll.
-        // Probe handles are stopped via probe->stop() in NetProbeInputStream::stop()
-        // before the loop is signalled.
+        // Every handle (including probe-owned ones) was closed on the loop thread
+        // in the async callback, so the loop is quiescent and close() succeeds.
         _io_loop->close();
     });
 }
@@ -271,10 +279,6 @@ void NetProbeInputStream::stop()
 {
     if (!_running) {
         return;
-    }
-
-    for (const auto &probe : _probes) {
-        probe->stop();
     }
 
     if (_async_h && _io_thread) {

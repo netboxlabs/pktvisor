@@ -380,13 +380,21 @@ bool PingProbe::start(std::shared_ptr<uvw::loop> io_loop)
 
 bool PingProbe::stop()
 {
-    if (_interval_timer) {
+    // Called on the loop thread (from NetProbeInputStream's async stop callback),
+    // so closing the handles here is safe and leaves the loop quiescent for close().
+    if (_interval_timer && !_interval_timer->closing()) {
         _interval_timer->stop();
         _interval_timer->close();
     }
+    if (_internal_timer && !_internal_timer->closing()) {
+        _internal_timer->stop();
+        _internal_timer->close();
+    }
     if (_recv_handler) {
         _receiver->remove_async_callback(_recv_handler);
-        _recv_handler->close();
+        if (!_recv_handler->closing()) {
+            _recv_handler->close();
+        }
     }
     return true;
 }
