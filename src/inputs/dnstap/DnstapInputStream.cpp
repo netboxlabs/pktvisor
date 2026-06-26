@@ -147,6 +147,9 @@ void DnstapInputStream::_create_frame_stream_tcp_socket()
     }
     _async_h->on<uvw::async_event>([this](const auto &, auto &handle) {
         // Stop and close the handles, then stop the loop so uv_run() returns.
+        // Also close any connected clients so no active handles remain when the
+        // loop is closed (otherwise uv_loop_close returns EBUSY and leaks). This
+        // runs on the loop thread, so closing the handles here is safe.
         // Do NOT close the loop here: uv_loop_close() while uv_run() is still on
         // the stack frees structures that uv__io_poll keeps using, crashing with
         // SIGSEGV/SIGBUS. The loop is closed in the io thread after run() returns.
@@ -154,6 +157,11 @@ void DnstapInputStream::_create_frame_stream_tcp_socket()
         _timer->close();
         _tcp_server_h->stop();
         _tcp_server_h->close();
+        for (auto &session : _tcp_sessions) {
+            if (session.second) {
+                session.second->close_handle();
+            }
+        }
         _io_loop->stop();
         handle.close();
     });
@@ -283,6 +291,9 @@ void DnstapInputStream::_create_frame_stream_unix_socket()
     }
     _async_h->on<uvw::async_event>([this](const auto &, auto &handle) {
         // Stop and close the handles, then stop the loop so uv_run() returns.
+        // Also close any connected clients so no active handles remain when the
+        // loop is closed (otherwise uv_loop_close returns EBUSY and leaks). This
+        // runs on the loop thread, so closing the handles here is safe.
         // Do NOT close the loop here: uv_loop_close() while uv_run() is still on
         // the stack frees structures that uv__io_poll keeps using, crashing with
         // SIGSEGV/SIGBUS. The loop is closed in the io thread after run() returns.
@@ -290,6 +301,11 @@ void DnstapInputStream::_create_frame_stream_unix_socket()
         _timer->close();
         _unix_server_h->stop();
         _unix_server_h->close();
+        for (auto &session : _unix_sessions) {
+            if (session.second) {
+                session.second->close_handle();
+            }
+        }
         _io_loop->stop();
         handle.close();
     });

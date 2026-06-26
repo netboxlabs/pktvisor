@@ -259,7 +259,10 @@ void NetProbeInputStream::_create_netprobe_loop()
             // still sending.
             PingProbe::close_thread_send_sockets();
         }
-        // run() has returned and every handle is closed; safe to close the loop.
+        // run() has returned, so close the loop here (outside the running loop) —
+        // never from inside the async callback, which would crash uv__io_poll.
+        // Probe handles are stopped via probe->stop() in NetProbeInputStream::stop()
+        // before the loop is signalled.
         _io_loop->close();
     });
 }
