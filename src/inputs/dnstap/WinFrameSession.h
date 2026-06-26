@@ -46,6 +46,16 @@ public:
         throw DnstapException("Dnstap not supported on Windows OS");
     }
 
+    // Close the underlying client handle during shutdown, so the loop has no
+    // active client handles left when it is closed (otherwise uv_loop_close
+    // returns UV_EBUSY and the handles leak). Must be called on the loop thread.
+    void close_handle()
+    {
+        if (_client_h && !_client_h->closing()) {
+            _client_h->close();
+        }
+    }
+
     const FrameState &state() const
     {
         return _state;

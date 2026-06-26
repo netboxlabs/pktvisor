@@ -94,8 +94,18 @@ void PingReceiver::_setup_receiver()
         throw NetProbeException("unable to initialize AsyncHandle");
     }
     _async_h->on<uvw::async_event>([this](const auto &, auto &handle) {
+        // Close the loop-owned handles, then stop the loop so uv_run() returns.
+        // (_poll/_poll6 are closed by ~PingReceiver before this is signalled; the
+        // timer is closed here, on the loop thread, so no active handle is left
+        // when the loop is closed.) Do NOT close the loop here: uv_loop_close()
+        // while uv_run() is still on the stack frees structures that uv__io_poll
+        // keeps using, crashing with SIGSEGV/SIGBUS. The loop is closed in the io
+        // thread after run() returns.
+        if (_timer) {
+            _timer->stop();
+            _timer->close();
+        }
         _io_loop->stop();
-        _io_loop->close();
         handle.close();
     });
 
@@ -263,6 +273,8 @@ void PingReceiver::_setup_receiver()
     _io_thread = std::make_unique<std::thread>([this] {
         thread::change_self_name("receiver", "ping");
         _io_loop->run();
+        // run() has returned and every handle is closed; safe to close the loop.
+        _io_loop->close();
     });
 }
 
@@ -368,13 +380,21 @@ bool PingProbe::start(std::shared_ptr<uvw::loop> io_loop)
 
 bool PingProbe::stop()
 {
-    if (_interval_timer) {
+    // Called on the loop thread (from NetProbeInputStream's async stop callback),
+    // so closing the handles here is safe and leaves the loop quiescent for close().
+    if (_interval_timer && !_interval_timer->closing()) {
         _interval_timer->stop();
         _interval_timer->close();
     }
+    if (_internal_timer && !_internal_timer->closing()) {
+        _internal_timer->stop();
+        _internal_timer->close();
+    }
     if (_recv_handler) {
         _receiver->remove_async_callback(_recv_handler);
-        _recv_handler->close();
+        if (!_recv_handler->closing()) {
+            _recv_handler->close();
+        }
     }
     return true;
 }

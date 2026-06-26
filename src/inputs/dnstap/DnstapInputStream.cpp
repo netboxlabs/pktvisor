@@ -146,12 +146,23 @@ void DnstapInputStream::_create_frame_stream_tcp_socket()
         throw DnstapException("unable to initialize AsyncHandle");
     }
     _async_h->on<uvw::async_event>([this](const auto &, auto &handle) {
+        // Stop and close the handles, then stop the loop so uv_run() returns.
+        // Also close any connected clients so no active handles remain when the
+        // loop is closed (otherwise uv_loop_close returns EBUSY and leaks). This
+        // runs on the loop thread, so closing the handles here is safe.
+        // Do NOT close the loop here: uv_loop_close() while uv_run() is still on
+        // the stack frees structures that uv__io_poll keeps using, crashing with
+        // SIGSEGV/SIGBUS. The loop is closed in the io thread after run() returns.
         _timer->stop();
         _timer->close();
         _tcp_server_h->stop();
         _tcp_server_h->close();
+        for (auto &session : _tcp_sessions) {
+            if (session.second) {
+                session.second->close_handle();
+            }
+        }
         _io_loop->stop();
-        _io_loop->close();
         handle.close();
     });
     _async_h->on<uvw::error_event>([this](const auto &err, auto &handle) {
@@ -260,6 +271,8 @@ void DnstapInputStream::_create_frame_stream_tcp_socket()
         _timer->start(uvw::timer_handle::time{1000}, uvw::timer_handle::time{HEARTBEAT_INTERVAL * 1000});
         thread::change_self_name(schema_key(), name());
         _io_loop->run();
+        // run() has returned and every handle is closed; safe to close the loop.
+        _io_loop->close();
     });
 }
 void DnstapInputStream::_create_frame_stream_unix_socket()
@@ -277,12 +290,23 @@ void DnstapInputStream::_create_frame_stream_unix_socket()
         throw DnstapException("unable to initialize AsyncHandle");
     }
     _async_h->on<uvw::async_event>([this](const auto &, auto &handle) {
+        // Stop and close the handles, then stop the loop so uv_run() returns.
+        // Also close any connected clients so no active handles remain when the
+        // loop is closed (otherwise uv_loop_close returns EBUSY and leaks). This
+        // runs on the loop thread, so closing the handles here is safe.
+        // Do NOT close the loop here: uv_loop_close() while uv_run() is still on
+        // the stack frees structures that uv__io_poll keeps using, crashing with
+        // SIGSEGV/SIGBUS. The loop is closed in the io thread after run() returns.
         _timer->stop();
         _timer->close();
         _unix_server_h->stop();
         _unix_server_h->close();
+        for (auto &session : _unix_sessions) {
+            if (session.second) {
+                session.second->close_handle();
+            }
+        }
         _io_loop->stop();
-        _io_loop->close();
         handle.close();
     });
     _async_h->on<uvw::error_event>([this](const auto &err, auto &handle) {
@@ -393,6 +417,8 @@ void DnstapInputStream::_create_frame_stream_unix_socket()
         _timer->start(uvw::timer_handle::time{1000}, uvw::timer_handle::time{HEARTBEAT_INTERVAL * 1000});
         thread::change_self_name(schema_key(), name());
         _io_loop->run();
+        // run() has returned and every handle is closed; safe to close the loop.
+        _io_loop->close();
     });
 }
 

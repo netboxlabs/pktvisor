@@ -81,8 +81,14 @@ void TcpProbe::_perform_tcp_process()
 
 bool TcpProbe::stop()
 {
-    if (_interval_timer) {
+    // Called on the loop thread (from NetProbeInputStream's async stop callback),
+    // so closing the handles here is safe and leaves the loop quiescent for close().
+    if (_interval_timer && !_interval_timer->closing()) {
         _interval_timer->stop();
+        _interval_timer->close();
+    }
+    if (_client && !_client->closing()) {
+        _client->close();
     }
     return true;
 }
