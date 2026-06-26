@@ -622,10 +622,13 @@ void PcapInputStream::_get_hosts_from_libpcap_iface()
     }
     freeifaddrs(ifap);
 
-    // No explicit host_spec (guaranteed by the early return above): auto-add the
-    // interface's own addresses at their subnet prefix so direction classification
-    // works out of the box. The helper also self-guards on this flag.
-    lib::utils::append_interface_host_subnets(false, v4_addrs, v6_addrs, _hostIPv4, _hostIPv6);
+    // The early return above already skipped getifaddrs when a host set was
+    // present, so this point is only reached with no explicit host_spec. Pass the
+    // computed flag (not a hard-coded false) so the helper enforces the same skip
+    // independently — defense-in-depth that keeps an explicit host_spec
+    // authoritative even if the early return is ever changed.
+    const bool host_set_provided = !_hostIPv4.empty() || !_hostIPv6.empty();
+    lib::utils::append_interface_host_subnets(host_set_provided, v4_addrs, v6_addrs, _hostIPv4, _hostIPv6);
 #endif
 }
 
