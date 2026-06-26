@@ -4,6 +4,12 @@
 #include <pcapplusplus/IpUtils.h>
 #include <fmt/format.h>
 #include <sstream>
+#include <utility> // std::pair
+#ifdef _WIN32
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#endif
 
 namespace visor::lib::utils {
 
@@ -159,6 +165,30 @@ void parse_host_specs(const std::vector<std::string> &host_list, IPv4subnetList 
             }
             ipv4_list.push_back({ipv4, static_cast<uint8_t>(cidr_number), host});
         }
+    }
+}
+
+void append_interface_host_subnets(
+    bool host_set_provided,
+    const std::vector<std::pair<in_addr, uint8_t>> &v4_addrs,
+    const std::vector<std::pair<in6_addr, uint8_t>> &v6_addrs,
+    IPv4subnetList &host_ipv4,
+    IPv6subnetList &host_ipv6)
+{
+    // An explicit host_spec is authoritative: do not widen it with the capture
+    // interface's own address/subnet. (When no host_spec is given, the interface
+    // subnet is added on purpose, to distinguish inside vs. outside traffic.)
+    if (host_set_provided) {
+        return;
+    }
+    char buf[INET6_ADDRSTRLEN];
+    for (const auto &[addr, prefix] : v4_addrs) {
+        inet_ntop(AF_INET, &addr, buf, sizeof(buf));
+        host_ipv4.push_back({addr, prefix, std::string(buf) + "/" + std::to_string(prefix)});
+    }
+    for (const auto &[addr, prefix] : v6_addrs) {
+        inet_ntop(AF_INET6, &addr, buf, sizeof(buf));
+        host_ipv6.push_back({addr, prefix, std::string(buf) + "/" + std::to_string(prefix)});
     }
 }
 
