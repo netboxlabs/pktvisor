@@ -1,0 +1,80 @@
+# pktvisor as a sidecar: observes the pod's eth0 NIC traffic and exposes
+# Prometheus metrics on :10853. See README.md in this directory for usage,
+# verification, the Prometheus scrape config, and how to adapt to your workload.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pktvisor-demo
+  labels:
+    app: pktvisor-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pktvisor-demo
+  template:
+    metadata:
+      labels:
+        app: pktvisor-demo
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "10853"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        # ---- your workload: replace this container with your own ----
+        - name: app
+          image: nginx:stable-alpine
+          ports:
+            - containerPort: 80
+
+        # ---- OPTIONAL traffic generator (delete for real workloads) ----
+        # wget's an EXTERNAL URL so the request leaves the pod over eth0, which
+        # pktvisord observes (loopback traffic would NOT be seen). Requires
+        # cluster egress; repoint TARGET_URL or remove this container as needed.
+        - name: traffic-gen
+          image: busybox:stable
+          env:
+            - name: TARGET_URL
+              value: "http://example.com"
+            - name: INTERVAL
+              value: "5"
+          command: ["/bin/sh", "-c"]
+          args:
+            - 'while true; do wget -q -O /dev/null "$TARGET_URL" || true; sleep "$INTERVAL"; done'
+
+        # ---- pktvisord sidecar: capture on eth0, serve /metrics on :10853 ----
+        - name: pktvisord
+          image: netboxlabs/pktvisor
+          # The image ENTRYPOINT (/entry-cp.sh) selects the binary from the first
+          # arg and forwards the rest to pktvisord (adding crashpad/geo defaults).
+          # Keep the leading "pktvisord".
+          #   -l 0.0.0.0   : bind the metrics server on all IPv4 interfaces; the
+          #                  default is localhost, unreachable by Prometheus at POD_IP.
+          #   -H .../32    : single-host CIDR so pktvisord attributes in/out direction
+          #                  (a bare IP throws "invalid CIDR").
+          #   eth0         : run the default net+dhcp+dns+pcap policy on the pod NIC.
+          # These values are IPv4 (the default status.podIP family). On an IPv6-only
+          # or IPv6-primary cluster, use -l :: and -H $(POD_IP)/128 instead.
+          args: ["pktvisord", "-l", "0.0.0.0", "-H", "$(POD_IP)/32", "eth0"]
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          ports:
+            - name: metrics
+              containerPort: 10853
+          securityContext:
+            capabilities:
+              # NET_RAW opens the AF_PACKET/raw capture socket; NET_ADMIN is needed
+              # because pktvisord captures in promiscuous mode (matches the project's
+              # documented `setcap cap_net_raw,cap_net_admin`). Still NOT privileged.
+              add: ["NET_RAW", "NET_ADMIN"]
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
