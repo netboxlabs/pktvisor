@@ -25,6 +25,7 @@
 #ifdef __GNUC__
 #pragma GCC diagnostic pop
 #endif
+#include <array>
 #include <chrono>
 #include <math.h>
 #include <regex>
@@ -60,10 +61,30 @@ static inline uint64_t timespec_to_uint64(timespec &stamp)
     return stamp.tv_sec * 1000000000ULL + stamp.tv_nsec;
 }
 
+// Single source of truth for the SLA quantiles pktvisor reports, in the order
+// get_quantiles() produces them. Each emit path (JSON, Prometheus, OpenTelemetry)
+// derives its label/rank from this table, so values and labels can never desync.
+struct QuantileSpec {
+    double rank;            // normalized rank, used to query the sketch and for OTEL
+    const char *json_key;   // to_json field name, e.g. "p50"
+    const char *prom_label; // Prometheus/summary "quantile" label, e.g. "0.5"
+};
+static constexpr std::array<QuantileSpec, 4> QUANTILES{{
+    {0.50, "p50", "0.5"},
+    {0.90, "p90", "0.9"},
+    {0.95, "p95", "0.95"},
+    {0.99, "p99", "0.99"},
+}};
+
 template <typename T>
-static inline std::vector<T> get_quantiles(const datasketches::kll_sketch<T> &quatile)
+static inline std::vector<T> get_quantiles(const datasketches::kll_sketch<T> &quantile)
 {
-    return {quatile.get_quantile(0.50), quatile.get_quantile(0.90), quatile.get_quantile(0.95), quatile.get_quantile(0.99)};
+    std::vector<T> quantiles;
+    quantiles.reserve(QUANTILES.size());
+    for (const auto &q : QUANTILES) {
+        quantiles.push_back(quantile.get_quantile(q.rank));
+    }
+    return quantiles;
 }
 
 class Metric
@@ -362,7 +383,7 @@ public:
             if (_quantiles_sum.empty()) {
                 _quantiles_sum = get_quantiles(_quantile);
             }
-            for (uint8_t i = 0; i < 4; i++) {
+            for (size_t i = 0; i < QUANTILES.size(); i++) {
                 _quantiles_sum[i] += other_quantiles[i];
             }
         } else {
@@ -405,10 +426,9 @@ public:
         }
 
         if (quantiles.size()) {
-            name_json_assign(j, {"p50"}, quantiles[0]);
-            name_json_assign(j, {"p90"}, quantiles[1]);
-            name_json_assign(j, {"p95"}, quantiles[2]);
-            name_json_assign(j, {"p99"}, quantiles[3]);
+            for (size_t i = 0; i < QUANTILES.size(); i++) {
+                name_json_assign(j, {QUANTILES[i].json_key}, quantiles[i]);
+            }
         }
     }
 
@@ -425,21 +445,13 @@ public:
             quantiles = _quantiles_sum;
         }
 
-        LabelMap l5(add_labels);
-        l5["quantile"] = "0.5";
-        LabelMap l9(add_labels);
-        l9["quantile"] = "0.9";
-        LabelMap l95(add_labels);
-        l95["quantile"] = "0.95";
-        LabelMap l99(add_labels);
-        l99["quantile"] = "0.99";
-
         if (quantiles.size()) {
             const auto base = base_name_snake();
-            ser.write(base, PrometheusSerializer::Type::Summary, _desc, {}, l5, quantiles[0]);
-            ser.write(base, PrometheusSerializer::Type::Summary, _desc, {}, l9, quantiles[1]);
-            ser.write(base, PrometheusSerializer::Type::Summary, _desc, {}, l95, quantiles[2]);
-            ser.write(base, PrometheusSerializer::Type::Summary, _desc, {}, l99, quantiles[3]);
+            for (size_t i = 0; i < QUANTILES.size(); i++) {
+                LabelMap l(add_labels);
+                l["quantile"] = QUANTILES[i].prom_label;
+                ser.write(base, PrometheusSerializer::Type::Summary, _desc, {}, l, quantiles[i]);
+            }
             ser.write(base, PrometheusSerializer::Type::Summary, _desc, {"sum"}, add_labels, _quantile.get_max_item());
             ser.write(base, PrometheusSerializer::Type::Summary, _desc, {"count"}, add_labels, _quantile.get_n());
         }
@@ -464,11 +476,10 @@ public:
         auto summary_data_point = metric->mutable_summary()->add_data_points();
         summary_data_point->set_start_time_unix_nano(timespec_to_uint64(start));
         summary_data_point->set_time_unix_nano(timespec_to_uint64(end));
-        const double fractions[4]{0.50, 0.90, 0.95, 0.99};
-        for (auto it = quantiles.begin(); it != quantiles.end(); ++it) {
+        for (size_t i = 0; i < QUANTILES.size(); i++) {
             auto quantile = summary_data_point->add_quantile_values();
-            quantile->set_quantile(fractions[it - quantiles.begin()]);
-            quantile->set_value(*it);
+            quantile->set_quantile(QUANTILES[i].rank);
+            quantile->set_value(quantiles[i]);
         }
         for (const auto &label : add_labels) {
             auto attribute = summary_data_point->add_attributes();
