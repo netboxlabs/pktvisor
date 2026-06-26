@@ -46,7 +46,9 @@ static const char USAGE[] =
       --geo-asn FILE        GeoLite2 ASN database to use for IP to ASN mapping (if enabled)
       -H HOSTSPEC           Specify subnets (comma separated) to consider HOST, in CIDR form. In live capture this /may/ be detected automatically
                             from capture device but /must/ be specified for pcaps. Example: "10.0.1.0/24,10.0.2.1/32,2001:db8::/64"
-                            Specifying this for live capture will append to any automatic detection.
+                            For live capture, specifying this defines the host set explicitly and
+                            disables automatic detection from the capture device; list every address
+                            family (IPv4 and IPv6) you need.
 )";
 
 namespace {

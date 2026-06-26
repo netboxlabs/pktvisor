@@ -30,6 +30,8 @@
 #include <cstdint>
 #include <pcapplusplus/IpUtils.h>
 #include <sstream>
+#include <utility>
+#include <vector>
 
 using namespace std::chrono;
 
@@ -577,29 +579,36 @@ void PcapInputStream::_open_libpcap_iface(const std::string &bpfFilter)
 void PcapInputStream::_get_hosts_from_libpcap_iface()
 {
 #ifndef _WIN32
+    // An explicit host_spec is authoritative; skip interface auto-detection
+    // entirely (don't even call getifaddrs) when parse_host_spec() — run earlier
+    // in start() — already populated the host set. We gate on the parsed lists,
+    // NOT config_exists("host_spec"): the CLI default tap always sets host_spec
+    // (empty string when -H is omitted), so config_exists would be true for a
+    // plain `pktvisord <iface>` and wrongly skip auto-detection.
+    if (!_hostIPv4.empty() || !_hostIPv6.empty()) {
+        return;
+    }
     ifaddrs *ifap = nullptr;
     if (getifaddrs(&ifap) != 0 || ifap == nullptr) {
         return;
     }
     const std::string devName = _pcapDevice->getName();
+    std::vector<std::pair<in_addr, uint8_t>> v4_addrs;
+    std::vector<std::pair<in6_addr, uint8_t>> v6_addrs;
     for (ifaddrs *i = ifap; i != nullptr; i = i->ifa_next) {
         if (i->ifa_addr == nullptr || i->ifa_name == nullptr || devName != i->ifa_name) {
             continue;
         }
-        char buf[INET6_ADDRSTRLEN];
         if (i->ifa_addr->sa_family == AF_INET) {
             auto ip4 = reinterpret_cast<sockaddr_in *>(i->ifa_addr);
-            inet_ntop(AF_INET, &ip4->sin_addr, buf, sizeof(buf));
             uint8_t prefix = 32;
             if (i->ifa_netmask) {
                 auto nm = reinterpret_cast<sockaddr_in *>(i->ifa_netmask);
                 prefix = static_cast<uint8_t>(__builtin_popcount(ntohl(nm->sin_addr.s_addr)));
             }
-            std::string cidr = std::string(buf) + "/" + std::to_string(prefix);
-            _hostIPv4.push_back({ip4->sin_addr, prefix, cidr});
+            v4_addrs.emplace_back(ip4->sin_addr, prefix);
         } else if (i->ifa_addr->sa_family == AF_INET6) {
             auto ip6 = reinterpret_cast<sockaddr_in6 *>(i->ifa_addr);
-            inet_ntop(AF_INET6, &ip6->sin6_addr, buf, sizeof(buf));
             uint8_t prefix = 128;
             if (i->ifa_netmask) {
                 auto nm6 = reinterpret_cast<sockaddr_in6 *>(i->ifa_netmask);
@@ -608,11 +617,18 @@ void PcapInputStream::_get_hosts_from_libpcap_iface()
                     prefix += static_cast<uint8_t>(__builtin_popcount(nm6->sin6_addr.s6_addr[b]));
                 }
             }
-            std::string cidr = std::string(buf) + "/" + std::to_string(prefix);
-            _hostIPv6.push_back({ip6->sin6_addr, prefix, cidr});
+            v6_addrs.emplace_back(ip6->sin6_addr, prefix);
         }
     }
     freeifaddrs(ifap);
+
+    // The early return above already skipped getifaddrs when a host set was
+    // present, so this point is only reached with no explicit host_spec. Pass the
+    // computed flag (not a hard-coded false) so the helper enforces the same skip
+    // independently — defense-in-depth that keeps an explicit host_spec
+    // authoritative even if the early return is ever changed.
+    const bool host_set_provided = !_hostIPv4.empty() || !_hostIPv6.empty();
+    lib::utils::append_interface_host_subnets(host_set_provided, v4_addrs, v6_addrs, _hostIPv4, _hostIPv6);
 #endif
 }
 
@@ -656,6 +672,14 @@ std::unique_ptr<InputEventProxy> PcapInputStream::create_event_proxy(const Confi
 
 void PcapInputStream::parse_host_spec()
 {
+    // Recompute the host set from scratch on every call. start() calls this each
+    // time, and stop() does not clear these lists, so without this a stopped/
+    // restarted stream would accumulate stale entries: a no-host_spec restart
+    // would keep the previous start's auto-detected interface subnets (and the
+    // _get_hosts_from_libpcap_iface() early return would then skip refreshing
+    // them via getifaddrs), and a host_spec restart would duplicate entries.
+    _hostIPv4.clear();
+    _hostIPv6.clear();
     if (config_exists("host_spec")) {
         lib::utils::parse_host_specs(lib::utils::split_str_to_vec_str(config_get<std::string>("host_spec"), ','),
             _hostIPv4, _hostIPv6);
