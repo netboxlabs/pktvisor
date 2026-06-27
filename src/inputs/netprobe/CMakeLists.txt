@@ -31,8 +31,9 @@ add_executable(unit-tests-input-netprobe test_netprobe.cpp)
 
 target_link_libraries(unit-tests-input-netprobe
         PRIVATE
-        Visor::Input::NetProbe
-        Visor::Lib::Test)
+        Visor::Handler::NetProbe
+        Visor::Lib::Test
+        httplib::httplib)
 
 add_test(NAME unit-tests-input-netprobe
         WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/src

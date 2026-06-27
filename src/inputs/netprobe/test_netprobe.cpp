@@ -1,11 +1,17 @@
 #include "NetProbeInputStream.h"
+#include "NetProbeStreamHandler.h"
 #include "PingProbe.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/catch_test_visor.hpp>
+#include <httplib.h>
+#include <nlohmann/json.hpp>
+#include <thread>
 
 using namespace visor::input::netprobe;
+using namespace visor::handler::netprobe;
+using namespace nlohmann;
 using namespace std::chrono;
 
 TEST_CASE("NetProbe Configs", "[netprobe][ping]")
@@ -183,4 +189,123 @@ TEST_CASE("ICMPv6 reply carrier survives the fan-out Packet deep-copy", "[netpro
     // A buffer shorter than the 8-byte echo header is rejected (getEchoDataLen would underflow).
     const uint8_t too_short[4] = {129, 0, 0, 0};
     CHECK_FALSE(build_icmpv6_reply_carrier(too_short, sizeof(too_short)).has_value());
+}
+
+// ---------------------------------------------------------------------------
+// End-to-end HTTP probe tests: real NetProbeInputStream + NetProbeStreamHandler
+// against an in-process httplib server bound to an ephemeral port.
+// ---------------------------------------------------------------------------
+
+// RAII guard: ensures httplib server is stopped and thread joined even if a
+// Catch2 REQUIRE macro throws an exception that unwinds the test frame.
+struct ServerGuard {
+    httplib::Server &svr;
+    std::thread &t;
+    ~ServerGuard()
+    {
+        svr.stop();
+        if (t.joinable()) t.join();
+    }
+};
+
+TEST_CASE("NetProbe HTTP e2e: success path records attempt, success, and 200 in top_status_codes", "[netprobe][http][e2e]")
+{
+    // Start an in-process httplib server on an ephemeral port.
+    httplib::Server svr;
+    svr.Get("/ok", [](const httplib::Request &, httplib::Response &res) {
+        res.set_content("ok", "text/plain");
+    });
+    int port = svr.bind_to_any_port("127.0.0.1");
+    std::thread server_thread([&svr] { svr.listen_after_bind(); });
+    ServerGuard guard{svr, server_thread};
+
+    std::string url = "http://127.0.0.1:" + std::to_string(port) + "/ok";
+
+    // Configure stream: interval=500ms, timeout=400ms (timeout < interval as required).
+    // A 500ms interval gives ≥1 tick in the 1s sleep window.
+    NetProbeInputStream stream{"netprobe-http-e2e"};
+    stream.config_set("test_type", "http");
+    stream.config_set<uint64_t>("interval_msec", 500);
+    stream.config_set<uint64_t>("timeout_msec", 400);
+    auto targets = std::make_shared<visor::Configurable>();
+    auto target = std::make_shared<visor::Configurable>();
+    target->config_set("target", url);
+    targets->config_set<std::shared_ptr<visor::Configurable>>("ok_target", target);
+    stream.config_set<std::shared_ptr<visor::Configurable>>("targets", targets);
+
+    // Wire up the handler (mirrors the ping/tcp test pattern).
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    auto *proxy = stream.add_event_proxy(c);
+    NetProbeStreamHandler handler{"netprobe-http-e2e", proxy, &c};
+
+    handler.start();
+    stream.start();
+    // Sleep generously: 1.5s covers 2+ interval ticks + request round-trip.
+    std::this_thread::sleep_for(1500ms);
+    stream.stop();
+    handler.stop();
+
+    json j;
+    handler.metrics()->bucket(0)->to_json(j);
+
+    REQUIRE(j.contains("targets"));
+    REQUIRE(j["targets"].contains("ok_target"));
+    auto &tgt = j["targets"]["ok_target"];
+
+    CHECK(tgt["attempts"].get<int>() >= 1);
+    CHECK(tgt["successes"].get<int>() >= 1);
+
+    // top_status_codes must have a "200" entry.
+    REQUIRE(tgt.contains("top_status_codes"));
+    bool found_200 = false;
+    for (const auto &entry : tgt["top_status_codes"]) {
+        if (entry.contains("name") && entry["name"] == "200") {
+            found_200 = true;
+        }
+    }
+    CHECK(found_200);
+}
+
+TEST_CASE("NetProbe HTTP e2e: stop while request in flight does not crash or hang", "[netprobe][http][e2e]")
+{
+    // The slow handler sleeps 500ms — longer than our start/stop window.
+    // This test verifies that stop() returns cleanly even with a curl request in flight,
+    // exercising the loop-quiescent teardown of curl poll handles (_http_client->close()).
+    // interval=300ms, timeout=250ms (timeout < interval); the /slow handler sleeps 500ms
+    // so the request will still be in flight when we call stop() after 200ms.
+    httplib::Server svr;
+    svr.Get("/slow", [](const httplib::Request &, httplib::Response &res) {
+        std::this_thread::sleep_for(500ms);
+        res.set_content("late", "text/plain");
+    });
+    int port = svr.bind_to_any_port("127.0.0.1");
+    std::thread server_thread([&svr] { svr.listen_after_bind(); });
+    ServerGuard guard{svr, server_thread};
+
+    std::string url = "http://127.0.0.1:" + std::to_string(port) + "/slow";
+
+    NetProbeInputStream stream{"netprobe-http-e2e-inflight"};
+    stream.config_set("test_type", "http");
+    // interval=300ms, timeout=250ms; timeout must be < interval.
+    stream.config_set<uint64_t>("interval_msec", 300);
+    stream.config_set<uint64_t>("timeout_msec", 250);
+    auto targets = std::make_shared<visor::Configurable>();
+    auto target = std::make_shared<visor::Configurable>();
+    target->config_set("target", url);
+    targets->config_set<std::shared_ptr<visor::Configurable>>("slow_target", target);
+    stream.config_set<std::shared_ptr<visor::Configurable>>("targets", targets);
+
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    auto *proxy = stream.add_event_proxy(c);
+    NetProbeStreamHandler handler{"netprobe-http-e2e-inflight", proxy, &c};
+
+    handler.start();
+    stream.start();
+    // Sleep just long enough for the first request to be in flight (interval fired, curl running).
+    std::this_thread::sleep_for(350ms);
+    // stop() must return without hanging or crashing even though the curl request is still in flight.
+    CHECK_NOTHROW(stream.stop());
+    CHECK_NOTHROW(handler.stop());
 }
