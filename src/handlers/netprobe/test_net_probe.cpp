@@ -417,6 +417,141 @@ TEST_CASE("NetProbe specialized_merge aggregates targets across buckets", "[netp
     CHECK(j["targets"]["only-in-b"]["dns_lookup_failures"] == 1);
 }
 
+TEST_CASE("NetProbe HTTP status-aware metrics: counters and top_status_codes", "[netprobe][http][unit]")
+{
+    UnitFixture fx;
+
+    timespec stamp{1000, 0};
+    auto timings = visor::http::HttpTimings{/*total_us*/ 1234, /*dns_us*/ 100, /*connect_us*/ 200, /*tls_us*/ 300, /*ttfb_us*/ 400};
+
+    // 200 → success; 404 → http_status_failures; ConnectFailure → connect_failures
+    fx.manager()->process_netprobe_http_result(200, timings, "t1", stamp);
+    fx.manager()->process_netprobe_http_result(404, timings, "t1", stamp);
+    fx.manager()->process_netprobe_http_failure(ErrorType::ConnectFailure, "t1");
+
+    json j;
+    fx.manager()->bucket(0)->to_json(j);
+
+    CHECK(j["targets"]["t1"]["attempts"] == 3);
+    CHECK(j["targets"]["t1"]["successes"] == 1);
+    CHECK(j["targets"]["t1"]["http_status_failures"] == 1);
+    CHECK(j["targets"]["t1"]["connect_failures"] == 1);
+
+    // top_status_codes should contain entries for "200" and "404"
+    REQUIRE(j["targets"]["t1"].contains("top_status_codes"));
+    auto &top = j["targets"]["t1"]["top_status_codes"];
+    bool found_200 = false;
+    bool found_404 = false;
+    for (const auto &entry : top) {
+        if (entry.contains("name") && entry["name"] == "200") {
+            found_200 = true;
+        }
+        if (entry.contains("name") && entry["name"] == "404") {
+            found_404 = true;
+        }
+    }
+    CHECK(found_200);
+    CHECK(found_404);
+
+    // Histograms is default-ON so response_min_us and response_max_us should appear
+    CHECK(j["targets"]["t1"].contains("response_min_us"));
+    CHECK(j["targets"]["t1"].contains("response_max_us"));
+}
+
+TEST_CASE("NetProbe HTTP status boundary: 3xx is success, 1xx and 0 are failures", "[netprobe][http][unit]")
+{
+    UnitFixture fx;
+
+    timespec stamp{2000, 0};
+    auto timings = visor::http::HttpTimings{500, 50, 100, 0, 200};
+
+    fx.manager()->process_netprobe_http_result(301, timings, "redir", stamp);  // 3xx → success
+    fx.manager()->process_netprobe_http_result(500, timings, "redir", stamp);  // 5xx → http_status_failures
+    fx.manager()->process_netprobe_http_result(100, timings, "redir", stamp);  // 1xx → http_status_failures
+    fx.manager()->process_netprobe_http_result(0,   timings, "redir", stamp);  // 0   → http_status_failures
+
+    json j;
+    fx.manager()->bucket(0)->to_json(j);
+
+    CHECK(j["targets"]["redir"]["attempts"] == 4);
+    CHECK(j["targets"]["redir"]["successes"] == 1);
+    CHECK(j["targets"]["redir"]["http_status_failures"] == 3);
+}
+
+TEST_CASE("NetProbe HTTP http_response_phases group: quantiles present when enabled", "[netprobe][http][unit]")
+{
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    NetProbeInputStream stream{"netprobe-http-phases"};
+    auto *proxy = stream.add_event_proxy(c);
+    auto handler = std::make_unique<NetProbeStreamHandler>("netprobe-http-phases", proxy, &c);
+    // Enable http_response_phases group before starting (via "enable" config key)
+    handler->config_set<visor::Configurable::StringList>("enable", {"http_response_phases"});
+    handler->start();
+
+    auto *mgr = const_cast<NetProbeMetricsManager *>(handler->metrics());
+
+    timespec stamp{3000, 0};
+    auto timings = visor::http::HttpTimings{2000, 150, 300, 400, 600};
+    mgr->process_netprobe_http_result(200, timings, "phases-tgt", stamp);
+
+    json j;
+    mgr->bucket(0)->to_json(j);
+
+    // response_ttfb_us should appear when http_response_phases is enabled
+    CHECK(j["targets"]["phases-tgt"].contains("response_ttfb_us"));
+    CHECK(j["targets"]["phases-tgt"].contains("response_dns_us"));
+    CHECK(j["targets"]["phases-tgt"].contains("response_connect_us"));
+    CHECK(j["targets"]["phases-tgt"].contains("response_tls_us"));
+
+    handler->stop();
+}
+
+TEST_CASE("NetProbe HTTP http_response_phases group: quantiles absent when not enabled", "[netprobe][http][unit]")
+{
+    // Default fixture has Counters + Histograms enabled, NOT HttpResponsePhases
+    UnitFixture fx;
+
+    timespec stamp{4000, 0};
+    auto timings = visor::http::HttpTimings{2000, 150, 300, 400, 600};
+    fx.manager()->process_netprobe_http_result(200, timings, "no-phases", stamp);
+
+    json j;
+    fx.manager()->bucket(0)->to_json(j);
+
+    CHECK(!j["targets"]["no-phases"].contains("response_ttfb_us"));
+    CHECK(!j["targets"]["no-phases"].contains("response_dns_us"));
+    CHECK(!j["targets"]["no-phases"].contains("response_connect_us"));
+    CHECK(!j["targets"]["no-phases"].contains("response_tls_us"));
+}
+
+TEST_CASE("NetProbe HTTP metrics merge across buckets", "[netprobe][http][unit]")
+{
+    UnitFixture fx_a(2);
+    UnitFixture fx_b(2);
+
+    timespec stamp{5000, 0};
+    auto timings = visor::http::HttpTimings{1000, 50, 100, 0, 300};
+
+    fx_a.manager()->process_netprobe_http_result(200, timings, "shared", stamp);
+    fx_a.manager()->process_netprobe_http_result(404, timings, "shared", stamp);
+    fx_b.manager()->process_netprobe_http_result(500, timings, "shared", stamp);
+
+    UnitFixture fx_merged(2);
+    auto *merged = const_cast<NetProbeMetricsBucket *>(fx_merged.manager()->bucket(0));
+    merged->specialized_merge(*fx_a.manager()->bucket(0), visor::Metric::Aggregate::DEFAULT);
+    merged->specialized_merge(*fx_b.manager()->bucket(0), visor::Metric::Aggregate::DEFAULT);
+
+    json j;
+    merged->to_json(j);
+
+    CHECK(j["targets"]["shared"]["successes"] == 1);
+    CHECK(j["targets"]["shared"]["http_status_failures"] == 2);
+
+    // top_status_codes should reflect merged counts
+    REQUIRE(j["targets"]["shared"].contains("top_status_codes"));
+}
+
 TEST_CASE("Net Probe TCP tests", "[netprobe][tcp]")
 {
     // Requires external network (www.google.com:80) and only asserts

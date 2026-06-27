@@ -5,6 +5,7 @@
 #pragma once
 
 #include "AbstractMetricsManager.h"
+#include "HttpTypes.h"
 #include "PrometheusSerializer.h"
 #include "NetProbeInputStream.h"
 #include "StreamHandler.h"
@@ -35,7 +36,8 @@ namespace group {
 enum NetProbeMetrics : visor::MetricGroupIntType {
     Counters,
     Quantiles,
-    Histograms
+    Histograms,
+    HttpResponsePhases
 };
 }
 
@@ -53,6 +55,12 @@ struct Target {
     Counter connect_failures;
     Counter dns_failures;
     Counter timed_out;
+    Counter http_status_failures;
+    TopN<std::string> top_status_codes;
+    Quantile<uint64_t> q_dns_us;
+    Quantile<uint64_t> q_connect_us;
+    Quantile<uint64_t> q_tls_us;
+    Quantile<uint64_t> q_ttfb_us;
 
     Target()
         : q_time_us(NET_PROBE_SCHEMA, {"response_quantiles_us"}, "Net Probe quantile in microseconds")
@@ -64,6 +72,12 @@ struct Target {
         , connect_failures(NET_PROBE_SCHEMA, {"connect_failures"}, "Total Net Probe failures when performing a TCP socket connection")
         , dns_failures(NET_PROBE_SCHEMA, {"dns_lookup_failures"}, "Total Net Probe failures when performing a DNS lookup")
         , timed_out(NET_PROBE_SCHEMA, {"packets_timeout"}, "Total Net Probe timeout transactions")
+        , http_status_failures(NET_PROBE_SCHEMA, {"http_status_failures"}, "Total HTTP responses with a 4xx/5xx status")
+        , top_status_codes(NET_PROBE_SCHEMA, "status_code", {"top_status_codes"}, "Top HTTP status codes")
+        , q_dns_us(NET_PROBE_SCHEMA, {"response_dns_us"}, "DNS resolution time quantiles in microseconds")
+        , q_connect_us(NET_PROBE_SCHEMA, {"response_connect_us"}, "TCP connect time quantiles in microseconds")
+        , q_tls_us(NET_PROBE_SCHEMA, {"response_tls_us"}, "TLS handshake time quantiles in microseconds")
+        , q_ttfb_us(NET_PROBE_SCHEMA, {"response_ttfb_us"}, "Time-to-first-byte quantiles in microseconds")
     {
     }
 };
@@ -97,6 +111,7 @@ public:
     void process_failure(ErrorType error, const std::string &target);
     void process_attempts(bool deep, const std::string &target);
     void new_transaction(bool deep, NetProbeTransaction xact);
+    void process_netprobe_http(bool deep, uint16_t status, const visor::http::HttpTimings &timings, const std::string &target);
 };
 
 class NetProbeMetricsManager final : public visor::AbstractMetricsManager<NetProbeMetricsBucket>
@@ -127,6 +142,8 @@ public:
     void process_netprobe_icmp(pcpp::IcmpLayer *layer, const std::string &target, timespec stamp);
     void process_netprobe_icmpv6(pcpp::ICMPv6EchoLayer *layer, const std::string &target, timespec stamp);
     void process_netprobe_tcp(bool send, const std::string &target, timespec stamp);
+    void process_netprobe_http_result(uint16_t status, const visor::http::HttpTimings &timings, const std::string &target, timespec stamp);
+    void process_netprobe_http_failure(ErrorType error, const std::string &target);
 };
 
 class NetProbeStreamHandler final : public visor::StreamMetricsHandler<NetProbeMetricsManager>
@@ -138,6 +155,7 @@ class NetProbeStreamHandler final : public visor::StreamMetricsHandler<NetProbeM
     sigslot::connection _probe_recv_connection;
     sigslot::connection _probe_fail_connection;
     sigslot::connection _heartbeat_connection;
+    sigslot::connection _probe_http_result_connection;
 
     static const inline StreamMetricsHandler::ConfigsDefType _config_defs = {
         "recorded_stream",
@@ -147,11 +165,13 @@ class NetProbeStreamHandler final : public visor::StreamMetricsHandler<NetProbeM
     static const inline NetProbeStreamHandler::GroupDefType _group_defs = {
         {"counters", group::NetProbeMetrics::Counters},
         {"quantiles", group::NetProbeMetrics::Quantiles},
-        {"histograms", group::NetProbeMetrics::Histograms}};
+        {"histograms", group::NetProbeMetrics::Histograms},
+        {"http_response_phases", group::NetProbeMetrics::HttpResponsePhases}};
 
     void probe_signal_send(pcpp::Packet &, TestType, const std::string &, timespec);
     void probe_signal_recv(pcpp::Packet &, TestType, const std::string &, timespec);
     void probe_signal_fail(ErrorType, TestType, const std::string &);
+    void probe_signal_http_result(uint16_t, visor::http::HttpTimings, const std::string &, timespec);
 
     bool _filtering(pcpp::Packet *payload);
 
