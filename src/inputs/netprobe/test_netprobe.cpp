@@ -113,7 +113,7 @@ TEST_CASE("Netprobe invalid config", "[netprobe][config]")
     NetProbeInputStream stream{"net-probe-test"};
     stream.config_set("invalid_config", true);
 
-    CHECK_THROWS_WITH(stream.start(), "invalid_config is an invalid/unsupported config or filter. The valid configs/filters are: test_type, interval_msec, timeout_msec, packets_per_test, packets_interval_msec, packet_payload_size, targets, http_method");
+    CHECK_THROWS_WITH(stream.start(), "invalid_config is an invalid/unsupported config or filter. The valid configs/filters are: test_type, interval_msec, timeout_msec, packets_per_test, packets_interval_msec, packet_payload_size, targets, http_method, qname, qtype");
 }
 
 TEST_CASE("NetProbe ip_version config", "[netprobe][config][ipv6]")
@@ -148,7 +148,7 @@ TEST_CASE("NetProbe ip_version config", "[netprobe][config][ipv6]")
     SECTION("top-level valid-keys string unchanged") {
         NetProbeInputStream s{"net-probe-test"};
         s.config_set("invalid_config", true);
-        CHECK_THROWS_WITH(s.start(), "invalid_config is an invalid/unsupported config or filter. The valid configs/filters are: test_type, interval_msec, timeout_msec, packets_per_test, packets_interval_msec, packet_payload_size, targets, http_method");
+        CHECK_THROWS_WITH(s.start(), "invalid_config is an invalid/unsupported config or filter. The valid configs/filters are: test_type, interval_msec, timeout_msec, packets_per_test, packets_interval_msec, packet_payload_size, targets, http_method, qname, qtype");
     }
 }
 
@@ -162,6 +162,33 @@ TEST_CASE("NetProbe http_method config validates", "[netprobe][config][http]")
     stream.config_set("http_method", std::string("GET"));
     // No targets → throws "no targets specified", NOT a config-validation error.
     // That means http_method was accepted as a valid key.
+    CHECK_THROWS_WITH(stream.start(), "no targets specified");
+}
+
+TEST_CASE("NetProbe DoH config: qname required", "[netprobe][config][doh]")
+{
+    // test_type=doh without qname must throw the 'qname' is required error.
+    NetProbeInputStream stream{"net-probe-test-doh-noqname"};
+    stream.config_set("test_type", "doh");
+    auto targets = std::make_shared<visor::Configurable>();
+    auto target = std::make_shared<visor::Configurable>();
+    target->config_set("target", "https://1.1.1.1/dns-query");
+    targets->config_set<std::shared_ptr<visor::Configurable>>("cf_doh", target);
+    stream.config_set<std::shared_ptr<visor::Configurable>>("targets", targets);
+    // No qname → must throw.
+    CHECK_THROWS_WITH(stream.start(), "netprobe: 'qname' is required when test_type is 'doh'");
+}
+
+TEST_CASE("NetProbe DoH config: qname accepted", "[netprobe][config][doh]")
+{
+    // test_type=doh with qname set must pass config validation
+    // (throws "no targets specified" only when targets aren't set — here we omit targets
+    // to confirm that qname/qtype keys are accepted before the targets check fires).
+    NetProbeInputStream stream{"net-probe-test-doh-valid"};
+    stream.config_set("test_type", "doh");
+    stream.config_set("qname", std::string("example.com"));
+    stream.config_set("qtype", std::string("A"));
+    // No targets → throws "no targets specified", meaning qname/qtype were accepted as valid keys.
     CHECK_THROWS_WITH(stream.start(), "no targets specified");
 }
 

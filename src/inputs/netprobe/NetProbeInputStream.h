@@ -39,6 +39,10 @@ class NetProbeInputStream : public visor::InputStream
     std::map<std::string, DnsEntry> _dns_list;
     std::map<std::string, std::string> _http_targets;
     std::string _http_method{"GET"};
+    std::map<std::string, std::string> _doh_targets;
+    std::string _doh_qname;
+    std::string _doh_qtype{"A"};
+    std::string _doh_method{"POST"};
     std::shared_ptr<visor::http::HttpClient> _http_client;
     std::shared_ptr<spdlog::logger> _logger;
 
@@ -53,7 +57,8 @@ class NetProbeInputStream : public visor::InputStream
         {"ping", TestType::Ping},
         {"http", TestType::HTTP},
         {"udp", TestType::UDP},
-        {"tcp", TestType::TCP}};
+        {"tcp", TestType::TCP},
+        {"doh", TestType::DOH}};
 
     static const inline ConfigsDefType _config_defs = {
         "test_type",
@@ -63,13 +68,16 @@ class NetProbeInputStream : public visor::InputStream
         "packets_interval_msec",
         "packet_payload_size",
         "targets",
-        "http_method"};
+        "http_method",
+        "qname",
+        "qtype"};
 
     void _create_netprobe_loop();
     void _send_cb(pcpp::Packet &, TestType, const std::string &, timespec);
     void _recv_cb(pcpp::Packet &, TestType, const std::string &, timespec);
     void _fail_cb(ErrorType, TestType, const std::string &);
     void _http_result_cb(uint16_t status, visor::http::HttpTimings t, const std::string &name, timespec stamp);
+    void _doh_result_cb(uint16_t http_status, uint8_t rcode, bool parse_ok, visor::http::HttpTimings t, const std::string &name, timespec stamp);
 
 public:
     NetProbeInputStream(const std::string &name);
@@ -98,7 +106,7 @@ public:
 
     size_t consumer_count() const override
     {
-        return policy_signal.slot_count() + heartbeat_signal.slot_count() + probe_recv_signal.slot_count() + probe_send_signal.slot_count() + probe_fail_signal.slot_count() + probe_http_result_signal.slot_count();
+        return policy_signal.slot_count() + heartbeat_signal.slot_count() + probe_recv_signal.slot_count() + probe_send_signal.slot_count() + probe_fail_signal.slot_count() + probe_http_result_signal.slot_count() + probe_doh_result_signal.slot_count();
     }
 
     void probe_send_cb(pcpp::Packet &p, TestType t, const std::string &n, timespec s)
@@ -121,6 +129,11 @@ public:
         probe_http_result_signal(status, t, n, s);
     }
 
+    void probe_doh_result_cb(uint16_t http_status, uint8_t rcode, bool parse_ok, visor::http::HttpTimings t, const std::string &n, timespec s)
+    {
+        probe_doh_result_signal(http_status, rcode, parse_ok, t, n, s);
+    }
+
     // handler functionality
     // IF THIS changes, see consumer_count()
     // note: these are mutable because consumer_count() calls slot_count() which is not const (unclear if it could/should be)
@@ -128,6 +141,7 @@ public:
     mutable sigslot::signal<pcpp::Packet &, TestType, const std::string &, timespec> probe_recv_signal;
     mutable sigslot::signal<ErrorType, TestType, const std::string &> probe_fail_signal;
     mutable sigslot::signal<uint16_t, visor::http::HttpTimings, const std::string &, timespec> probe_http_result_signal;
+    mutable sigslot::signal<uint16_t, uint8_t, bool, visor::http::HttpTimings, const std::string &, timespec> probe_doh_result_signal;
 };
 
 }

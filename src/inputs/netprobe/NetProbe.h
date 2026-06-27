@@ -32,7 +32,8 @@ enum class TestType {
     Ping,
     HTTP,
     UDP,
-    TCP
+    TCP,
+    DOH
 };
 
 typedef std::function<void(pcpp::Packet &, TestType, const std::string &, timespec)> SendCallback;

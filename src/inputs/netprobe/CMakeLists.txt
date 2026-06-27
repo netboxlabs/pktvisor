@@ -3,6 +3,7 @@ message(STATUS "Input Module: Net Probe")
 add_library(VisorInputNetProbe STATIC
         NetProbeInputModulePlugin.cpp
         NetProbeInputStream.cpp
+        DohProbe.cpp
         HttpProbe.cpp
         PingProbe.cpp
         TcpProbe.cpp
@@ -20,6 +21,7 @@ target_link_libraries(VisorInputNetProbe
         PUBLIC
         Visor::Core
         Visor::Lib::Tcp
+        Visor::Lib::Dns
         VisorHttpClient
         uvw::uvw
         )
