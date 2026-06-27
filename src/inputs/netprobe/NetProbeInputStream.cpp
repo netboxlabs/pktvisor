@@ -211,7 +211,7 @@ void NetProbeInputStream::_create_netprobe_loop()
                 probe->stop();
             }
         }
-        if (_http_client) {
+        if (_type == TestType::HTTP && _http_client) {
             _http_client->close();
         }
         _io_loop->stop();
@@ -222,7 +222,9 @@ void NetProbeInputStream::_create_netprobe_loop()
         handle.close();
     });
 
-    _http_client = std::make_shared<visor::http::HttpClient>(_io_loop);
+    if (_type == TestType::HTTP) {
+        _http_client = std::make_shared<visor::http::HttpClient>(_io_loop);
+    }
 
     _timer = _io_loop->resource<uvw::timer_handle>();
     if (!_timer) {

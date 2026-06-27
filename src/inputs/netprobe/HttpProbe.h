@@ -6,7 +6,6 @@
 #include "HttpClient.h"
 #include "NetProbe.h"
 #include <functional>
-#include <optional>
 #include <uvw/timer.h>
 
 namespace visor::input::netprobe {
