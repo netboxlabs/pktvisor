@@ -365,6 +365,7 @@ void NetProbeMetricsBucket::process_filtered()
 
 void NetProbeMetricsBucket::process_failure(ErrorType error, const std::string &target)
 {
+    std::unique_lock lock(_mutex);
     if (!_targets_metrics.count(target)) {
         _targets_metrics[target] = std::make_unique<Target>();
     }
@@ -395,6 +396,7 @@ bool NetProbeStreamHandler::_filtering([[maybe_unused]] pcpp::Packet *payload)
 
 void NetProbeMetricsBucket::process_attempts([[maybe_unused]] bool deep, const std::string &target)
 {
+    std::unique_lock lock(_mutex);
     if (!_targets_metrics.count(target)) {
         _targets_metrics[target] = std::make_unique<Target>();
     }
@@ -507,7 +509,8 @@ void NetProbeMetricsBucket::process_netprobe_http(bool deep, uint16_t status, co
 {
     // Take _mutex like new_transaction — both mutate q_time_us/h_time_us sketches
     // and the TopN which the scrape thread reads under shared_lock.
-    // (process_failure/process_attempts only ++ a plain Counter, so they don't lock.)
+    // process_failure/process_attempts also lock _mutex (for their map insert), but
+    // their callers always invoke them sequentially — never while this lock is held.
     std::unique_lock lock(_mutex);
 
     if (!_targets_metrics.count(target)) {
