@@ -107,7 +107,7 @@ TEST_CASE("Netprobe invalid config", "[netprobe][config]")
     NetProbeInputStream stream{"net-probe-test"};
     stream.config_set("invalid_config", true);
 
-    CHECK_THROWS_WITH(stream.start(), "invalid_config is an invalid/unsupported config or filter. The valid configs/filters are: test_type, interval_msec, timeout_msec, packets_per_test, packets_interval_msec, packet_payload_size, targets");
+    CHECK_THROWS_WITH(stream.start(), "invalid_config is an invalid/unsupported config or filter. The valid configs/filters are: test_type, interval_msec, timeout_msec, packets_per_test, packets_interval_msec, packet_payload_size, targets, http_method");
 }
 
 TEST_CASE("NetProbe ip_version config", "[netprobe][config][ipv6]")
@@ -142,8 +142,21 @@ TEST_CASE("NetProbe ip_version config", "[netprobe][config][ipv6]")
     SECTION("top-level valid-keys string unchanged") {
         NetProbeInputStream s{"net-probe-test"};
         s.config_set("invalid_config", true);
-        CHECK_THROWS_WITH(s.start(), "invalid_config is an invalid/unsupported config or filter. The valid configs/filters are: test_type, interval_msec, timeout_msec, packets_per_test, packets_interval_msec, packet_payload_size, targets");
+        CHECK_THROWS_WITH(s.start(), "invalid_config is an invalid/unsupported config or filter. The valid configs/filters are: test_type, interval_msec, timeout_msec, packets_per_test, packets_interval_msec, packet_payload_size, targets, http_method");
     }
+}
+
+TEST_CASE("NetProbe http_method config validates", "[netprobe][config][http]")
+{
+    // Validates that the http_method key is accepted by validate_configs (no throw before
+    // targets-missing is hit). This exercises the _config_defs registration path without
+    // requiring network access or curl.
+    NetProbeInputStream stream{"net-probe-test"};
+    stream.config_set("test_type", "http");
+    stream.config_set("http_method", std::string("GET"));
+    // No targets → throws "no targets specified", NOT a config-validation error.
+    // That means http_method was accepted as a valid key.
+    CHECK_THROWS_WITH(stream.start(), "no targets specified");
 }
 
 TEST_CASE("ICMPv6 reply carrier survives the fan-out Packet deep-copy", "[netprobe][ipv6]")
