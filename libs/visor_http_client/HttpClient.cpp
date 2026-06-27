@@ -23,6 +23,28 @@ static void ensure_curl_global_init()
     std::call_once(flag, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
 }
 
+std::optional<std::string> validate_http_url(const std::string &url)
+{
+    CURLU *h = curl_url();
+    if (!h) {
+        return std::nullopt; // allocation failure — can't validate, so don't reject
+    }
+    auto rc = curl_url_set(h, CURLUPART_URL, url.c_str(), 0);
+    bool scheme_ok = false;
+    if (rc == CURLUE_OK) {
+        char *scheme = nullptr;
+        if (curl_url_get(h, CURLUPART_SCHEME, &scheme, 0) == CURLUE_OK && scheme) {
+            scheme_ok = (std::string(scheme) == "http" || std::string(scheme) == "https");
+            curl_free(scheme);
+        }
+    }
+    curl_url_cleanup(h);
+    if (rc != CURLUE_OK || !scheme_ok) {
+        return std::string("is not a valid http(s) URL: '") + url + "'";
+    }
+    return std::nullopt;
+}
+
 HttpClient::HttpClient(std::shared_ptr<uvw::loop> loop)
     : _loop(std::move(loop))
 {
@@ -151,7 +173,20 @@ void HttpClient::request(const HttpRequest &req, ResultCallback on_done)
         curl_easy_setopt(easy, CURLOPT_COPYPOSTFIELDS, req.body.data());
     }
     for (const auto &h : req.headers) {
-        ctx->headers = curl_slist_append(ctx->headers, h.c_str());
+        struct curl_slist *appended = curl_slist_append(ctx->headers, h.c_str());
+        if (!appended) {
+            // OOM: curl_slist_append returns null and leaves the existing list intact. Don't
+            // overwrite ctx->headers with null (that would leak the partial list and drop headers);
+            // abort the request cleanly. The partial list is freed by ~EasyContext at return.
+            curl_easy_cleanup(easy);
+            HttpResult fail;
+            fail.transport_ok = false;
+            fail.curl_code = CURLE_OUT_OF_MEMORY;
+            fail.error_msg = "curl_slist_append failed (out of memory)";
+            if (ctx->on_done) ctx->on_done(fail);
+            return;
+        }
+        ctx->headers = appended;
     }
     if (ctx->headers) {
         curl_easy_setopt(easy, CURLOPT_HTTPHEADER, ctx->headers);

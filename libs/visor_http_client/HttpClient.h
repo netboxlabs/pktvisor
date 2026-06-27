@@ -3,6 +3,7 @@
 #include <curl/curl.h>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <uvw/loop.h>
 #include <uvw/poll.h>
@@ -71,4 +72,9 @@ private:
     // close() sweeps these directly rather than relying on CURL_POLL_REMOVE firing for all.
     std::unordered_map<curl_socket_t, std::unique_ptr<SocketContext>> _sockets;
 };
+
+// Validate that `url` is a well-formed http/https URL (uses libcurl's URL parser internally, so
+// callers don't reach into the curl API). Returns std::nullopt when valid; otherwise a short,
+// human-readable reason (e.g. "is not a valid http(s) URL: '<url>'") the caller can surface.
+std::optional<std::string> validate_http_url(const std::string &url);
 }

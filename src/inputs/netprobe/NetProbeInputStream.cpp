@@ -30,30 +30,6 @@
 
 namespace visor::input::netprobe {
 
-// Validate that an http/doh target is a well-formed http(s) URL at config time, so a typo
-// (missing scheme, garbage) fails fast with a clear error instead of an opaque curl failure
-// per probe. Uses libcurl's URL parser (no global init required).
-static void validate_http_url(const std::string &url, const std::string &key)
-{
-    CURLU *h = curl_url();
-    if (!h) {
-        return; // allocation failure — don't block startup over an inability to validate
-    }
-    auto rc = curl_url_set(h, CURLUPART_URL, url.c_str(), 0);
-    bool scheme_ok = false;
-    if (rc == CURLUE_OK) {
-        char *scheme = nullptr;
-        if (curl_url_get(h, CURLUPART_SCHEME, &scheme, 0) == CURLUE_OK && scheme) {
-            scheme_ok = (std::string(scheme) == "http" || std::string(scheme) == "https");
-            curl_free(scheme);
-        }
-    }
-    curl_url_cleanup(h);
-    if (rc != CURLUE_OK || !scheme_ok) {
-        throw NetProbeException(fmt::format("target '{}' is not a valid http(s) URL: '{}'", key, url));
-    }
-}
-
 uint16_t NetProbeInputStream::_id = 1;
 
 NetProbeInputStream::NetProbeInputStream(const std::string &name)
@@ -157,13 +133,17 @@ void NetProbeInputStream::start()
             }
             if (_type == TestType::HTTP) {
                 auto url = config->config_get<std::string>("target");
-                validate_http_url(url, key);
+                if (auto err = visor::http::validate_http_url(url)) {
+                    throw NetProbeException(fmt::format("target '{}' {}", key, *err));
+                }
                 _http_targets[key] = url;
                 continue;
             }
             if (_type == TestType::DOH) {
                 auto url = config->config_get<std::string>("target");
-                validate_http_url(url, key);
+                if (auto err = visor::http::validate_http_url(url)) {
+                    throw NetProbeException(fmt::format("target '{}' {}", key, *err));
+                }
                 _doh_targets[key] = url;
                 continue;
             }
