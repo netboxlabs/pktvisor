@@ -16,6 +16,9 @@ static int start_test_server(httplib::Server &svr, std::thread &t)
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         res.set_content("late", "text/plain");
     });
+    svr.Post("/echo", [](const httplib::Request &req, httplib::Response &res) {
+        res.set_content(req.body, "application/octet-stream");
+    });
     int port = svr.bind_to_any_port("127.0.0.1");
     REQUIRE(port > 0);
     t = std::thread([&svr] { svr.listen_after_bind(); });
@@ -65,10 +68,17 @@ TEST_CASE("HttpClient basic results", "[http][client]")
 
     std::vector<HttpResult> results;
     auto on_done = [&](const HttpResult &r) { results.push_back(r); };
+    // Named init (not positional aggregate) so adding HttpRequest fields doesn't warn.
+    auto get_req = [](std::string url, uint64_t timeout_ms) {
+        HttpRequest r;
+        r.url = std::move(url);
+        r.timeout_ms = timeout_ms;
+        return r;
+    };
 
     SECTION("200 OK")
     {
-        client.request({base + "/ok", "GET", 2000, true, true}, on_done);
+        client.request(get_req(base + "/ok", 2000), on_done);
         auto wd = arm_watchdog(loop, 5000);
         loop->run();
         disarm_watchdog(loop, wd);
@@ -87,7 +97,7 @@ TEST_CASE("HttpClient basic results", "[http][client]")
     }
     SECTION("404")
     {
-        client.request({base + "/notfound", "GET", 2000, true, true}, on_done);
+        client.request(get_req(base + "/notfound", 2000), on_done);
         auto wd = arm_watchdog(loop, 5000);
         loop->run();
         disarm_watchdog(loop, wd);
@@ -97,7 +107,7 @@ TEST_CASE("HttpClient basic results", "[http][client]")
     }
     SECTION("connection refused")
     {
-        client.request({"http://127.0.0.1:1/x", "GET", 2000, true, true}, on_done);
+        client.request(get_req("http://127.0.0.1:1/x", 2000), on_done);
         auto wd = arm_watchdog(loop, 5000);
         loop->run();
         disarm_watchdog(loop, wd);
@@ -106,7 +116,7 @@ TEST_CASE("HttpClient basic results", "[http][client]")
     }
     SECTION("timeout")
     {
-        client.request({base + "/slow", "GET", 100, true, true}, on_done);
+        client.request(get_req(base + "/slow", 100), on_done);
         auto wd = arm_watchdog(loop, 5000);
         loop->run();
         disarm_watchdog(loop, wd);
@@ -118,7 +128,7 @@ TEST_CASE("HttpClient basic results", "[http][client]")
     {
         // Issue the slow request but then immediately close() before loop->run() completes it.
         // The process must not crash and results must stay empty (interrupted = no metric recorded).
-        client.request({base + "/slow", "GET", 5000, true, true}, on_done);
+        client.request(get_req(base + "/slow", 5000), on_done);
         client.close();
         auto wd = arm_watchdog(loop, 3000);
         loop->run();
@@ -129,6 +139,56 @@ TEST_CASE("HttpClient basic results", "[http][client]")
     // close() is idempotent — this is a no-op for the "close while in flight" section.
     client.close();
     loop->run();          // drain handle closes
+    svr.stop();
+    if (server_thread.joinable()) server_thread.join();
+}
+
+TEST_CASE("HttpClient POST body + headers + response capture", "[http][client]")
+{
+    httplib::Server svr;
+    std::thread server_thread;
+    int port = start_test_server(svr, server_thread);
+    auto loop = uvw::loop::create();
+    HttpClient client(loop);
+    std::string base = "http://127.0.0.1:" + std::to_string(port);
+
+    std::vector<HttpResult> results;
+    auto on_done = [&](const HttpResult &r) { results.push_back(r); };
+
+    SECTION("POST echoes body when capture_response")
+    {
+        HttpRequest req;
+        req.url = base + "/echo";
+        req.method = "POST";
+        req.body = std::string("\x00\x01hello", 7); // binary-safe
+        req.headers = {"Content-Type: application/octet-stream"};
+        req.capture_response = true;
+        req.timeout_ms = 2000;
+        client.request(req, on_done);
+        auto wd = arm_watchdog(loop, 5000);
+        loop->run();
+        disarm_watchdog(loop, wd);
+        REQUIRE(results.size() == 1);
+        CHECK(results[0].transport_ok);
+        CHECK(results[0].status_code == 200);
+        CHECK(results[0].response_body == std::string("\x00\x01hello", 7));
+    }
+    SECTION("body NOT captured by default")
+    {
+        HttpRequest req;
+        req.url = base + "/ok";
+        req.capture_response = false;
+        req.timeout_ms = 2000;
+        client.request(req, on_done);
+        auto wd = arm_watchdog(loop, 5000);
+        loop->run();
+        disarm_watchdog(loop, wd);
+        REQUIRE(results.size() == 1);
+        CHECK(results[0].response_body.empty());
+    }
+
+    client.close();
+    loop->run();
     svr.stop();
     if (server_thread.joinable()) server_thread.join();
 }

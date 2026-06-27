@@ -49,6 +49,10 @@ private:
         CURL *easy{nullptr};
         ResultCallback on_done;
         char errbuf[CURL_ERROR_SIZE]{};
+        curl_slist *headers{nullptr};   // owned; freed in dtor (after curl_easy_cleanup)
+        bool capture{false};
+        std::string response;           // captured body (bounded to 64 KB)
+        ~EasyContext() { if (headers) curl_slist_free_all(headers); }
     };
     // per-socket context: a uvw poll handle curl watches (owned in _sockets below)
     struct SocketContext {
@@ -59,6 +63,7 @@ private:
     static int socket_cb(CURL *easy, curl_socket_t s, int what, void *userp, void *socketp);
     static int timer_cb(CURLM *multi, long timeout_ms, void *userp);
     static size_t write_discard(char *ptr, size_t size, size_t nmemb, void *userdata);
+    static size_t write_capture(char *ptr, size_t size, size_t nmemb, void *userdata);
     void on_socket_event(curl_socket_t sockfd, int events);
     void on_timeout();
     void check_multi_info();

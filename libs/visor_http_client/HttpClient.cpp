@@ -97,6 +97,19 @@ size_t HttpClient::write_discard(char *, size_t size, size_t nmemb, void *)
     return size * nmemb; // we don't keep the body
 }
 
+size_t HttpClient::write_capture(char *ptr, size_t size, size_t nmemb, void *userdata)
+{
+    size_t n = size * nmemb;
+    auto *ctx = static_cast<EasyContext *>(userdata);
+    if (ctx) {
+        constexpr size_t kMaxBody = 64 * 1024; // a DNS-over-HTTPS message is well under 64 KB
+        if (ctx->response.size() < kMaxBody) {
+            ctx->response.append(ptr, (n < kMaxBody - ctx->response.size()) ? n : (kMaxBody - ctx->response.size()));
+        }
+    }
+    return n; // always consume so curl doesn't abort the transfer
+}
+
 void HttpClient::request(const HttpRequest &req, ResultCallback on_done)
 {
     if (_closed || !_multi) {
@@ -121,7 +134,6 @@ void HttpClient::request(const HttpRequest &req, ResultCallback on_done)
     } else if (req.method != "GET") {
         curl_easy_setopt(easy, CURLOPT_CUSTOMREQUEST, req.method.c_str());
     }
-    curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, &HttpClient::write_discard);
     curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, req.follow_redirects ? 1L : 0L);
     // Bound the redirect chain (curl's default is unlimited) so a redirect loop can't burn
     // the whole timeout budget. curl 8.x already restricts followed protocols to HTTP/HTTPS.
@@ -129,6 +141,20 @@ void HttpClient::request(const HttpRequest &req, ResultCallback on_done)
     curl_easy_setopt(easy, CURLOPT_SSL_VERIFYPEER, req.verify_tls ? 1L : 0L);
     curl_easy_setopt(easy, CURLOPT_SSL_VERIFYHOST, req.verify_tls ? 2L : 0L);
     if (req.timeout_ms) curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS, static_cast<long>(req.timeout_ms));
+    if (!req.body.empty()) {
+        // COPYPOSTFIELDS copies the bytes (curl owns them); size set first => binary-safe.
+        curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE, static_cast<long>(req.body.size()));
+        curl_easy_setopt(easy, CURLOPT_COPYPOSTFIELDS, req.body.data());
+    }
+    for (const auto &h : req.headers) {
+        ctx->headers = curl_slist_append(ctx->headers, h.c_str());
+    }
+    if (ctx->headers) {
+        curl_easy_setopt(easy, CURLOPT_HTTPHEADER, ctx->headers);
+    }
+    ctx->capture = req.capture_response;
+    curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, ctx->capture ? &HttpClient::write_capture : &HttpClient::write_discard);
+    curl_easy_setopt(easy, CURLOPT_WRITEDATA, ctx.get());
     curl_easy_setopt(easy, CURLOPT_PRIVATE, ctx.get());
     curl_easy_setopt(easy, CURLOPT_ERRORBUFFER, ctx->errbuf);
     _easy[easy] = std::move(ctx);
@@ -244,6 +270,9 @@ void HttpClient::check_multi_info()
             result.timings.connect_us = conn > dns ? static_cast<uint64_t>(conn - dns) : 0;
             result.timings.tls_us = app > conn ? static_cast<uint64_t>(app - conn) : 0;
             result.timings.ttfb_us = ttfb > (app ? app : conn) ? static_cast<uint64_t>(ttfb - (app ? app : conn)) : 0;
+            if (it != _easy.end() && it->second->capture) {
+                result.response_body = std::move(it->second->response);
+            }
         } else {
             result.transport_ok = false;
             result.curl_code = msg->data.result;

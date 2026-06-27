@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace visor::http {
 
@@ -17,11 +18,15 @@ struct HttpRequest {
     uint64_t timeout_ms{0};
     bool follow_redirects{true};
     bool verify_tls{true};
+    std::string body;                   // request body bytes (empty => no body)
+    std::vector<std::string> headers;   // extra request headers, each "Key: Value"
+    bool capture_response{false};       // when true, capture the response body
 };
 struct HttpResult {
     bool transport_ok{false};
     long curl_code{0};
     long status_code{0};
     HttpTimings timings;
+    std::string response_body;          // populated only when HttpRequest.capture_response
 };
 }
