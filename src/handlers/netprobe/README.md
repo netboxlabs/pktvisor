@@ -42,6 +42,76 @@ HTTP probes classify results by status code:
 - **4xx / 5xx** (or any other non-2xx/3xx status including `0` / `1xx`) → counted as an `http_status_failures`
 - Transport errors (DNS resolution failure, TCP connect failure, timeout) → counted in the corresponding existing failure counter (`dns_lookup_failures`, `connect_failures`, `packets_timeout`)
 
+### doh
+
+Issues DNS-over-HTTPS (DoH) queries to one or more URL targets using a libcurl-backed async transport (RFC 8484).
+Like `http`, targets are specified as full URLs (e.g. `https://1.1.1.1/dns-query`).
+
+#### Configuration
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `test_type` | string | — | Set to `"doh"` to enable DoH probing |
+| `targets.<name>.target` | string | — | DoH URL to probe, e.g. `https://1.1.1.1/dns-query` |
+| `qname` | string | **required** | DNS name to query (e.g. `example.com`) |
+| `qtype` | string | `"A"` | DNS query type (e.g. `A`, `AAAA`, `MX`, `TXT`) |
+| `interval_msec` | uint64 | 5000 | How often to issue a probe, in milliseconds |
+| `timeout_msec` | uint64 | 2000 | Per-request timeout in milliseconds (must not exceed `interval_msec`) |
+| `http_method` | string | `"POST"` | HTTP method to use for the DoH wire-format query (`POST` or `GET`) |
+
+#### Success semantics
+
+A DoH probe is counted as a **success** only when both of the following are true:
+
+1. The HTTP response status is **2xx or 3xx**
+2. The DNS response is parseable (QR=1, size ≥ 12 bytes) **and** the DNS rcode is **NOERROR** (0)
+
+Other outcomes are classified as:
+
+- **HTTP 4xx/5xx** → counted as `http_status_failures`
+- **HTTP 2xx/3xx but non-NOERROR or unparseable DNS response** → counted as `dns_response_failures`
+- **Transport errors** (DNS resolution failure, TCP connect failure, timeout) → counted in the corresponding failure counter (`dns_lookup_failures`, `connect_failures`, `packets_timeout`)
+
+The `top_rcodes` TopN metric records the DNS rcode name (e.g. `NOERROR`, `NXDOMAIN`, `SRVFAIL`) for every response with a 2xx/3xx HTTP status. Unparseable responses are recorded as `PARSE_ERROR`.
+
+Response-time metrics (`response_histogram_us`, `response_quantiles_us`, `response_min_us`, `response_max_us`) and HTTP response phase metrics (`response_dns_us`, `response_connect_us`, `response_tls_us`, `response_ttfb_us`) apply to DoH probes in exactly the same way as for `http` probes.
+
+#### Example configuration (YAML policy)
+
+```yaml
+handlers:
+  modules:
+    netprobe_doh:
+      type: netprobe
+
+input:
+  module: netprobe
+  config:
+    test_type: doh
+    qname: example.com
+    qtype: A
+    http_method: POST
+    interval_msec: 5000
+    timeout_msec: 2000
+    targets:
+      cloudflare_doh:
+        target: "https://1.1.1.1/dns-query"
+      google_doh:
+        target: "https://8.8.8.8/dns-query"
+```
+
+To enable HTTP response phase timing for DoH:
+
+```yaml
+handlers:
+  modules:
+    netprobe_doh:
+      type: netprobe
+      config:
+        enable:
+          - http_response_phases
+```
+
 ---
 
 ## Metrics
@@ -59,6 +129,8 @@ All metrics are per-target (keyed by the name given in the `targets` config map)
 | `packets_timeout` | Probes that timed out |
 | `http_status_failures` | HTTP responses with a 4xx/5xx (or unexpected) status code |
 | `top_status_codes` | Top HTTP status codes observed (e.g. `"200"`, `"404"`, `"503"`) |
+| `dns_response_failures` | DoH responses with HTTP 2xx/3xx but a non-NOERROR or unparseable DNS rcode |
+| `top_rcodes` | Top DNS response codes observed in DoH probes (e.g. `"NOERROR"`, `"NXDOMAIN"`, `"SRVFAIL"`, `"PARSE_ERROR"`) |
 
 ### Histograms (group: `histograms`, default ON)
 

@@ -8,6 +8,17 @@
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <thread>
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wold-style-cast"
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#pragma GCC diagnostic ignored "-Wzero-as-null-pointer-constant"
+#endif
+#include <pcapplusplus/DnsLayer.h>
+#include <pcapplusplus/DnsResourceData.h>
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
 
 using namespace visor::input::netprobe;
 using namespace visor::handler::netprobe;
@@ -333,6 +344,193 @@ TEST_CASE("NetProbe HTTP e2e: stop while request in flight does not crash or han
     // Sleep just long enough for the first request to be in flight (interval fired, curl running).
     std::this_thread::sleep_for(350ms);
     // stop() must return without hanging or crashing even though the curl request is still in flight.
+    CHECK_NOTHROW(stream.stop());
+    CHECK_NOTHROW(handler.stop());
+}
+
+// ---------------------------------------------------------------------------
+// End-to-end DoH probe tests: real NetProbeInputStream (test_type=doh) +
+// NetProbeStreamHandler against an in-process httplib server that returns a
+// canned NOERROR DNS response as application/dns-message.
+// ---------------------------------------------------------------------------
+
+// Build a minimal but valid NOERROR DNS response wire-format using pcpp::DnsLayer.
+// The probe only requires: size >= 12, QR==1, rcode==0.
+// The EMPTY DnsLayer constructor manages its own buffer (no heap-ownership hazard here
+// unlike the parse path); addAnswer with IPv4DnsResourceData is straightforward.
+static std::string make_doh_response()
+{
+    pcpp::DnsLayer resp;
+    resp.getDnsHeader()->queryOrResponse = 1;
+    resp.getDnsHeader()->responseCode = 0; // NOERROR
+    resp.addQuery("example.com", pcpp::DNS_TYPE_A, pcpp::DNS_CLASS_IN);
+    pcpp::IPv4DnsResourceData answerData(std::string("1.2.3.4"));
+    resp.addAnswer("example.com", pcpp::DNS_TYPE_A, pcpp::DNS_CLASS_IN, 60, &answerData);
+    return std::string(reinterpret_cast<const char *>(resp.getData()), resp.getDataLen());
+}
+
+TEST_CASE("NetProbe DoH e2e POST: success path records attempt, success, and NOERROR in top_rcodes", "[netprobe][doh][e2e]")
+{
+    httplib::Server svr;
+    const std::string doh_body = make_doh_response();
+    svr.Post("/dns-query", [&](const httplib::Request &, httplib::Response &res) {
+        res.set_content(doh_body, "application/dns-message");
+    });
+    svr.Get("/dns-query", [&](const httplib::Request &, httplib::Response &res) {
+        res.set_content(doh_body, "application/dns-message");
+    });
+    int port = svr.bind_to_any_port("127.0.0.1");
+    std::thread server_thread([&svr] { svr.listen_after_bind(); });
+    ServerGuard guard{svr, server_thread};
+    svr.wait_until_ready();
+
+    std::string url = "http://127.0.0.1:" + std::to_string(port) + "/dns-query";
+
+    NetProbeInputStream stream{"netprobe-doh-e2e-post"};
+    stream.config_set("test_type", "doh");
+    stream.config_set("qname", std::string("example.com"));
+    stream.config_set("qtype", std::string("A"));
+    stream.config_set<uint64_t>("interval_msec", 200);
+    stream.config_set<uint64_t>("timeout_msec", 150);
+    auto targets = std::make_shared<visor::Configurable>();
+    auto target = std::make_shared<visor::Configurable>();
+    target->config_set("target", url);
+    targets->config_set<std::shared_ptr<visor::Configurable>>("doh_target", target);
+    stream.config_set<std::shared_ptr<visor::Configurable>>("targets", targets);
+
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    auto *proxy = stream.add_event_proxy(c);
+    NetProbeStreamHandler handler{"netprobe-doh-e2e-post", proxy, &c};
+
+    handler.start();
+    stream.start();
+    std::this_thread::sleep_for(750ms);
+    stream.stop();
+    handler.stop();
+
+    json j;
+    handler.metrics()->bucket(0)->to_json(j);
+
+    REQUIRE(j.contains("targets"));
+    REQUIRE(j["targets"].contains("doh_target"));
+    auto &tgt = j["targets"]["doh_target"];
+
+    CHECK(tgt["attempts"].get<int>() >= 1);
+    CHECK(tgt["successes"].get<int>() >= 1);
+
+    REQUIRE(tgt.contains("top_rcodes"));
+    bool found_noerror = false;
+    for (const auto &entry : tgt["top_rcodes"]) {
+        if (entry.contains("name") && entry["name"] == "NOERROR") {
+            found_noerror = true;
+        }
+    }
+    CHECK(found_noerror);
+}
+
+TEST_CASE("NetProbe DoH e2e GET: success path records attempt, success, and NOERROR in top_rcodes", "[netprobe][doh][e2e]")
+{
+    httplib::Server svr;
+    const std::string doh_body = make_doh_response();
+    svr.Post("/dns-query", [&](const httplib::Request &, httplib::Response &res) {
+        res.set_content(doh_body, "application/dns-message");
+    });
+    svr.Get("/dns-query", [&](const httplib::Request &, httplib::Response &res) {
+        res.set_content(doh_body, "application/dns-message");
+    });
+    int port = svr.bind_to_any_port("127.0.0.1");
+    std::thread server_thread([&svr] { svr.listen_after_bind(); });
+    ServerGuard guard{svr, server_thread};
+    svr.wait_until_ready();
+
+    std::string url = "http://127.0.0.1:" + std::to_string(port) + "/dns-query";
+
+    NetProbeInputStream stream{"netprobe-doh-e2e-get"};
+    stream.config_set("test_type", "doh");
+    stream.config_set("qname", std::string("example.com"));
+    stream.config_set("qtype", std::string("A"));
+    stream.config_set("http_method", std::string("GET"));
+    stream.config_set<uint64_t>("interval_msec", 200);
+    stream.config_set<uint64_t>("timeout_msec", 150);
+    auto targets = std::make_shared<visor::Configurable>();
+    auto target = std::make_shared<visor::Configurable>();
+    target->config_set("target", url);
+    targets->config_set<std::shared_ptr<visor::Configurable>>("doh_get_target", target);
+    stream.config_set<std::shared_ptr<visor::Configurable>>("targets", targets);
+
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    auto *proxy = stream.add_event_proxy(c);
+    NetProbeStreamHandler handler{"netprobe-doh-e2e-get", proxy, &c};
+
+    handler.start();
+    stream.start();
+    std::this_thread::sleep_for(750ms);
+    stream.stop();
+    handler.stop();
+
+    json j;
+    handler.metrics()->bucket(0)->to_json(j);
+
+    REQUIRE(j.contains("targets"));
+    REQUIRE(j["targets"].contains("doh_get_target"));
+    auto &tgt = j["targets"]["doh_get_target"];
+
+    CHECK(tgt["attempts"].get<int>() >= 1);
+    CHECK(tgt["successes"].get<int>() >= 1);
+
+    REQUIRE(tgt.contains("top_rcodes"));
+    bool found_noerror = false;
+    for (const auto &entry : tgt["top_rcodes"]) {
+        if (entry.contains("name") && entry["name"] == "NOERROR") {
+            found_noerror = true;
+        }
+    }
+    CHECK(found_noerror);
+}
+
+TEST_CASE("NetProbe DoH e2e: stop while request in flight does not crash or hang", "[netprobe][doh][e2e]")
+{
+    // The slow handler sleeps 500ms — longer than our start/stop window.
+    // Mirrors the HTTP in-flight-stop test to exercise DohProbe teardown.
+    httplib::Server svr;
+    svr.Post("/dns-query", [](const httplib::Request &, httplib::Response &res) {
+        std::this_thread::sleep_for(500ms);
+        const std::string body = make_doh_response();
+        res.set_content(body, "application/dns-message");
+    });
+    svr.Get("/dns-query", [](const httplib::Request &, httplib::Response &res) {
+        std::this_thread::sleep_for(500ms);
+        const std::string body = make_doh_response();
+        res.set_content(body, "application/dns-message");
+    });
+    int port = svr.bind_to_any_port("127.0.0.1");
+    std::thread server_thread([&svr] { svr.listen_after_bind(); });
+    ServerGuard guard{svr, server_thread};
+    svr.wait_until_ready();
+
+    std::string url = "http://127.0.0.1:" + std::to_string(port) + "/dns-query";
+
+    NetProbeInputStream stream{"netprobe-doh-e2e-inflight"};
+    stream.config_set("test_type", "doh");
+    stream.config_set("qname", std::string("example.com"));
+    stream.config_set<uint64_t>("interval_msec", 300);
+    stream.config_set<uint64_t>("timeout_msec", 250);
+    auto targets = std::make_shared<visor::Configurable>();
+    auto target = std::make_shared<visor::Configurable>();
+    target->config_set("target", url);
+    targets->config_set<std::shared_ptr<visor::Configurable>>("doh_slow_target", target);
+    stream.config_set<std::shared_ptr<visor::Configurable>>("targets", targets);
+
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    auto *proxy = stream.add_event_proxy(c);
+    NetProbeStreamHandler handler{"netprobe-doh-e2e-inflight", proxy, &c};
+
+    handler.start();
+    stream.start();
+    std::this_thread::sleep_for(350ms);
     CHECK_NOTHROW(stream.stop());
     CHECK_NOTHROW(handler.stop());
 }
