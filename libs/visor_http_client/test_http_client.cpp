@@ -63,7 +63,15 @@ TEST_CASE("HttpClient basic results", "[http][client]")
         REQUIRE(results.size() == 1);
         CHECK(results[0].transport_ok);
         CHECK(results[0].status_code == 200);
-        CHECK(results[0].timings.total_us > 0);
+        const auto &t = results[0].timings;
+        CHECK(t.total_us > 0);
+        // Per-phase delta sanity (plain HTTP, no TLS): the TLS phase must be 0, and every
+        // phase delta must stay within the total — guards the delta arithmetic against a
+        // wrong base or an unsigned underflow producing a huge bogus value.
+        CHECK(t.tls_us == 0);
+        CHECK(t.dns_us <= t.total_us);
+        CHECK(t.connect_us <= t.total_us);
+        CHECK(t.ttfb_us <= t.total_us);
     }
     SECTION("404")
     {

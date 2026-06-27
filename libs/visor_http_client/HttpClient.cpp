@@ -108,6 +108,9 @@ void HttpClient::request(const HttpRequest &req, ResultCallback on_done)
     }
     curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, &HttpClient::write_discard);
     curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, req.follow_redirects ? 1L : 0L);
+    // Bound the redirect chain (curl's default is unlimited) so a redirect loop can't burn
+    // the whole timeout budget. curl 8.x already restricts followed protocols to HTTP/HTTPS.
+    curl_easy_setopt(easy, CURLOPT_MAXREDIRS, 10L);
     curl_easy_setopt(easy, CURLOPT_SSL_VERIFYPEER, req.verify_tls ? 1L : 0L);
     curl_easy_setopt(easy, CURLOPT_SSL_VERIFYHOST, req.verify_tls ? 2L : 0L);
     if (req.timeout_ms) curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS, static_cast<long>(req.timeout_ms));

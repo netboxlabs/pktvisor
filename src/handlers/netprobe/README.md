@@ -31,7 +31,7 @@ Unlike ping/tcp, HTTP targets are specified as full URLs.
 | `test_type` | string | — | Set to `"http"` to enable HTTP probing |
 | `targets.<name>.target` | string | — | Full URL to probe, e.g. `http://example.com/health` |
 | `interval_msec` | uint64 | 5000 | How often to issue a probe, in milliseconds |
-| `timeout_msec` | uint64 | 2000 | Per-request timeout in milliseconds (must not exceed `interval_msec`) |
+| `timeout_msec` | uint64 | 2000 | Per-request timeout in milliseconds (must not exceed `interval_msec`). `0` disables the per-request timeout — not recommended for HTTP, where a slow/stalled server could leave a transfer pending; keep the default. |
 | `http_method` | string | `"GET"` | HTTP method to use for all targets (`GET`, `HEAD`, `POST`, …) |
 
 #### Success semantics
