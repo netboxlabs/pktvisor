@@ -16,24 +16,17 @@ namespace visor::http {
 // run ONLY on the netprobe io (loop) thread. curl_multi is not thread-safe, so one
 // HttpClient is touched by exactly one thread for its whole active life.
 //
-// Reentrancy contract: the ResultCallback (on_done) MUST NOT call request() or close()
-// synchronously. Here is why each layer of protection is insufficient on its own:
-//
-//   check_multi_info() deferred-drain: it collects (callback, result) pairs FIRST,
-//   then fires callbacks after the drain loop — so a callback cannot mutate _easy
-//   mid-iteration of the *current* drain pass. This protects only that single pass.
-//
-//   request() is NOT protected: it calls curl_multi_socket_action + check_multi_info()
-//   inline. If on_done calls request() synchronously, check_multi_info() re-enters
-//   recursively from inside the outer check_multi_info()'s callback-fire loop, which
-//   can mutate _easy/_sockets under the outer drain.
-//
-//   close() is similarly unsafe: it clears _easy/_sockets while the outer drain may
-//   hold iterators or pointers into those collections.
-//
-// Therefore: on_done must not call request() or close() synchronously. Defer follow-up
-// requests onto the loop (uvw idle/timer). If future callers require synchronous chaining,
-// add an explicit reentrancy guard (e.g. a processing-depth counter) — see DoH note.
+// Reentrancy: the ResultCallback (on_done) MAY call request() — a follow-up request issued
+// from within a completion callback is safe. The `_processing` guard makes this work:
+//   - check_multi_info() collects (callback, result) pairs FIRST, then fires callbacks; and
+//     it sets _processing=true for the whole drain, so a re-entrant check_multi_info() (e.g.
+//     triggered by a request() from inside a callback) returns immediately instead of
+//     recursively mutating _easy/_sockets under the outer drain.
+//   - request(), when called while _processing, does NOT drive curl_multi_socket_action /
+//     check_multi_info() inline; it adds the handle and arms the timer for 0 ms so the kick
+//     happens on the next loop iteration, after the outer drain unwinds.
+// close() from inside on_done is still discouraged: the drain loop uses local copies so it
+// won't crash, but tearing the client down mid-callback is confusing — prefer deferring it.
 class HttpClient
 {
 public:
@@ -71,6 +64,7 @@ private:
     std::shared_ptr<uvw::loop> _loop;
     CURLM *_multi{nullptr};
     bool _closed{false};
+    bool _processing{false}; // true while check_multi_info() drains; guards re-entrant request()/check_multi_info()
     std::shared_ptr<uvw::timer_handle> _timer;
     std::unordered_map<CURL *, std::unique_ptr<EasyContext>> _easy;
     // we OWN the socket contexts here (curl_multi_assign stores the bare pointer);

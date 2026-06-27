@@ -192,3 +192,43 @@ TEST_CASE("HttpClient POST body + headers + response capture", "[http][client]")
     svr.stop();
     if (server_thread.joinable()) server_thread.join();
 }
+
+TEST_CASE("HttpClient request() issued from within a completion callback is safe", "[http][client]")
+{
+    httplib::Server svr;
+    std::thread server_thread;
+    int port = start_test_server(svr, server_thread);
+
+    auto loop = uvw::loop::create();
+    HttpClient client(loop);
+    std::string base = "http://127.0.0.1:" + std::to_string(port);
+
+    std::vector<long> statuses;
+    // In the first request's completion callback, issue a SECOND request (reentrant). The
+    // _processing guard must keep this safe and let both complete.
+    auto second = [&](const HttpResult &r) { statuses.push_back(r.status_code); };
+    auto first = [&](const HttpResult &r) {
+        statuses.push_back(r.status_code);
+        HttpRequest r2;
+        r2.url = base + "/notfound";
+        r2.timeout_ms = 2000;
+        client.request(r2, second); // reentrant: called from inside check_multi_info()'s callback fire
+    };
+    HttpRequest r1;
+    r1.url = base + "/ok";
+    r1.timeout_ms = 2000;
+    client.request(r1, first);
+
+    auto wd = arm_watchdog(loop, 5000);
+    loop->run();
+    disarm_watchdog(loop, wd);
+
+    REQUIRE(statuses.size() == 2);
+    CHECK(statuses[0] == 200);
+    CHECK(statuses[1] == 404);
+
+    client.close();
+    loop->run();
+    svr.stop();
+    if (server_thread.joinable()) server_thread.join();
+}

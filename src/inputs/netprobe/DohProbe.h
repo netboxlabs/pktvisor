@@ -24,6 +24,7 @@ class DohProbe final : public NetProbe
     std::shared_ptr<uvw::timer_handle> _interval_timer;
     std::string _query_wire; // pre-built DNS query (wire format), built in start()
     std::string _get_url;    // pre-built URL with ?dns=<base64url> for GET
+    uint16_t _qtype_code{0}; // numeric DNS qtype (from QTypeNumbers), for response question validation
     bool _init{false};
 
 public:

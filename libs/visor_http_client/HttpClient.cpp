@@ -142,6 +142,9 @@ void HttpClient::request(const HttpRequest &req, ResultCallback on_done)
     curl_easy_setopt(easy, CURLOPT_SSL_VERIFYPEER, req.verify_tls ? 1L : 0L);
     curl_easy_setopt(easy, CURLOPT_SSL_VERIFYHOST, req.verify_tls ? 2L : 0L);
     if (req.timeout_ms) curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS, static_cast<long>(req.timeout_ms));
+    // We run on the netprobe io thread, not the main thread; CURLOPT_NOSIGNAL stops curl from
+    // using signals (e.g. SIGALRM with the standard name resolver), which is unsafe off-main-thread.
+    curl_easy_setopt(easy, CURLOPT_NOSIGNAL, 1L);
     if (!req.body.empty()) {
         // COPYPOSTFIELDS copies the bytes (curl owns them); size set first => binary-safe.
         curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE, static_cast<long>(req.body.size()));
@@ -177,8 +180,16 @@ void HttpClient::request(const HttpRequest &req, ResultCallback on_done)
         }
         return;
     }
-    // Kick the transfer immediately rather than relying solely on curl's timer callback
-    // firing — matches curl's multi-socket examples and avoids a stalled first request.
+    // Kick the transfer. If we're inside a completion callback (check_multi_info() is draining),
+    // do NOT drive curl synchronously — that would re-enter the drain. Arm the timer for 0 ms so
+    // the kick runs on the next loop iteration, after the outer drain unwinds. Otherwise kick now
+    // (matches curl's multi-socket examples and avoids a stalled first request).
+    if (_processing) {
+        if (_timer && !_timer->closing()) {
+            _timer->start(uvw::timer_handle::time{0}, uvw::timer_handle::time{0});
+        }
+        return;
+    }
     int running = 0;
     curl_multi_socket_action(_multi, CURL_SOCKET_TIMEOUT, 0, &running);
     check_multi_info();
@@ -243,7 +254,13 @@ int HttpClient::socket_cb(CURL *, curl_socket_t s, int what, void *userp, void *
     if (what & CURL_POLL_IN) ev = ev | uvw::poll_handle::poll_event_flags::READABLE;
     if (what & CURL_POLL_OUT) ev = ev | uvw::poll_handle::poll_event_flags::WRITABLE;
     if (sctx->poll && !sctx->poll->closing()) {
-        sctx->poll->start(ev);
+        if (what & (CURL_POLL_IN | CURL_POLL_OUT)) {
+            sctx->poll->start(ev);
+        } else {
+            // CURL_POLL_NONE: curl wants no events right now — stop polling rather than call
+            // start() with an empty (invalid) libuv event mask.
+            sctx->poll->stop();
+        }
     }
     return 0;
 }
@@ -259,6 +276,12 @@ void HttpClient::on_socket_event(curl_socket_t sockfd, int events)
 void HttpClient::check_multi_info()
 {
     if (!_multi) return;
+    if (_processing) return; // re-entrancy guard: a callback issued work that re-entered the drain
+    _processing = true;
+    struct ProcessingReset {
+        bool &flag;
+        ~ProcessingReset() { flag = false; }
+    } processing_reset{_processing};
     // Drain + clean up FIRST, collecting (callback,result) pairs; invoke callbacks only
     // afterwards so a callback that calls request()/close() can't mutate _easy mid-loop.
     std::vector<std::pair<ResultCallback, HttpResult>> done;
@@ -291,9 +314,21 @@ void HttpClient::check_multi_info()
             if (it != _easy.end() && it->second->capture) {
                 result.response_body = std::move(it->second->response);
             }
+            char *ct = nullptr;
+            curl_easy_getinfo(easy, CURLINFO_CONTENT_TYPE, &ct); // may be null (no Content-Type)
+            if (ct) {
+                result.content_type = ct; // raw header value; consumers compare case-insensitively
+            }
         } else {
             result.transport_ok = false;
             result.curl_code = msg->data.result;
+            // Prefer curl's per-handle error buffer (set via CURLOPT_ERRORBUFFER); fall back to
+            // the generic code string. Surfaced for logging by the probes.
+            if (it != _easy.end() && it->second->errbuf[0] != '\0') {
+                result.error_msg = it->second->errbuf;
+            } else {
+                result.error_msg = curl_easy_strerror(msg->data.result);
+            }
         }
         curl_multi_remove_handle(_multi, easy);
         curl_easy_cleanup(easy);

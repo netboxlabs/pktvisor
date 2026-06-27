@@ -4,6 +4,7 @@
 
 #include "HttpProbe.h"
 #include "NetProbeException.h"
+#include <spdlog/spdlog.h>
 
 namespace visor::input::netprobe {
 
@@ -36,6 +37,9 @@ bool HttpProbe::start(std::shared_ptr<uvw::loop> io_loop)
             if (r.transport_ok) {
                 http_result(static_cast<uint16_t>(r.status_code), r.timings, name, stamp);
             } else {
+                if (auto logger = spdlog::get("visor")) {
+                    logger->debug("netprobe http[{}]: transport error: {} (curl code {})", name, r.error_msg, r.curl_code);
+                }
                 ErrorType err = ErrorType::SocketError;
                 if (r.curl_code == CURLE_COULDNT_RESOLVE_HOST || r.curl_code == CURLE_COULDNT_RESOLVE_PROXY) {
                     err = ErrorType::DnsLookupFailure;

@@ -30,6 +30,30 @@
 
 namespace visor::input::netprobe {
 
+// Validate that an http/doh target is a well-formed http(s) URL at config time, so a typo
+// (missing scheme, garbage) fails fast with a clear error instead of an opaque curl failure
+// per probe. Uses libcurl's URL parser (no global init required).
+static void validate_http_url(const std::string &url, const std::string &key)
+{
+    CURLU *h = curl_url();
+    if (!h) {
+        return; // allocation failure — don't block startup over an inability to validate
+    }
+    auto rc = curl_url_set(h, CURLUPART_URL, url.c_str(), 0);
+    bool scheme_ok = false;
+    if (rc == CURLUE_OK) {
+        char *scheme = nullptr;
+        if (curl_url_get(h, CURLUPART_SCHEME, &scheme, 0) == CURLUE_OK && scheme) {
+            scheme_ok = (std::string(scheme) == "http" || std::string(scheme) == "https");
+            curl_free(scheme);
+        }
+    }
+    curl_url_cleanup(h);
+    if (rc != CURLUE_OK || !scheme_ok) {
+        throw NetProbeException(fmt::format("target '{}' is not a valid http(s) URL: '{}'", key, url));
+    }
+}
+
 uint16_t NetProbeInputStream::_id = 1;
 
 NetProbeInputStream::NetProbeInputStream(const std::string &name)
@@ -103,6 +127,12 @@ void NetProbeInputStream::start()
 
     if (config_exists("qname")) {
         _doh_qname = config_get<std::string>("qname");
+        // Normalize a trailing dot (FQDN form, e.g. "example.com."): pcpp encodes/decodes names
+        // without it, so keeping it would both corrupt the query wire and break the response
+        // question-echo comparison in DohProbe. Guard size>1 so the root "." isn't emptied.
+        if (_doh_qname.size() > 1 && _doh_qname.back() == '.') {
+            _doh_qname.pop_back();
+        }
     }
     if (config_exists("qtype")) {
         _doh_qtype = config_get<std::string>("qtype");
@@ -126,11 +156,15 @@ void NetProbeInputStream::start()
                 throw NetProbeException(fmt::format("'{}' does not have key 'target' which is required", key));
             }
             if (_type == TestType::HTTP) {
-                _http_targets[key] = config->config_get<std::string>("target");
+                auto url = config->config_get<std::string>("target");
+                validate_http_url(url, key);
+                _http_targets[key] = url;
                 continue;
             }
             if (_type == TestType::DOH) {
-                _doh_targets[key] = config->config_get<std::string>("target");
+                auto url = config->config_get<std::string>("target");
+                validate_http_url(url, key);
+                _doh_targets[key] = url;
                 continue;
             }
             uint32_t port{0};

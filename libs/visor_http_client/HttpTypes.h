@@ -28,5 +28,7 @@ struct HttpResult {
     long status_code{0};
     HttpTimings timings;
     std::string response_body;          // populated only when HttpRequest.capture_response
+    std::string content_type;           // raw response Content-Type header when transport_ok (compare case-insensitively)
+    std::string error_msg;              // human-readable curl error detail when !transport_ok
 };
 }

@@ -218,6 +218,19 @@ TEST_CASE("NetProbe DoH config: qname accepted", "[netprobe][config][doh]")
     CHECK_THROWS_WITH(stream.start(), "no targets specified");
 }
 
+TEST_CASE("NetProbe http/doh config: invalid target URL rejected", "[netprobe][config]")
+{
+    // A target whose URL has a non-http(s) scheme must be rejected at config time with a clear error.
+    NetProbeInputStream stream{"net-probe-test-badurl"};
+    stream.config_set("test_type", "http");
+    auto targets = std::make_shared<visor::Configurable>();
+    auto target = std::make_shared<visor::Configurable>();
+    target->config_set("target", std::string("ftp://example.com/x"));
+    targets->config_set<std::shared_ptr<visor::Configurable>>("bad", target);
+    stream.config_set<std::shared_ptr<visor::Configurable>>("targets", targets);
+    CHECK_THROWS_WITH(stream.start(), "target 'bad' is not a valid http(s) URL: 'ftp://example.com/x'");
+}
+
 TEST_CASE("ICMPv6 reply carrier survives the fan-out Packet deep-copy", "[netprobe][ipv6]")
 {
     // Wire bytes of an ICMPv6 echo REPLY: type=129, code=0, checksum=0, id=0xBEEF, seq=0x0102 (network order).
@@ -447,6 +460,16 @@ TEST_CASE("NetProbe DoH e2e POST: success path records attempt, success, and NOE
         }
     }
     CHECK(found_noerror);
+
+    // DoH records the HTTP status breakdown (top_status_codes) too, like the HTTP probe.
+    REQUIRE(tgt.contains("top_status_codes"));
+    bool found_200 = false;
+    for (const auto &entry : tgt["top_status_codes"]) {
+        if (entry.contains("name") && entry["name"] == "200") {
+            found_200 = true;
+        }
+    }
+    CHECK(found_200);
 }
 
 TEST_CASE("NetProbe DoH e2e GET: success path records attempt, success, and NOERROR in top_rcodes", "[netprobe][doh][e2e]")
@@ -509,6 +532,16 @@ TEST_CASE("NetProbe DoH e2e GET: success path records attempt, success, and NOER
         }
     }
     CHECK(found_noerror);
+
+    // DoH records the HTTP status breakdown (top_status_codes) too, like the HTTP probe.
+    REQUIRE(tgt.contains("top_status_codes"));
+    bool found_200 = false;
+    for (const auto &entry : tgt["top_status_codes"]) {
+        if (entry.contains("name") && entry["name"] == "200") {
+            found_200 = true;
+        }
+    }
+    CHECK(found_200);
 }
 
 TEST_CASE("NetProbe DoH e2e: stop while request in flight does not crash or hang", "[netprobe][doh][e2e]")
@@ -555,4 +588,103 @@ TEST_CASE("NetProbe DoH e2e: stop while request in flight does not crash or hang
     std::this_thread::sleep_for(350ms);
     CHECK_NOTHROW(stream.stop());
     CHECK_NOTHROW(handler.stop());
+}
+
+TEST_CASE("NetProbe DoH e2e: wrong response Content-Type is a DNS failure (not a success)", "[netprobe][doh][e2e]")
+{
+    // A valid DNS body returned with the WRONG Content-Type (not application/dns-message) must be
+    // rejected per RFC 8484 — counted as dns_response_failures, never as a success.
+    httplib::Server svr;
+    const std::string doh_body = make_doh_response();
+    svr.Post("/dns-query", [&](const httplib::Request &, httplib::Response &res) {
+        res.set_content(doh_body, "text/html");
+    });
+    svr.Get("/dns-query", [&](const httplib::Request &, httplib::Response &res) {
+        res.set_content(doh_body, "text/html");
+    });
+    int port = svr.bind_to_any_port("127.0.0.1");
+    REQUIRE(port > 0);
+    std::thread server_thread([&svr] { svr.listen_after_bind(); });
+    ServerGuard guard{svr, server_thread};
+    svr.wait_until_ready();
+
+    std::string url = "http://127.0.0.1:" + std::to_string(port) + "/dns-query";
+    NetProbeInputStream stream{"netprobe-doh-e2e-badct"};
+    stream.config_set("test_type", "doh");
+    stream.config_set("qname", std::string("example.com"));
+    stream.config_set<uint64_t>("interval_msec", 200);
+    stream.config_set<uint64_t>("timeout_msec", 150);
+    auto targets = std::make_shared<visor::Configurable>();
+    auto target = std::make_shared<visor::Configurable>();
+    target->config_set("target", url);
+    targets->config_set<std::shared_ptr<visor::Configurable>>("doh_target", target);
+    stream.config_set<std::shared_ptr<visor::Configurable>>("targets", targets);
+
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    auto *proxy = stream.add_event_proxy(c);
+    NetProbeStreamHandler handler{"netprobe-doh-e2e-badct", proxy, &c};
+
+    handler.start();
+    stream.start();
+    std::this_thread::sleep_for(750ms);
+    stream.stop();
+    handler.stop();
+
+    json j;
+    handler.metrics()->bucket(0)->to_json(j);
+    REQUIRE(j["targets"].contains("doh_target"));
+    auto &tgt = j["targets"]["doh_target"];
+    CHECK(tgt["attempts"].get<int>() >= 1);
+    CHECK(tgt["successes"].get<int>() == 0);
+    CHECK(tgt["dns_response_failures"].get<int>() >= 1);
+}
+
+TEST_CASE("NetProbe DoH e2e: malformed DNS response body is a DNS failure (not a success)", "[netprobe][doh][e2e]")
+{
+    // Correct Content-Type but a body that is not a valid DNS message (too short to be a header)
+    // must be rejected — counted as dns_response_failures, never as a success.
+    httplib::Server svr;
+    svr.Post("/dns-query", [](const httplib::Request &, httplib::Response &res) {
+        res.set_content(std::string("garbage", 7), "application/dns-message");
+    });
+    svr.Get("/dns-query", [](const httplib::Request &, httplib::Response &res) {
+        res.set_content(std::string("garbage", 7), "application/dns-message");
+    });
+    int port = svr.bind_to_any_port("127.0.0.1");
+    REQUIRE(port > 0);
+    std::thread server_thread([&svr] { svr.listen_after_bind(); });
+    ServerGuard guard{svr, server_thread};
+    svr.wait_until_ready();
+
+    std::string url = "http://127.0.0.1:" + std::to_string(port) + "/dns-query";
+    NetProbeInputStream stream{"netprobe-doh-e2e-malformed"};
+    stream.config_set("test_type", "doh");
+    stream.config_set("qname", std::string("example.com"));
+    stream.config_set<uint64_t>("interval_msec", 200);
+    stream.config_set<uint64_t>("timeout_msec", 150);
+    auto targets = std::make_shared<visor::Configurable>();
+    auto target = std::make_shared<visor::Configurable>();
+    target->config_set("target", url);
+    targets->config_set<std::shared_ptr<visor::Configurable>>("doh_target", target);
+    stream.config_set<std::shared_ptr<visor::Configurable>>("targets", targets);
+
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    auto *proxy = stream.add_event_proxy(c);
+    NetProbeStreamHandler handler{"netprobe-doh-e2e-malformed", proxy, &c};
+
+    handler.start();
+    stream.start();
+    std::this_thread::sleep_for(750ms);
+    stream.stop();
+    handler.stop();
+
+    json j;
+    handler.metrics()->bucket(0)->to_json(j);
+    REQUIRE(j["targets"].contains("doh_target"));
+    auto &tgt = j["targets"]["doh_target"];
+    CHECK(tgt["attempts"].get<int>() >= 1);
+    CHECK(tgt["successes"].get<int>() == 0);
+    CHECK(tgt["dns_response_failures"].get<int>() >= 1);
 }

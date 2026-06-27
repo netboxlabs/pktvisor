@@ -15,10 +15,40 @@
 #ifdef __GNUC__
 #pragma GCC diagnostic pop
 #endif
+#include <cctype>
 #include <cstring>
 #include <memory>
+#include <spdlog/spdlog.h>
 
 namespace visor::input::netprobe {
+
+// Case-insensitive string equality (DNS names compare case-insensitively).
+static bool iequals(const std::string &a, const std::string &b)
+{
+    if (a.size() != b.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < a.size(); ++i) {
+        if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// RFC 8484: a DoH response must be Content-Type application/dns-message. Compare the media type
+// case-insensitively, ignoring any parameters (e.g. "; charset=...") and surrounding whitespace.
+static bool doh_content_type_ok(const std::string &ct)
+{
+    std::string base = ct.substr(0, ct.find(';'));
+    auto first = base.find_first_not_of(" \t");
+    if (first == std::string::npos) {
+        return false;
+    }
+    auto last = base.find_last_not_of(" \t");
+    base = base.substr(first, last - first + 1);
+    return iequals(base, "application/dns-message");
+}
 
 // RFC 4648 §5 base64url, no padding (for DoH GET ?dns=).
 static std::string base64url(const std::string &in)
@@ -50,8 +80,8 @@ bool DohProbe::start(std::shared_ptr<uvw::loop> io_loop)
     }
     // Build the DNS query once (qname/qtype are stream-fixed).
     pcpp::DnsLayer q;
-    auto qtype = static_cast<pcpp::DnsType>(visor::lib::dns::QTypeNumbers.at(_qtype));
-    q.addQuery(_qname, qtype, pcpp::DNS_CLASS_IN);
+    _qtype_code = visor::lib::dns::QTypeNumbers.at(_qtype);
+    q.addQuery(_qname, static_cast<pcpp::DnsType>(_qtype_code), pcpp::DNS_CLASS_IN);
     q.getDnsHeader()->recursionDesired = 1;
     q.getDnsHeader()->transactionID = 0; // RFC 8484 §4.1
     _query_wire.assign(reinterpret_cast<const char *>(q.getData()), q.getDataLen());
@@ -81,15 +111,24 @@ bool DohProbe::start(std::shared_ptr<uvw::loop> io_loop)
             req.headers = {"Content-Type: application/dns-message", "Accept: application/dns-message"};
         }
         const std::string name = _name;
+        const std::string qname = _qname;
+        const uint16_t qtype_code = _qtype_code;
         auto doh_result = _doh_result;
         auto fail = _fail;
-        _client->request(req, [doh_result, fail, name](const visor::http::HttpResult &r) {
+        _client->request(req, [doh_result, fail, name, qname, qtype_code](const visor::http::HttpResult &r) {
             timespec stamp;
             std::timespec_get(&stamp, TIME_UTC);
+            auto logger = spdlog::get("visor");
             if (r.transport_ok) {
                 uint8_t rcode = 0;
                 bool parse_ok = false;
-                if (r.response_body.size() >= sizeof(pcpp::dnshdr)) {
+                if (!doh_content_type_ok(r.content_type)) {
+                    // RFC 8484: a valid DoH reply is application/dns-message. A wrong content type
+                    // (e.g. an HTML/JSON error page returned with HTTP 200) is a DNS-level failure.
+                    if (logger) {
+                        logger->debug("netprobe doh[{}]: unexpected response Content-Type '{}' (want application/dns-message)", name, r.content_type);
+                    }
+                } else if (r.response_body.size() >= sizeof(pcpp::dnshdr)) {
                     // pcpp::DnsLayer, when not attached to a Packet, OWNS its buffer and
                     // delete[]s it in ~Layer(). So it MUST be given a new[]-allocated buffer
                     // (a std::string's internal buffer is NOT new[] => delete[] on it is UB /
@@ -99,13 +138,30 @@ bool DohProbe::start(std::shared_ptr<uvw::loop> io_loop)
                     std::memcpy(rawbuf.get(), r.response_body.data(), r.response_body.size());
                     pcpp::DnsLayer dns(rawbuf.release(), r.response_body.size(), nullptr, nullptr);
                     auto *h = dns.getDnsHeader();
-                    if (h->queryOrResponse == 1) {
-                        parse_ok = true;
-                        rcode = h->responseCode;
+                    if (h->queryOrResponse != 1) {
+                        if (logger) {
+                            logger->debug("netprobe doh[{}]: response is not a DNS reply (QR=0)", name);
+                        }
+                    } else {
+                        // Validate the response echoes our question (qname + qtype) per RFC 8484,
+                        // so a mismatched/unrelated answer isn't counted as a success.
+                        auto *query = dns.getFirstQuery();
+                        if (query && static_cast<uint16_t>(query->getDnsType()) == qtype_code && iequals(query->getName(), qname)) {
+                            parse_ok = true;
+                            rcode = h->responseCode;
+                        } else if (logger) {
+                            logger->debug("netprobe doh[{}]: response question mismatch (got '{}' type {})", name,
+                                query ? query->getName() : std::string("<none>"), query ? static_cast<int>(query->getDnsType()) : -1);
+                        }
                     }
+                } else if (logger) {
+                    logger->debug("netprobe doh[{}]: response too short for a DNS message ({} bytes)", name, r.response_body.size());
                 }
                 doh_result(static_cast<uint16_t>(r.status_code), rcode, parse_ok, r.timings, name, stamp);
             } else {
+                if (logger) {
+                    logger->debug("netprobe doh[{}]: transport error: {} (curl code {})", name, r.error_msg, r.curl_code);
+                }
                 ErrorType err = ErrorType::SocketError;
                 if (r.curl_code == CURLE_COULDNT_RESOLVE_HOST || r.curl_code == CURLE_COULDNT_RESOLVE_PROXY) {
                     err = ErrorType::DnsLookupFailure;

@@ -589,6 +589,9 @@ void NetProbeMetricsBucket::process_netprobe_doh(bool deep, uint16_t http_status
     auto &t = *_targets_metrics[target];
 
     if (group_enabled(group::NetProbeMetrics::Counters)) {
+        // DoH responses are HTTP responses too: record the HTTP status breakdown (like the HTTP
+        // probe) in addition to the DNS rcode breakdown below.
+        t.top_status_codes.update(std::to_string(http_status));
         if (http_status >= 200 && http_status < 400) {
             std::string rname;
             if (!parse_ok) {
