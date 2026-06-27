@@ -1,5 +1,6 @@
 #include "HttpClient.h"
 #include <mutex>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
