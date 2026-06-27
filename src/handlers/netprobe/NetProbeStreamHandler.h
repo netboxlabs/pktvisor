@@ -57,6 +57,8 @@ struct Target {
     Counter timed_out;
     Counter http_status_failures;
     TopN<std::string> top_status_codes;
+    Counter dns_response_failures;
+    TopN<std::string> top_rcodes;
     Quantile<uint64_t> q_dns_us;
     Quantile<uint64_t> q_connect_us;
     Quantile<uint64_t> q_tls_us;
@@ -74,6 +76,8 @@ struct Target {
         , timed_out(NET_PROBE_SCHEMA, {"packets_timeout"}, "Total Net Probe timeout transactions")
         , http_status_failures(NET_PROBE_SCHEMA, {"http_status_failures"}, "Total HTTP responses with a 4xx/5xx status")
         , top_status_codes(NET_PROBE_SCHEMA, "status_code", {"top_status_codes"}, "Top HTTP status codes")
+        , dns_response_failures(NET_PROBE_SCHEMA, {"dns_response_failures"}, "Total DoH responses with HTTP 2xx but a non-NOERROR or unparseable DNS rcode")
+        , top_rcodes(NET_PROBE_SCHEMA, "rcode", {"top_rcodes"}, "Top DNS response codes observed")
         , q_dns_us(NET_PROBE_SCHEMA, {"response_dns_us"}, "DNS resolution time quantiles in microseconds")
         , q_connect_us(NET_PROBE_SCHEMA, {"response_connect_us"}, "TCP connect time quantiles in microseconds")
         , q_tls_us(NET_PROBE_SCHEMA, {"response_tls_us"}, "TLS handshake time quantiles in microseconds")
@@ -112,6 +116,7 @@ public:
     void process_attempts(bool deep, const std::string &target);
     void new_transaction(bool deep, NetProbeTransaction xact);
     void process_netprobe_http(bool deep, uint16_t status, const visor::http::HttpTimings &timings, const std::string &target);
+    void process_netprobe_doh(bool deep, uint16_t http_status, uint8_t rcode, bool parse_ok, const visor::http::HttpTimings &timings, const std::string &target);
 };
 
 class NetProbeMetricsManager final : public visor::AbstractMetricsManager<NetProbeMetricsBucket>
@@ -144,6 +149,8 @@ public:
     void process_netprobe_tcp(bool send, const std::string &target, timespec stamp);
     void process_netprobe_http_result(uint16_t status, const visor::http::HttpTimings &timings, const std::string &target, timespec stamp);
     void process_netprobe_http_failure(ErrorType error, const std::string &target);
+    void process_netprobe_doh_result(uint16_t http_status, uint8_t rcode, bool parse_ok, const visor::http::HttpTimings &timings, const std::string &target, timespec stamp);
+    void process_netprobe_doh_failure(ErrorType error, const std::string &target);
 };
 
 class NetProbeStreamHandler final : public visor::StreamMetricsHandler<NetProbeMetricsManager>
@@ -156,6 +163,7 @@ class NetProbeStreamHandler final : public visor::StreamMetricsHandler<NetProbeM
     sigslot::connection _probe_fail_connection;
     sigslot::connection _heartbeat_connection;
     sigslot::connection _probe_http_result_connection;
+    sigslot::connection _probe_doh_result_connection;
 
     static const inline StreamMetricsHandler::ConfigsDefType _config_defs = {
         "recorded_stream",
@@ -172,6 +180,7 @@ class NetProbeStreamHandler final : public visor::StreamMetricsHandler<NetProbeM
     void probe_signal_recv(pcpp::Packet &, TestType, const std::string &, timespec);
     void probe_signal_fail(ErrorType, TestType, const std::string &);
     void probe_signal_http_result(uint16_t, visor::http::HttpTimings, const std::string &, timespec);
+    void probe_signal_doh_result(uint16_t, uint8_t, bool, visor::http::HttpTimings, const std::string &, timespec);
 
     bool _filtering(pcpp::Packet *payload);
 

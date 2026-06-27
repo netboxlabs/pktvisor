@@ -552,6 +552,114 @@ TEST_CASE("NetProbe HTTP metrics merge across buckets", "[netprobe][http][unit]"
     REQUIRE(j["targets"]["shared"].contains("top_status_codes"));
 }
 
+TEST_CASE("NetProbe DoH DNS-aware metrics: counters and top_rcodes", "[netprobe][doh][unit]")
+{
+    UnitFixture fx;
+
+    timespec stamp{6000, 0};
+    auto timings = visor::http::HttpTimings{/*total_us*/ 1234, /*dns_us*/ 100, /*connect_us*/ 200, /*tls_us*/ 300, /*ttfb_us*/ 400};
+
+    // 200 + rcode 0 + parse_ok=true  → success
+    fx.manager()->process_netprobe_doh_result(200, 0, true, timings, "t1", stamp);
+    // 200 + rcode 2 + parse_ok=true  → dns_response_failures (SRVFAIL)
+    fx.manager()->process_netprobe_doh_result(200, 2, true, timings, "t1", stamp);
+    // 200 + rcode 0 + parse_ok=false → dns_response_failures (PARSE_ERROR)
+    fx.manager()->process_netprobe_doh_result(200, 0, false, timings, "t1", stamp);
+    // 503 + parse_ok=false           → http_status_failures
+    fx.manager()->process_netprobe_doh_result(503, 0, false, timings, "t1", stamp);
+    // transport failure              → connect_failures
+    fx.manager()->process_netprobe_doh_failure(ErrorType::ConnectFailure, "t1");
+
+    json j;
+    fx.manager()->bucket(0)->to_json(j);
+
+    CHECK(j["targets"]["t1"]["attempts"] == 5);
+    CHECK(j["targets"]["t1"]["successes"] == 1);
+    CHECK(j["targets"]["t1"]["dns_response_failures"] == 2);
+    CHECK(j["targets"]["t1"]["http_status_failures"] == 1);
+    CHECK(j["targets"]["t1"]["connect_failures"] == 1);
+
+    // top_rcodes should contain entries for "NOERROR", "SRVFAIL", "PARSE_ERROR"
+    REQUIRE(j["targets"]["t1"].contains("top_rcodes"));
+    auto &top = j["targets"]["t1"]["top_rcodes"];
+    bool found_noerror = false;
+    bool found_srvfail = false;
+    bool found_parse_error = false;
+    for (const auto &entry : top) {
+        if (entry.contains("name") && entry["name"] == "NOERROR") {
+            found_noerror = true;
+            CHECK(entry["estimate"] == 1); // fed exactly once
+        }
+        if (entry.contains("name") && entry["name"] == "SRVFAIL") {
+            found_srvfail = true;
+            CHECK(entry["estimate"] == 1);
+        }
+        if (entry.contains("name") && entry["name"] == "PARSE_ERROR") {
+            found_parse_error = true;
+            CHECK(entry["estimate"] == 1);
+        }
+    }
+    CHECK(found_noerror);
+    CHECK(found_srvfail);
+    CHECK(found_parse_error);
+    // The 503 (HTTP-failure) response must NOT add an rcode entry — top_rcodes is only
+    // recorded for HTTP-success responses, so exactly the three above are present.
+    CHECK(top.size() == 3);
+
+    // Histograms is default-ON so response_min_us and response_max_us should appear
+    CHECK(j["targets"]["t1"].contains("response_min_us"));
+    CHECK(j["targets"]["t1"].contains("response_max_us"));
+}
+
+TEST_CASE("NetProbe DoH http_response_phases group: quantiles present when enabled", "[netprobe][doh][unit]")
+{
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    NetProbeInputStream stream{"netprobe-doh-phases"};
+    auto *proxy = stream.add_event_proxy(c);
+    auto handler = std::make_unique<NetProbeStreamHandler>("netprobe-doh-phases", proxy, &c);
+    handler->config_set<visor::Configurable::StringList>("enable", {"http_response_phases"});
+    handler->start();
+
+    auto *mgr = const_cast<NetProbeMetricsManager *>(handler->metrics());
+
+    timespec stamp{7000, 0};
+    auto timings = visor::http::HttpTimings{2000, 150, 300, 400, 600};
+    mgr->process_netprobe_doh_result(200, 0, true, timings, "doh-phases-tgt", stamp);
+
+    json j;
+    mgr->bucket(0)->to_json(j);
+
+    CHECK(j["targets"]["doh-phases-tgt"].contains("response_ttfb_us"));
+    CHECK(j["targets"]["doh-phases-tgt"].contains("response_dns_us"));
+    CHECK(j["targets"]["doh-phases-tgt"].contains("response_connect_us"));
+    CHECK(j["targets"]["doh-phases-tgt"].contains("response_tls_us"));
+    // Value assertions (single update => p50 is the fed value): proves each phase field is
+    // wired to the right HttpTimings member (dns_us=150, ttfb_us=600), not swapped.
+    CHECK(j["targets"]["doh-phases-tgt"]["response_dns_us"]["p50"] == 150);
+    CHECK(j["targets"]["doh-phases-tgt"]["response_ttfb_us"]["p50"] == 600);
+
+    handler->stop();
+}
+
+TEST_CASE("NetProbe DoH http_response_phases group: quantiles absent when not enabled", "[netprobe][doh][unit]")
+{
+    // Default fixture has Counters + Histograms enabled, NOT HttpResponsePhases
+    UnitFixture fx;
+
+    timespec stamp{8000, 0};
+    auto timings = visor::http::HttpTimings{2000, 150, 300, 400, 600};
+    fx.manager()->process_netprobe_doh_result(200, 0, true, timings, "doh-no-phases", stamp);
+
+    json j;
+    fx.manager()->bucket(0)->to_json(j);
+
+    CHECK(!j["targets"]["doh-no-phases"].contains("response_ttfb_us"));
+    CHECK(!j["targets"]["doh-no-phases"].contains("response_dns_us"));
+    CHECK(!j["targets"]["doh-no-phases"].contains("response_connect_us"));
+    CHECK(!j["targets"]["doh-no-phases"].contains("response_tls_us"));
+}
+
 TEST_CASE("Net Probe TCP tests", "[netprobe][tcp]")
 {
     // Requires external network (www.google.com:80) and only asserts

@@ -15,6 +15,7 @@ target_link_libraries(VisorHandlerNetProbe
         PUBLIC
         Visor::Lib::Transaction
         Visor::Input::NetProbe
+        Visor::Lib::Dns
         )
 
 set(VISOR_STATIC_PLUGINS ${VISOR_STATIC_PLUGINS} Visor::Handler::NetProbe PARENT_SCOPE)
