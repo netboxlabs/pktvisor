@@ -27,11 +27,19 @@ HttpClient::HttpClient(std::shared_ptr<uvw::loop> loop)
 {
     ensure_curl_global_init();
     _multi = curl_multi_init();
+    if (!_multi) {
+        throw std::runtime_error("HttpClient: curl_multi_init() failed");
+    }
     curl_multi_setopt(_multi, CURLMOPT_SOCKETFUNCTION, &HttpClient::socket_cb);
     curl_multi_setopt(_multi, CURLMOPT_SOCKETDATA, this);
     curl_multi_setopt(_multi, CURLMOPT_TIMERFUNCTION, &HttpClient::timer_cb);
     curl_multi_setopt(_multi, CURLMOPT_TIMERDATA, this);
     _timer = _loop->resource<uvw::timer_handle>();
+    if (!_timer) {
+        curl_multi_cleanup(_multi);
+        _multi = nullptr;
+        throw std::runtime_error("HttpClient: unable to initialize timer handle");
+    }
     _timer->on<uvw::timer_event>([this](const auto &, auto &) { on_timeout(); });
 }
 
@@ -97,6 +105,13 @@ void HttpClient::request(const HttpRequest &req, ResultCallback on_done)
     auto ctx = std::make_unique<EasyContext>();
     ctx->on_done = std::move(on_done);
     CURL *easy = curl_easy_init();
+    if (!easy) {
+        HttpResult fail;
+        fail.transport_ok = false;
+        fail.curl_code = CURLE_FAILED_INIT;
+        if (ctx->on_done) ctx->on_done(fail);
+        return;
+    }
     ctx->easy = easy;
     curl_easy_setopt(easy, CURLOPT_URL, req.url.c_str());
     // Don't force CUSTOMREQUEST for GET (it can subtly change curl's behavior); use the

@@ -39,7 +39,7 @@ Unlike ping/tcp, HTTP targets are specified as full URLs.
 HTTP probes classify results by status code:
 
 - **2xx / 3xx** → counted as a `success`
-- **4xx / 5xx** (or any other non-2xx/3xx status including `0` / `1xx`) → counted as an `http_status_failure`
+- **4xx / 5xx** (or any other non-2xx/3xx status including `0` / `1xx`) → counted as an `http_status_failures`
 - Transport errors (DNS resolution failure, TCP connect failure, timeout) → counted in the corresponding existing failure counter (`dns_lookup_failures`, `connect_failures`, `packets_timeout`)
 
 ---
@@ -48,7 +48,7 @@ HTTP probes classify results by status code:
 
 All metrics are per-target (keyed by the name given in the `targets` config map).
 
-### Always-on counters (group: `counters`)
+### Counters (group: `counters`, default ON)
 
 | Metric | Description |
 |--------|-------------|
@@ -58,13 +58,6 @@ All metrics are per-target (keyed by the name given in the `targets` config map)
 | `dns_lookup_failures` | DNS resolution failures |
 | `packets_timeout` | Probes that timed out |
 | `http_status_failures` | HTTP responses with a 4xx/5xx (or unexpected) status code |
-| `response_min_us` | Minimum total response time in microseconds (within the reporting interval) |
-| `response_max_us` | Maximum total response time in microseconds |
-
-### TopN (always-on)
-
-| Metric | Description |
-|--------|-------------|
 | `top_status_codes` | Top HTTP status codes observed (e.g. `"200"`, `"404"`, `"503"`) |
 
 ### Histograms (group: `histograms`, default ON)
@@ -72,6 +65,8 @@ All metrics are per-target (keyed by the name given in the `targets` config map)
 | Metric | Description |
 |--------|-------------|
 | `response_histogram_us` | Histogram of total response times in microseconds |
+| `response_min_us` | Minimum total response time in microseconds (within the reporting interval); derived from the histogram |
+| `response_max_us` | Maximum total response time in microseconds; derived from the histogram |
 
 ### Quantiles (group: `quantiles`)
 

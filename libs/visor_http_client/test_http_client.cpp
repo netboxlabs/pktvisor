@@ -17,17 +17,29 @@ static int start_test_server(httplib::Server &svr, std::thread &t)
         res.set_content("late", "text/plain");
     });
     int port = svr.bind_to_any_port("127.0.0.1");
+    REQUIRE(port > 0);
     t = std::thread([&svr] { svr.listen_after_bind(); });
+    // Wait until the server is actually accepting connections before the test
+    // connects — avoids a connect-before-listen race on slow/loaded CI machines.
+    svr.wait_until_ready();
     return port;
 }
 
 // Arm a watchdog timer that calls loop->stop() after timeout_ms.
-// The caller must close the returned handle after loop->run() completes.
+// The handle is unreferenced so loop->run() returns as soon as the real work
+// handles close — the watchdog fires only if the loop would otherwise stall
+// forever (hang-guard). The caller must close the returned handle after
+// loop->run() completes.
 static std::shared_ptr<uvw::timer_handle> arm_watchdog(std::shared_ptr<uvw::loop> loop, uint64_t timeout_ms)
 {
     auto wd = loop->resource<uvw::timer_handle>();
     wd->on<uvw::timer_event>([loop](const auto &, auto &) { loop->stop(); });
     wd->start(uvw::timer_handle::time{timeout_ms}, uvw::timer_handle::time{0});
+    // Unreference: the watchdog must not prevent the loop from exiting when all
+    // real work handles (curl poll + timer) have closed. uv_unref makes the
+    // handle "idle" w.r.t. loop liveness — the loop exits when only unreferenced
+    // handles remain active, then we close the watchdog in disarm_watchdog.
+    wd->unreference();
     return wd;
 }
 

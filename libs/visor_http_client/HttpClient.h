@@ -16,14 +16,24 @@ namespace visor::http {
 // run ONLY on the netprobe io (loop) thread. curl_multi is not thread-safe, so one
 // HttpClient is touched by exactly one thread for its whole active life.
 //
-// Reentrancy contract (v1): the ResultCallback (on_done) MUST NOT call request() or
-// close() synchronously. request() drives curl_multi_socket_action + check_multi_info()
-// inline, and check_multi_info() invokes on_done while draining completed handles; a
-// synchronous request()/close() from inside on_done would re-enter check_multi_info()
-// mid-drain and mutate _easy/_sockets under the outer loop. HttpProbe's callback only
-// emits a signal, so this holds. A future DoH/retry user that needs to issue a follow-up
-// request from a callback must defer it onto the loop (uvw idle/timer), OR HttpClient must
-// first gain an explicit reentrancy guard (e.g. a processing-depth counter) — see DoH note.
+// Reentrancy contract: the ResultCallback (on_done) MUST NOT call request() or close()
+// synchronously. Here is why each layer of protection is insufficient on its own:
+//
+//   check_multi_info() deferred-drain: it collects (callback, result) pairs FIRST,
+//   then fires callbacks after the drain loop — so a callback cannot mutate _easy
+//   mid-iteration of the *current* drain pass. This protects only that single pass.
+//
+//   request() is NOT protected: it calls curl_multi_socket_action + check_multi_info()
+//   inline. If on_done calls request() synchronously, check_multi_info() re-enters
+//   recursively from inside the outer check_multi_info()'s callback-fire loop, which
+//   can mutate _easy/_sockets under the outer drain.
+//
+//   close() is similarly unsafe: it clears _easy/_sockets while the outer drain may
+//   hold iterators or pointers into those collections.
+//
+// Therefore: on_done must not call request() or close() synchronously. Defer follow-up
+// requests onto the loop (uvw idle/timer). If future callers require synchronous chaining,
+// add an explicit reentrancy guard (e.g. a processing-depth counter) — see DoH note.
 class HttpClient
 {
 public:
