@@ -91,6 +91,9 @@ size_t HttpClient::write_discard(char *, size_t size, size_t nmemb, void *)
 
 void HttpClient::request(const HttpRequest &req, ResultCallback on_done)
 {
+    if (_closed || !_multi) {
+        return; // client is closed; do not touch curl_multi
+    }
     auto ctx = std::make_unique<EasyContext>();
     ctx->on_done = std::move(on_done);
     CURL *easy = curl_easy_init();
@@ -122,6 +125,9 @@ void HttpClient::request(const HttpRequest &req, ResultCallback on_done)
 int HttpClient::timer_cb(CURLM *, long timeout_ms, void *userp)
 {
     auto *self = static_cast<HttpClient *>(userp);
+    if (self->_closed) {
+        return 0;
+    }
     if (!self->_timer) return 0;
     if (timeout_ms < 0) {
         self->_timer->stop();
@@ -174,7 +180,9 @@ int HttpClient::socket_cb(CURL *, curl_socket_t s, int what, void *userp, void *
     uvw::poll_handle::poll_event_flags ev{};
     if (what & CURL_POLL_IN) ev = ev | uvw::poll_handle::poll_event_flags::READABLE;
     if (what & CURL_POLL_OUT) ev = ev | uvw::poll_handle::poll_event_flags::WRITABLE;
-    sctx->poll->start(ev);
+    if (sctx->poll && !sctx->poll->closing()) {
+        sctx->poll->start(ev);
+    }
     return 0;
 }
 
