@@ -190,6 +190,21 @@ TEST_CASE("NetProbe DoH config: qname required", "[netprobe][config][doh]")
     CHECK_THROWS_WITH(stream.start(), "netprobe: 'qname' is required when test_type is 'doh'");
 }
 
+TEST_CASE("NetProbe DoH config: unsupported http_method rejected", "[netprobe][config][doh]")
+{
+    // test_type=doh only supports GET/POST; any other method must throw a clear error.
+    NetProbeInputStream stream{"net-probe-test-doh-badmethod"};
+    stream.config_set("test_type", "doh");
+    stream.config_set("qname", std::string("example.com"));
+    stream.config_set("http_method", std::string("PUT"));
+    auto targets = std::make_shared<visor::Configurable>();
+    auto target = std::make_shared<visor::Configurable>();
+    target->config_set("target", "https://1.1.1.1/dns-query");
+    targets->config_set<std::shared_ptr<visor::Configurable>>("cf_doh", target);
+    stream.config_set<std::shared_ptr<visor::Configurable>>("targets", targets);
+    CHECK_THROWS_WITH(stream.start(), "unsupported http_method 'PUT' for doh (use GET or POST)");
+}
+
 TEST_CASE("NetProbe DoH config: qname accepted", "[netprobe][config][doh]")
 {
     // test_type=doh with qname set must pass config validation
@@ -254,8 +269,10 @@ TEST_CASE("NetProbe HTTP e2e: success path records attempt, success, and 200 in 
         res.set_content("ok", "text/plain");
     });
     int port = svr.bind_to_any_port("127.0.0.1");
+    REQUIRE(port > 0);
     std::thread server_thread([&svr] { svr.listen_after_bind(); });
     ServerGuard guard{svr, server_thread};
+    svr.wait_until_ready();
 
     std::string url = "http://127.0.0.1:" + std::to_string(port) + "/ok";
 
@@ -318,8 +335,10 @@ TEST_CASE("NetProbe HTTP e2e: stop while request in flight does not crash or han
         res.set_content("late", "text/plain");
     });
     int port = svr.bind_to_any_port("127.0.0.1");
+    REQUIRE(port > 0);
     std::thread server_thread([&svr] { svr.listen_after_bind(); });
     ServerGuard guard{svr, server_thread};
+    svr.wait_until_ready();
 
     std::string url = "http://127.0.0.1:" + std::to_string(port) + "/slow";
 
@@ -380,6 +399,7 @@ TEST_CASE("NetProbe DoH e2e POST: success path records attempt, success, and NOE
         res.set_content(doh_body, "application/dns-message");
     });
     int port = svr.bind_to_any_port("127.0.0.1");
+    REQUIRE(port > 0);
     std::thread server_thread([&svr] { svr.listen_after_bind(); });
     ServerGuard guard{svr, server_thread};
     svr.wait_until_ready();
@@ -440,6 +460,7 @@ TEST_CASE("NetProbe DoH e2e GET: success path records attempt, success, and NOER
         res.set_content(doh_body, "application/dns-message");
     });
     int port = svr.bind_to_any_port("127.0.0.1");
+    REQUIRE(port > 0);
     std::thread server_thread([&svr] { svr.listen_after_bind(); });
     ServerGuard guard{svr, server_thread};
     svr.wait_until_ready();
@@ -506,6 +527,7 @@ TEST_CASE("NetProbe DoH e2e: stop while request in flight does not crash or hang
         res.set_content(body, "application/dns-message");
     });
     int port = svr.bind_to_any_port("127.0.0.1");
+    REQUIRE(port > 0);
     std::thread server_thread([&svr] { svr.listen_after_bind(); });
     ServerGuard guard{svr, server_thread};
     svr.wait_until_ready();

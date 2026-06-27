@@ -110,6 +110,9 @@ void NetProbeInputStream::start()
     // DoH method defaults to POST; reuse the http_method key if set. (Only meaningful for DoH streams.)
     if (_type == TestType::DOH) {
         _doh_method = config_exists("http_method") ? config_get<std::string>("http_method") : "POST";
+        if (_doh_method != "GET" && _doh_method != "POST") {
+            throw NetProbeException(fmt::format("unsupported http_method '{}' for doh (use GET or POST)", _doh_method));
+        }
     }
 
     if (!config_exists("targets")) {

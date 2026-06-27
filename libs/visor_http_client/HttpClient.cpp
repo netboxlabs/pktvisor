@@ -159,7 +159,24 @@ void HttpClient::request(const HttpRequest &req, ResultCallback on_done)
     curl_easy_setopt(easy, CURLOPT_PRIVATE, ctx.get());
     curl_easy_setopt(easy, CURLOPT_ERRORBUFFER, ctx->errbuf);
     _easy[easy] = std::move(ctx);
-    curl_multi_add_handle(_multi, easy);
+    if (curl_multi_add_handle(_multi, easy) != CURLM_OK) {
+        // add_handle failed: deliver a transport failure and drop the handle/context so it
+        // doesn't leak in _easy or stall the loop (the easy handle was never added to multi).
+        ResultCallback cb;
+        auto it = _easy.find(easy);
+        if (it != _easy.end()) {
+            cb = it->second->on_done;
+        }
+        curl_easy_cleanup(easy);
+        _easy.erase(easy); // frees the EasyContext (+ header slist via ~EasyContext)
+        if (cb) {
+            HttpResult fail;
+            fail.transport_ok = false;
+            fail.curl_code = CURLE_FAILED_INIT;
+            cb(fail);
+        }
+        return;
+    }
     // Kick the transfer immediately rather than relying solely on curl's timer callback
     // firing — matches curl's multi-socket examples and avoids a stalled first request.
     int running = 0;
