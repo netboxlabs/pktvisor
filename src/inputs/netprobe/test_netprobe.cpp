@@ -218,6 +218,23 @@ TEST_CASE("NetProbe DoH config: qname accepted", "[netprobe][config][doh]")
     CHECK_THROWS_WITH(stream.start(), "no targets specified");
 }
 
+TEST_CASE("NetProbe DoH config: qtype is normalized to uppercase", "[netprobe][config][doh]")
+{
+    // A lowercase qtype must be accepted (normalized to uppercase before lookup), matching the
+    // rest of the codebase. Verify via the rejection message: an invalid lowercase "zzz" is
+    // uppercased to "ZZZ" before the not-found error fires (which happens before any stream start).
+    NetProbeInputStream stream{"net-probe-test-doh-qtype-case"};
+    stream.config_set("test_type", "doh");
+    stream.config_set("qname", std::string("example.com"));
+    stream.config_set("qtype", std::string("zzz"));
+    auto targets = std::make_shared<visor::Configurable>();
+    auto target = std::make_shared<visor::Configurable>();
+    target->config_set("target", "https://1.1.1.1/dns-query");
+    targets->config_set<std::shared_ptr<visor::Configurable>>("cf_doh", target);
+    stream.config_set<std::shared_ptr<visor::Configurable>>("targets", targets);
+    CHECK_THROWS_WITH(stream.start(), "netprobe: unknown qtype 'ZZZ'");
+}
+
 TEST_CASE("NetProbe http/doh config: invalid target URL rejected", "[netprobe][config]")
 {
     // A target whose URL has a non-http(s) scheme must be rejected at config time with a clear error.

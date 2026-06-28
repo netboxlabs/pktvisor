@@ -25,6 +25,10 @@ static void ensure_curl_global_init()
 
 std::optional<std::string> validate_http_url(const std::string &url)
 {
+    // This may be the FIRST libcurl call (config validation runs before any HttpClient is
+    // constructed), and libcurl requires curl_global_init() before any other API. Ensure it
+    // (idempotent via std::call_once) so the URL API can't run pre-init on non-thread-safe builds.
+    ensure_curl_global_init();
     CURLU *h = curl_url();
     if (!h) {
         return std::nullopt; // allocation failure — can't validate, so don't reject

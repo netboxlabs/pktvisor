@@ -112,6 +112,14 @@ void NetProbeInputStream::start()
     }
     if (config_exists("qtype")) {
         _doh_qtype = config_get<std::string>("qtype");
+        // Normalize to uppercase before validation/lookup: QTypeNumbers is keyed by uppercase
+        // names (e.g. "AAAA"), and the DNS handler uppercases qtype inputs too — so "aaaa"
+        // should be accepted, consistent with the rest of the codebase.
+        for (auto &ch : _doh_qtype) {
+            if (ch >= 'a' && ch <= 'z') {
+                ch = static_cast<char>(ch - 'a' + 'A');
+            }
+        }
     }
     // DoH method defaults to POST; reuse the http_method key if set. (Only meaningful for DoH streams.)
     if (_type == TestType::DOH) {
