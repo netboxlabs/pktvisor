@@ -162,9 +162,12 @@ void HttpClient::request(const HttpRequest &req, ResultCallback on_done)
         curl_easy_setopt(easy, CURLOPT_CUSTOMREQUEST, req.method.c_str());
     }
     curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, req.follow_redirects ? 1L : 0L);
-    // Bound the redirect chain (curl's default is unlimited) so a redirect loop can't burn
-    // the whole timeout budget. curl 8.x already restricts followed protocols to HTTP/HTTPS.
+    // Bound the redirect chain (curl's default is unlimited) so a redirect loop can't burn the
+    // whole timeout budget, and restrict redirects to http/https. curl's DEFAULT redirect protocol
+    // set also permits ftp/ftps, so without this a `Location: ftp://...` would make an HTTP/DoH
+    // probe follow to a non-HTTP endpoint (unexpected outbound traffic + misleading results).
     curl_easy_setopt(easy, CURLOPT_MAXREDIRS, 10L);
+    curl_easy_setopt(easy, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
     curl_easy_setopt(easy, CURLOPT_SSL_VERIFYPEER, req.verify_tls ? 1L : 0L);
     curl_easy_setopt(easy, CURLOPT_SSL_VERIFYHOST, req.verify_tls ? 2L : 0L);
     if (req.timeout_ms) curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS, static_cast<long>(req.timeout_ms));

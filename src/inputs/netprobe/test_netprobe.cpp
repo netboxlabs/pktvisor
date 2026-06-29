@@ -306,7 +306,7 @@ TEST_CASE("NetProbe HTTP e2e: success path records attempt, success, and 200 in 
 
     std::string url = "http://127.0.0.1:" + std::to_string(port) + "/ok";
 
-    // Configure stream: interval=500ms, timeout=400ms (timeout < interval as required).
+    // Configure stream: interval=500ms, timeout=400ms (timeout must not exceed interval).
     // A 500ms interval gives ≥1 tick in the 1s sleep window.
     NetProbeInputStream stream{"netprobe-http-e2e"};
     stream.config_set("test_type", "http");
@@ -357,7 +357,7 @@ TEST_CASE("NetProbe HTTP e2e: stop while request in flight does not crash or han
     // The slow handler sleeps 500ms — longer than our start/stop window.
     // This test verifies that stop() returns cleanly even with a curl request in flight,
     // exercising the loop-quiescent teardown of curl poll handles (_http_client->close()).
-    // interval=300ms, timeout=250ms (timeout < interval); the /slow handler sleeps 500ms
+    // interval=300ms, timeout=250ms (timeout must not exceed interval); the /slow handler sleeps 500ms
     // so the request will still be in flight when we call stop() after 200ms.
     httplib::Server svr;
     svr.Get("/slow", [](const httplib::Request &, httplib::Response &res) {
@@ -374,7 +374,7 @@ TEST_CASE("NetProbe HTTP e2e: stop while request in flight does not crash or han
 
     NetProbeInputStream stream{"netprobe-http-e2e-inflight"};
     stream.config_set("test_type", "http");
-    // interval=300ms, timeout=250ms; timeout must be < interval.
+    // interval=300ms, timeout=250ms; timeout must not exceed interval.
     stream.config_set<uint64_t>("interval_msec", 300);
     stream.config_set<uint64_t>("timeout_msec", 250);
     auto targets = std::make_shared<visor::Configurable>();
@@ -690,6 +690,61 @@ TEST_CASE("NetProbe DoH e2e: malformed DNS response body is a DNS failure (not a
     c.config_set<uint64_t>("num_periods", 1);
     auto *proxy = stream.add_event_proxy(c);
     NetProbeStreamHandler handler{"netprobe-doh-e2e-malformed", proxy, &c};
+
+    handler.start();
+    stream.start();
+    std::this_thread::sleep_for(750ms);
+    stream.stop();
+    handler.stop();
+
+    json j;
+    handler.metrics()->bucket(0)->to_json(j);
+    REQUIRE(j["targets"].contains("doh_target"));
+    auto &tgt = j["targets"]["doh_target"];
+    CHECK(tgt["attempts"].get<int>() >= 1);
+    CHECK(tgt["successes"].get<int>() == 0);
+    CHECK(tgt["dns_response_failures"].get<int>() >= 1);
+}
+
+TEST_CASE("NetProbe DoH e2e: response declaring more answers than present is a DNS failure", "[netprobe][doh][e2e]")
+{
+    // NOERROR with a valid echoed question, but the header declares more answers than the body
+    // contains (a truncated/incomplete answer section). pcpp parses fewer records than declared,
+    // so this must be rejected, never counted as a success.
+    httplib::Server svr;
+    std::string body = make_doh_response(); // valid: 1 answer, ANCOUNT=1
+    // Corrupt ANCOUNT (DNS header bytes 6-7, network byte order) to claim 2 answers while only 1 is present.
+    REQUIRE(body.size() > 7);
+    body[6] = 0x00;
+    body[7] = 0x02;
+    svr.Post("/dns-query", [&](const httplib::Request &, httplib::Response &res) {
+        res.set_content(body, "application/dns-message");
+    });
+    svr.Get("/dns-query", [&](const httplib::Request &, httplib::Response &res) {
+        res.set_content(body, "application/dns-message");
+    });
+    int port = svr.bind_to_any_port("127.0.0.1");
+    REQUIRE(port > 0);
+    std::thread server_thread([&svr] { svr.listen_after_bind(); });
+    ServerGuard guard{svr, server_thread};
+    svr.wait_until_ready();
+
+    std::string url = "http://127.0.0.1:" + std::to_string(port) + "/dns-query";
+    NetProbeInputStream stream{"netprobe-doh-e2e-truncated"};
+    stream.config_set("test_type", "doh");
+    stream.config_set("qname", std::string("example.com"));
+    stream.config_set<uint64_t>("interval_msec", 200);
+    stream.config_set<uint64_t>("timeout_msec", 150);
+    auto targets = std::make_shared<visor::Configurable>();
+    auto target = std::make_shared<visor::Configurable>();
+    target->config_set("target", url);
+    targets->config_set<std::shared_ptr<visor::Configurable>>("doh_target", target);
+    stream.config_set<std::shared_ptr<visor::Configurable>>("targets", targets);
+
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 1);
+    auto *proxy = stream.add_event_proxy(c);
+    NetProbeStreamHandler handler{"netprobe-doh-e2e-truncated", proxy, &c};
 
     handler.start();
     stream.start();

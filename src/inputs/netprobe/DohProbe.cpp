@@ -50,6 +50,29 @@ static bool doh_content_type_ok(const std::string &ct)
     return iequals(base, "application/dns-message");
 }
 
+// Verify the response's answer + authority sections fully parsed. pcpp's getAnswerCount()/
+// getAuthorityCount() return the HEADER-DECLARED counts, while parseResources() silently stops at
+// the first record that runs past the buffer — so a truncated/malformed section leaves the parsed
+// record list shorter than declared. Comparing parsed vs declared catches that. A valid NODATA
+// response (0 answers) passes (declared==parsed==0). The additional section is intentionally NOT
+// checked: it commonly carries an EDNS OPT record, and we don't want any OPT-parsing edge case to
+// false-reject a healthy resolver.
+static bool doh_response_fully_parsed(pcpp::DnsLayer &dns)
+{
+    size_t answers_parsed = 0;
+    for (auto *r = dns.getFirstAnswer(); r != nullptr; r = dns.getNextAnswer(r)) {
+        ++answers_parsed;
+    }
+    if (answers_parsed < dns.getAnswerCount()) {
+        return false;
+    }
+    size_t authority_parsed = 0;
+    for (auto *r = dns.getFirstAuthority(); r != nullptr; r = dns.getNextAuthority(r)) {
+        ++authority_parsed;
+    }
+    return authority_parsed >= dns.getAuthorityCount();
+}
+
 // RFC 4648 §5 base64url, no padding (for DoH GET ?dns=).
 static std::string base64url(const std::string &in)
 {
@@ -146,12 +169,24 @@ bool DohProbe::start(std::shared_ptr<uvw::loop> io_loop)
                         // Validate the response echoes our question (qname + qtype) per RFC 8484,
                         // so a mismatched/unrelated answer isn't counted as a success.
                         auto *query = dns.getFirstQuery();
-                        if (query && static_cast<uint16_t>(query->getDnsType()) == qtype_code && iequals(query->getName(), qname)) {
+                        if (!(query && static_cast<uint16_t>(query->getDnsType()) == qtype_code && iequals(query->getName(), qname))) {
+                            if (logger) {
+                                logger->debug("netprobe doh[{}]: response question mismatch (got '{}' type {})", name,
+                                    query ? query->getName() : std::string("<none>"), query ? static_cast<int>(query->getDnsType()) : -1);
+                            }
+                        } else if (h->truncation) {
+                            // Server set the TC (truncated) bit (RFC 1035 §4.1.1): the response is incomplete.
+                            if (logger) {
+                                logger->debug("netprobe doh[{}]: response has the TC (truncated) bit set", name);
+                            }
+                        } else if (!doh_response_fully_parsed(dns)) {
+                            // A declared answer/authority record failed to parse (truncated/malformed).
+                            if (logger) {
+                                logger->debug("netprobe doh[{}]: response truncated/malformed (a declared record did not parse)", name);
+                            }
+                        } else {
                             parse_ok = true;
                             rcode = h->responseCode;
-                        } else if (logger) {
-                            logger->debug("netprobe doh[{}]: response question mismatch (got '{}' type {})", name,
-                                query ? query->getName() : std::string("<none>"), query ? static_cast<int>(query->getDnsType()) : -1);
                         }
                     }
                 } else if (logger) {
