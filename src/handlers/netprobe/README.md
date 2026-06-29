@@ -127,7 +127,7 @@ All metrics are per-target (keyed by the name given in the `targets` config map)
 | `connect_failures` | TCP/socket connection failures |
 | `dns_lookup_failures` | DNS resolution failures |
 | `packets_timeout` | Probes that timed out |
-| `http_status_failures` | HTTP responses with a 4xx/5xx (or unexpected) status code |
+| `http_status_failures` | HTTP/DoH responses with any HTTP status outside 2xx/3xx (e.g. 4xx/5xx, and also 1xx or 0) |
 | `top_status_codes` | Top HTTP status codes observed (e.g. `"200"`, `"404"`, `"503"`) |
 | `dns_response_failures` | DoH responses with HTTP 2xx/3xx but a non-NOERROR or unparseable DNS rcode |
 | `top_rcodes` | Top DNS response codes observed in DoH probes (e.g. `"NOERROR"`, `"NXDOMAIN"`, `"SRVFAIL"`, `"PARSE_ERROR"`) |

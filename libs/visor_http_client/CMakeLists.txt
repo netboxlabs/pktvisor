@@ -6,6 +6,9 @@ find_package(httplib REQUIRED)
 find_package(Catch2 REQUIRED)
 
 add_library(VisorHttpClient STATIC HttpClient.cpp)
+# Namespaced alias for consistency with the other libs (Visor::Lib::Dns, Visor::Lib::Tcp, ...)
+# and cleaner downstream consumption.
+add_library(Visor::Lib::Http ALIAS VisorHttpClient)
 target_include_directories(VisorHttpClient PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(VisorHttpClient PUBLIC CURL::libcurl uvw::uvw)
 

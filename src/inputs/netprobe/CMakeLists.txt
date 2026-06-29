@@ -22,7 +22,7 @@ target_link_libraries(VisorInputNetProbe
         Visor::Core
         Visor::Lib::Tcp
         Visor::Lib::Dns
-        VisorHttpClient
+        Visor::Lib::Http
         uvw::uvw
         )
 
