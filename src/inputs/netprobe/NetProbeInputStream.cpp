@@ -3,10 +3,14 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #include "NetProbeInputStream.h"
+#include "DohProbe.h"
+#include "HttpClient.h"
+#include "HttpProbe.h"
 #include "NetProbeException.h"
 #include "PingProbe.h"
 #include "TcpProbe.h"
 #include "ThreadName.h"
+#include "dns.h"
 #include <fmt/ranges.h>
 #ifdef __GNUC__
 #pragma GCC diagnostic push
@@ -93,6 +97,38 @@ void NetProbeInputStream::start()
         }
     }
 
+    if (config_exists("http_method")) {
+        _http_method = config_get<std::string>("http_method");
+    }
+
+    if (config_exists("qname")) {
+        _doh_qname = config_get<std::string>("qname");
+        // Normalize a trailing dot (FQDN form, e.g. "example.com."): pcpp encodes/decodes names
+        // without it, so keeping it would both corrupt the query wire and break the response
+        // question-echo comparison in DohProbe. Guard size>1 so the root "." isn't emptied.
+        if (_doh_qname.size() > 1 && _doh_qname.back() == '.') {
+            _doh_qname.pop_back();
+        }
+    }
+    if (config_exists("qtype")) {
+        _doh_qtype = config_get<std::string>("qtype");
+        // Normalize to uppercase before validation/lookup: QTypeNumbers is keyed by uppercase
+        // names (e.g. "AAAA"), and the DNS handler uppercases qtype inputs too — so "aaaa"
+        // should be accepted, consistent with the rest of the codebase.
+        for (auto &ch : _doh_qtype) {
+            if (ch >= 'a' && ch <= 'z') {
+                ch = static_cast<char>(ch - 'a' + 'A');
+            }
+        }
+    }
+    // DoH method defaults to POST; reuse the http_method key if set. (Only meaningful for DoH streams.)
+    if (_type == TestType::DOH) {
+        _doh_method = config_exists("http_method") ? config_get<std::string>("http_method") : "POST";
+        if (_doh_method != "GET" && _doh_method != "POST") {
+            throw NetProbeException(fmt::format("unsupported http_method '{}' for doh (use GET or POST)", _doh_method));
+        }
+    }
+
     if (!config_exists("targets")) {
         throw NetProbeException("no targets specified");
     } else {
@@ -102,6 +138,22 @@ void NetProbeInputStream::start()
             auto config = targets->config_get<std::shared_ptr<Configurable>>(key);
             if (!config->config_exists("target")) {
                 throw NetProbeException(fmt::format("'{}' does not have key 'target' which is required", key));
+            }
+            if (_type == TestType::HTTP) {
+                auto url = config->config_get<std::string>("target");
+                if (auto err = visor::http::validate_http_url(url)) {
+                    throw NetProbeException(fmt::format("target '{}' {}", key, *err));
+                }
+                _http_targets[key] = url;
+                continue;
+            }
+            if (_type == TestType::DOH) {
+                auto url = config->config_get<std::string>("target");
+                if (auto err = visor::http::validate_http_url(url)) {
+                    throw NetProbeException(fmt::format("target '{}' {}", key, *err));
+                }
+                _doh_targets[key] = url;
+                continue;
             }
             uint32_t port{0};
             if (!config->config_exists("port") && _type == TestType::TCP) {
@@ -137,6 +189,15 @@ void NetProbeInputStream::start()
         }
     }
 
+    if (_type == TestType::DOH) {
+        if (_doh_qname.empty()) {
+            throw NetProbeException("netprobe: 'qname' is required when test_type is 'doh'");
+        }
+        if (visor::lib::dns::QTypeNumbers.find(_doh_qtype) == visor::lib::dns::QTypeNumbers.end()) {
+            throw NetProbeException(fmt::format("netprobe: unknown qtype '{}'", _doh_qtype));
+        }
+    }
+
     _create_netprobe_loop();
 
     _running = true;
@@ -163,6 +224,22 @@ void NetProbeInputStream::_fail_cb(ErrorType error, TestType type, const std::st
     std::shared_lock lock(_input_mutex);
     for (auto &proxy : _event_proxies) {
         static_cast<NetProbeInputEventProxy *>(proxy.get())->probe_fail_cb(error, type, name);
+    }
+}
+
+void NetProbeInputStream::_http_result_cb(uint16_t status, visor::http::HttpTimings t, const std::string &name, timespec stamp)
+{
+    std::shared_lock lock(_input_mutex);
+    for (auto &proxy : _event_proxies) {
+        static_cast<NetProbeInputEventProxy *>(proxy.get())->probe_http_result_cb(status, t, name, stamp);
+    }
+}
+
+void NetProbeInputStream::_doh_result_cb(uint16_t http_status, uint8_t rcode, bool parse_ok, visor::http::HttpTimings t, const std::string &name, timespec stamp)
+{
+    std::shared_lock lock(_input_mutex);
+    for (auto &proxy : _event_proxies) {
+        static_cast<NetProbeInputEventProxy *>(proxy.get())->probe_doh_result_cb(http_status, rcode, parse_ok, t, name, stamp);
     }
 }
 
@@ -193,6 +270,9 @@ void NetProbeInputStream::_create_netprobe_loop()
                 probe->stop();
             }
         }
+        if ((_type == TestType::HTTP || _type == TestType::DOH) && _http_client) {
+            _http_client->close();
+        }
         _io_loop->stop();
         handle.close();
     });
@@ -200,6 +280,10 @@ void NetProbeInputStream::_create_netprobe_loop()
         _logger->error("[{}] AsyncEvent error: {}", _name, err.what());
         handle.close();
     });
+
+    if (_type == TestType::HTTP || _type == TestType::DOH) {
+        _http_client = std::make_shared<visor::http::HttpClient>(_io_loop);
+    }
 
     _timer = _io_loop->resource<uvw::timer_handle>();
     if (!_timer) {
@@ -255,6 +339,32 @@ void NetProbeInputStream::_create_netprobe_loop()
         _probes.push_back(std::move(probe));
     }
 
+    for (const auto &[key, url] : _http_targets) {
+        auto probe = std::make_unique<HttpProbe>(_id, key, url, _http_method, _http_client,
+            [this](uint16_t status, visor::http::HttpTimings t, const std::string &name, timespec stamp) { _http_result_cb(status, t, name, stamp); });
+        ++_id;
+        probe->set_configs(_interval_msec, _timeout_msec, _packets_per_test, _packets_interval_msec, _packet_payload_size);
+        probe->set_callbacks([this](pcpp::Packet &payload, TestType type, const std::string &name, timespec stamp) { _send_cb(payload, type, name, stamp); },
+            [this](pcpp::Packet &payload, TestType type, const std::string &name, timespec stamp) { _recv_cb(payload, type, name, stamp); },
+            [this](ErrorType error, TestType type, const std::string &name) { _fail_cb(error, type, name); });
+        probe->start(_io_loop);
+        _probes.push_back(std::move(probe));
+    }
+
+    for (const auto &[key, url] : _doh_targets) {
+        auto probe = std::make_unique<DohProbe>(_id, key, url, _doh_method, _doh_qname, _doh_qtype, _http_client,
+            [this](uint16_t http_status, uint8_t rcode, bool parse_ok, visor::http::HttpTimings t, const std::string &name, timespec stamp) {
+                _doh_result_cb(http_status, rcode, parse_ok, t, name, stamp);
+            });
+        ++_id;
+        probe->set_configs(_interval_msec, _timeout_msec, _packets_per_test, _packets_interval_msec, _packet_payload_size);
+        probe->set_callbacks([this](pcpp::Packet &payload, TestType type, const std::string &name, timespec stamp) { _send_cb(payload, type, name, stamp); },
+            [this](pcpp::Packet &payload, TestType type, const std::string &name, timespec stamp) { _recv_cb(payload, type, name, stamp); },
+            [this](ErrorType error, TestType type, const std::string &name) { _fail_cb(error, type, name); });
+        probe->start(_io_loop);
+        _probes.push_back(std::move(probe));
+    }
+
     // spawn the loop
     _io_thread = std::make_unique<std::thread>([this] {
         _timer->start(uvw::timer_handle::time{1000}, uvw::timer_handle::time{HEARTBEAT_INTERVAL * 1000});
@@ -296,7 +406,7 @@ void NetProbeInputStream::stop()
 void NetProbeInputStream::info_json(json &j) const
 {
     common_info_json(j);
-    j[schema_key()]["current_targets_total"] = _dns_list.size() + _ip_list.size();
+    j[schema_key()]["current_targets_total"] = _dns_list.size() + _ip_list.size() + _http_targets.size() + _doh_targets.size();
     // Report ping socket usage only for ping streams. Derive the probe count from _probes — a stable
     // per-stream member after start() — rather than a thread_local counter, which info_json (invoked
     // on an HTTP worker thread) could never read. The two addends are the shared receiver's v4 socket

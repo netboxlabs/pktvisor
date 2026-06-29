@@ -4,6 +4,7 @@
 
 #include "NetProbeStreamHandler.h"
 #include "PrometheusSerializer.h"
+#include "dns.h"
 
 namespace visor::handler::netprobe {
 
@@ -51,6 +52,8 @@ void NetProbeStreamHandler::start()
         _probe_recv_connection = _netprobe_proxy->probe_recv_signal.connect(&NetProbeStreamHandler::probe_signal_recv, this);
         _probe_fail_connection = _netprobe_proxy->probe_fail_signal.connect(&NetProbeStreamHandler::probe_signal_fail, this);
         _heartbeat_connection = _netprobe_proxy->heartbeat_signal.connect(&NetProbeStreamHandler::check_period_shift, this);
+        _probe_http_result_connection = _netprobe_proxy->probe_http_result_signal.connect(&NetProbeStreamHandler::probe_signal_http_result, this);
+        _probe_doh_result_connection = _netprobe_proxy->probe_doh_result_signal.connect(&NetProbeStreamHandler::probe_signal_doh_result, this);
     }
 
     _running = true;
@@ -67,6 +70,8 @@ void NetProbeStreamHandler::stop()
         _probe_recv_connection.disconnect();
         _probe_fail_connection.disconnect();
         _heartbeat_connection.disconnect();
+        _probe_http_result_connection.disconnect();
+        _probe_doh_result_connection.disconnect();
     }
 
     _running = false;
@@ -102,9 +107,25 @@ void NetProbeStreamHandler::probe_signal_recv(pcpp::Packet &payload, TestType ty
     }
 }
 
-void NetProbeStreamHandler::probe_signal_fail(ErrorType error, [[maybe_unused]] TestType type, const std::string &name)
+void NetProbeStreamHandler::probe_signal_fail(ErrorType error, TestType type, const std::string &name)
 {
-    _metrics->process_failure(error, name);
+    if (type == TestType::HTTP) {
+        _metrics->process_netprobe_http_failure(error, name);
+    } else if (type == TestType::DOH) {
+        _metrics->process_netprobe_doh_failure(error, name);
+    } else {
+        _metrics->process_failure(error, name);
+    }
+}
+
+void NetProbeStreamHandler::probe_signal_http_result(uint16_t status, visor::http::HttpTimings timings, const std::string &name, timespec stamp)
+{
+    _metrics->process_netprobe_http_result(status, timings, name, stamp);
+}
+
+void NetProbeStreamHandler::probe_signal_doh_result(uint16_t http_status, uint8_t rcode, bool parse_ok, visor::http::HttpTimings timings, const std::string &name, timespec stamp)
+{
+    _metrics->process_netprobe_doh_result(http_status, rcode, parse_ok, timings, name, stamp);
 }
 
 void NetProbeMetricsBucket::specialized_merge(const AbstractMetricsBucket &o, Metric::Aggregate agg_operator)
@@ -127,12 +148,22 @@ void NetProbeMetricsBucket::specialized_merge(const AbstractMetricsBucket &o, Me
             _targets_metrics[targetId]->connect_failures += target.second->connect_failures;
             _targets_metrics[targetId]->dns_failures += target.second->dns_failures;
             _targets_metrics[targetId]->timed_out += target.second->timed_out;
+            _targets_metrics[targetId]->http_status_failures += target.second->http_status_failures;
+            _targets_metrics[targetId]->top_status_codes.merge(target.second->top_status_codes);
+            _targets_metrics[targetId]->dns_response_failures += target.second->dns_response_failures;
+            _targets_metrics[targetId]->top_rcodes.merge(target.second->top_rcodes);
         }
         if (group_enabled(group::NetProbeMetrics::Histograms)) {
             _targets_metrics[targetId]->h_time_us.merge(target.second->h_time_us);
         }
         if (group_enabled(group::NetProbeMetrics::Quantiles)) {
             _targets_metrics[targetId]->q_time_us.merge(target.second->q_time_us, agg_operator);
+        }
+        if (group_enabled(group::NetProbeMetrics::HttpResponsePhases)) {
+            _targets_metrics[targetId]->q_dns_us.merge(target.second->q_dns_us, agg_operator);
+            _targets_metrics[targetId]->q_connect_us.merge(target.second->q_connect_us, agg_operator);
+            _targets_metrics[targetId]->q_tls_us.merge(target.second->q_tls_us, agg_operator);
+            _targets_metrics[targetId]->q_ttfb_us.merge(target.second->q_ttfb_us, agg_operator);
         }
     }
 }
@@ -152,6 +183,10 @@ void NetProbeMetricsBucket::to_prometheus(PrometheusSerializer &ser, Metric::Lab
             target.second->connect_failures.to_prometheus(ser, target_labels);
             target.second->dns_failures.to_prometheus(ser, target_labels);
             target.second->timed_out.to_prometheus(ser, target_labels);
+            target.second->http_status_failures.to_prometheus(ser, target_labels);
+            target.second->top_status_codes.to_prometheus(ser, target_labels);
+            target.second->dns_response_failures.to_prometheus(ser, target_labels);
+            target.second->top_rcodes.to_prometheus(ser, target_labels);
         }
 
         bool h_max_min{true};
@@ -190,6 +225,16 @@ void NetProbeMetricsBucket::to_prometheus(PrometheusSerializer &ser, Metric::Lab
             } catch (const std::exception &) {
             }
         }
+
+        if (group_enabled(group::NetProbeMetrics::HttpResponsePhases)) {
+            try {
+                target.second->q_dns_us.to_prometheus(ser, target_labels);
+                target.second->q_connect_us.to_prometheus(ser, target_labels);
+                target.second->q_tls_us.to_prometheus(ser, target_labels);
+                target.second->q_ttfb_us.to_prometheus(ser, target_labels);
+            } catch (const std::exception &) {
+            }
+        }
     }
 }
 
@@ -208,6 +253,10 @@ void NetProbeMetricsBucket::to_opentelemetry(metrics::v1::ScopeMetrics &scope, t
             target.second->connect_failures.to_opentelemetry(scope, start_ts, end_ts, target_labels);
             target.second->dns_failures.to_opentelemetry(scope, start_ts, end_ts, target_labels);
             target.second->timed_out.to_opentelemetry(scope, start_ts, end_ts, target_labels);
+            target.second->http_status_failures.to_opentelemetry(scope, start_ts, end_ts, target_labels);
+            target.second->top_status_codes.to_opentelemetry(scope, start_ts, end_ts, target_labels);
+            target.second->dns_response_failures.to_opentelemetry(scope, start_ts, end_ts, target_labels);
+            target.second->top_rcodes.to_opentelemetry(scope, start_ts, end_ts, target_labels);
         }
 
         bool h_max_min{true};
@@ -246,6 +295,16 @@ void NetProbeMetricsBucket::to_opentelemetry(metrics::v1::ScopeMetrics &scope, t
             } catch (const std::exception &) {
             }
         }
+
+        if (group_enabled(group::NetProbeMetrics::HttpResponsePhases)) {
+            try {
+                target.second->q_dns_us.to_opentelemetry(scope, start_ts, end_ts, target_labels);
+                target.second->q_connect_us.to_opentelemetry(scope, start_ts, end_ts, target_labels);
+                target.second->q_tls_us.to_opentelemetry(scope, start_ts, end_ts, target_labels);
+                target.second->q_ttfb_us.to_opentelemetry(scope, start_ts, end_ts, target_labels);
+            } catch (const std::exception &) {
+            }
+        }
     }
 }
 
@@ -263,6 +322,10 @@ void NetProbeMetricsBucket::to_json(json &j) const
             target.second->connect_failures.to_json(j["targets"][targetId]);
             target.second->dns_failures.to_json(j["targets"][targetId]);
             target.second->timed_out.to_json(j["targets"][targetId]);
+            target.second->http_status_failures.to_json(j["targets"][targetId]);
+            target.second->top_status_codes.to_json(j["targets"][targetId]);
+            target.second->dns_response_failures.to_json(j["targets"][targetId]);
+            target.second->top_rcodes.to_json(j["targets"][targetId]);
         }
 
         bool h_max_min{true};
@@ -301,6 +364,16 @@ void NetProbeMetricsBucket::to_json(json &j) const
             } catch (const std::exception &) {
             }
         }
+
+        if (group_enabled(group::NetProbeMetrics::HttpResponsePhases)) {
+            try {
+                target.second->q_dns_us.to_json(j["targets"][targetId]);
+                target.second->q_connect_us.to_json(j["targets"][targetId]);
+                target.second->q_tls_us.to_json(j["targets"][targetId]);
+                target.second->q_ttfb_us.to_json(j["targets"][targetId]);
+            } catch (const std::exception &) {
+            }
+        }
     }
 }
 
@@ -310,6 +383,7 @@ void NetProbeMetricsBucket::process_filtered()
 
 void NetProbeMetricsBucket::process_failure(ErrorType error, const std::string &target)
 {
+    std::unique_lock lock(_mutex);
     if (!_targets_metrics.count(target)) {
         _targets_metrics[target] = std::make_unique<Target>();
     }
@@ -340,6 +414,7 @@ bool NetProbeStreamHandler::_filtering([[maybe_unused]] pcpp::Packet *payload)
 
 void NetProbeMetricsBucket::process_attempts([[maybe_unused]] bool deep, const std::string &target)
 {
+    std::unique_lock lock(_mutex);
     if (!_targets_metrics.count(target)) {
         _targets_metrics[target] = std::make_unique<Target>();
     }
@@ -446,6 +521,124 @@ void NetProbeMetricsManager::process_filtered(timespec stamp)
     // base event, no sample
     new_event(stamp, false);
     live_bucket()->process_filtered();
+}
+
+void NetProbeMetricsBucket::process_netprobe_http(bool deep, uint16_t status, const visor::http::HttpTimings &timings, const std::string &target)
+{
+    // Take _mutex like new_transaction — both mutate q_time_us/h_time_us sketches
+    // and the TopN which the scrape thread reads under shared_lock.
+    // process_failure/process_attempts also lock _mutex (for their map insert), but
+    // their callers always invoke them sequentially — never while this lock is held.
+    std::unique_lock lock(_mutex);
+
+    if (!_targets_metrics.count(target)) {
+        _targets_metrics[target] = std::make_unique<Target>();
+    }
+    auto &t = *_targets_metrics[target];
+
+    // Counters (status outcome) are always recorded when the group is on —
+    // like new_transaction's successes++ (not gated on `deep`).
+    if (group_enabled(group::NetProbeMetrics::Counters)) {
+        t.top_status_codes.update(std::to_string(status));
+        if (status >= 200 && status < 400) {
+            ++t.successes;
+        } else {
+            ++t.http_status_failures;
+        }
+    }
+
+    // Sketches are gated on `deep` (deep sampling) exactly like new_transaction.
+    // Histograms is default-ON and drives response_min_us/max_us via h_time_us.
+    if (deep && group_enabled(group::NetProbeMetrics::Histograms)) {
+        t.h_time_us.update(timings.total_us);
+    }
+    if (deep && group_enabled(group::NetProbeMetrics::Quantiles)) {
+        t.q_time_us.update(timings.total_us);
+    }
+    if (deep && group_enabled(group::NetProbeMetrics::HttpResponsePhases)) {
+        t.q_dns_us.update(timings.dns_us);
+        t.q_connect_us.update(timings.connect_us);
+        t.q_tls_us.update(timings.tls_us);
+        t.q_ttfb_us.update(timings.ttfb_us);
+    }
+}
+
+void NetProbeMetricsManager::process_netprobe_http_result(uint16_t status, const visor::http::HttpTimings &timings, const std::string &target, timespec stamp)
+{
+    new_event(stamp);
+    live_bucket()->process_attempts(_deep_sampling_now, target);
+    live_bucket()->process_netprobe_http(_deep_sampling_now, status, timings, target);
+}
+
+void NetProbeMetricsManager::process_netprobe_http_failure(ErrorType error, const std::string &target)
+{
+    timespec stamp;
+    std::timespec_get(&stamp, TIME_UTC);
+    new_event(stamp);
+    live_bucket()->process_attempts(_deep_sampling_now, target);
+    live_bucket()->process_failure(error, target);
+}
+
+void NetProbeMetricsBucket::process_netprobe_doh(bool deep, uint16_t http_status, uint8_t rcode, bool parse_ok, const visor::http::HttpTimings &timings, const std::string &target)
+{
+    std::unique_lock lock(_mutex);
+
+    if (!_targets_metrics.count(target)) {
+        _targets_metrics[target] = std::make_unique<Target>();
+    }
+    auto &t = *_targets_metrics[target];
+
+    if (group_enabled(group::NetProbeMetrics::Counters)) {
+        // DoH responses are HTTP responses too: record the HTTP status breakdown (like the HTTP
+        // probe) in addition to the DNS rcode breakdown below.
+        t.top_status_codes.update(std::to_string(http_status));
+        if (http_status >= 200 && http_status < 400) {
+            std::string rname;
+            if (!parse_ok) {
+                rname = "PARSE_ERROR";
+            } else {
+                auto it = visor::lib::dns::RCodeNames.find(rcode);
+                rname = (it != visor::lib::dns::RCodeNames.end()) ? it->second : std::to_string(rcode);
+            }
+            t.top_rcodes.update(rname);
+            if (parse_ok && rcode == 0) {
+                ++t.successes;
+            } else {
+                ++t.dns_response_failures;
+            }
+        } else {
+            ++t.http_status_failures;
+        }
+    }
+
+    if (deep && group_enabled(group::NetProbeMetrics::Histograms)) {
+        t.h_time_us.update(timings.total_us);
+    }
+    if (deep && group_enabled(group::NetProbeMetrics::Quantiles)) {
+        t.q_time_us.update(timings.total_us);
+    }
+    if (deep && group_enabled(group::NetProbeMetrics::HttpResponsePhases)) {
+        t.q_dns_us.update(timings.dns_us);
+        t.q_connect_us.update(timings.connect_us);
+        t.q_tls_us.update(timings.tls_us);
+        t.q_ttfb_us.update(timings.ttfb_us);
+    }
+}
+
+void NetProbeMetricsManager::process_netprobe_doh_result(uint16_t http_status, uint8_t rcode, bool parse_ok, const visor::http::HttpTimings &timings, const std::string &target, timespec stamp)
+{
+    new_event(stamp);
+    live_bucket()->process_attempts(_deep_sampling_now, target);
+    live_bucket()->process_netprobe_doh(_deep_sampling_now, http_status, rcode, parse_ok, timings, target);
+}
+
+void NetProbeMetricsManager::process_netprobe_doh_failure(ErrorType error, const std::string &target)
+{
+    timespec stamp;
+    std::timespec_get(&stamp, TIME_UTC);
+    new_event(stamp);
+    live_bucket()->process_attempts(_deep_sampling_now, target);
+    live_bucket()->process_failure(error, target);
 }
 
 }
