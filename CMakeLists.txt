@@ -108,12 +108,11 @@ enable_testing()
 
 message(STATUS "Building pktvisor version ${CMAKE_PROJECT_VERSION_MAJOR}.${CMAKE_PROJECT_VERSION_MINOR}.${CMAKE_PROJECT_VERSION_PATCH}${VISOR_PRERELEASE}")
 
-# opentelemetry-cpp 1.26.0 generates proto headers with dllexport_decl=OPENTELEMETRY_PROTO_API; the Conan recipe doesn't propagate the macro. On Windows the proto package is a DLL (consumers must import); elsewhere it expands to nothing.
-if(WIN32)
-    add_compile_definitions("OPENTELEMETRY_PROTO_API=__declspec(dllimport)")
-else()
-    add_compile_definitions(OPENTELEMETRY_PROTO_API=)
-endif()
+# opentelemetry-cpp generates its proto headers with dllexport_decl=OPENTELEMETRY_PROTO_API and the
+# Conan recipe does not propagate the macro to consumers. The recipe builds opentelemetry_proto as a
+# static library on every platform (the shared option is removed on Windows), so the macro must
+# expand to nothing; declaring dllimport against a static .lib leaves every proto symbol unresolved.
+add_compile_definitions(OPENTELEMETRY_PROTO_API=)
 
 add_subdirectory(3rd)
 add_subdirectory(libs)
