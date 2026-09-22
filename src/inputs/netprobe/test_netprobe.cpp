@@ -168,6 +168,56 @@ TEST_CASE("NetProbe ip_version config", "[netprobe][config][ipv6]")
     }
 }
 
+TEST_CASE("NetProbe ip_version config: literal IPv6 target is auto-detected and routed to a probe", "[netprobe][config][ipv6]")
+{
+    // Design-spec test #3. A ping stream cannot start unprivileged (the shared receiver opens raw
+    // sockets), so exercise the literal-target parse/route path — shared by ping and tcp — through
+    // the tcp test type: "::1" must be accepted as an IPv6 literal without any ip_version hint,
+    // survive start(), and be counted as one target.
+    NetProbeInputStream stream{"net-probe-test-v6-literal"};
+    stream.config_set("test_type", "tcp");
+    stream.config_set<uint64_t>("interval_msec", 60000);
+    stream.config_set<uint64_t>("timeout_msec", 100);
+    auto targets = std::make_shared<visor::Configurable>();
+    auto target = std::make_shared<visor::Configurable>();
+    target->config_set("target", "::1");
+    target->config_set<uint64_t>("port", 9);
+    targets->config_set<std::shared_ptr<visor::Configurable>>("v6_literal", target);
+    stream.config_set<std::shared_ptr<visor::Configurable>>("targets", targets);
+
+    CHECK_NOTHROW(stream.start());
+    nlohmann::json j;
+    stream.info_json(j);
+    CHECK(j[stream.schema_key()]["current_targets_total"] == 1);
+    CHECK(j["module"]["config"]["targets"]["v6_literal"]["target"] == "::1");
+    CHECK_NOTHROW(stream.stop());
+}
+
+TEST_CASE("NetProbe ip_version config: DNS target with ip_version 6 round-trips through start and info_json", "[netprobe][config][ipv6]")
+{
+    // Design-spec test #4: a DNS (non-literal) target may carry ip_version: 6. It must parse,
+    // reach start() as a DNS-entry probe, and echo the per-target ip_version back via info_json.
+    // Same tcp-instead-of-ping justification as the literal-IPv6 case above.
+    NetProbeInputStream stream{"net-probe-test-v6-dns"};
+    stream.config_set("test_type", "tcp");
+    stream.config_set<uint64_t>("interval_msec", 60000);
+    stream.config_set<uint64_t>("timeout_msec", 100);
+    auto targets = std::make_shared<visor::Configurable>();
+    auto target = std::make_shared<visor::Configurable>();
+    target->config_set("target", "localhost");
+    target->config_set<uint64_t>("port", 9);
+    target->config_set<uint64_t>("ip_version", 6);
+    targets->config_set<std::shared_ptr<visor::Configurable>>("v6_dns", target);
+    stream.config_set<std::shared_ptr<visor::Configurable>>("targets", targets);
+
+    CHECK_NOTHROW(stream.start());
+    nlohmann::json j;
+    stream.info_json(j);
+    CHECK(j[stream.schema_key()]["current_targets_total"] == 1);
+    CHECK(j["module"]["config"]["targets"]["v6_dns"]["ip_version"] == 6);
+    CHECK_NOTHROW(stream.stop());
+}
+
 TEST_CASE("NetProbe http_method config validates", "[netprobe][config][http]")
 {
     // Validates that the http_method key is accepted by validate_configs (no throw before
