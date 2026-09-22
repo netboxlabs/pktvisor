@@ -37,9 +37,6 @@ class Pktvisor(ConanFile):
 
     def configure(self):
         self.options["libcurl"].with_nghttp2 = True
-        # cpp-httplib >= 0.28 defaults to getaddrinfo_a (links libanl on Linux), which does not
-        # exist on musl and breaks the static cross builds. We only use httplib for the REST
-        # server and in-process test servers, so blocking getaddrinfo is fine everywhere.
         self.options["cpp-httplib"].use_non_blocking_getaddrinfo = False
 
     def build_requirements(self):
