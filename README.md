@@ -251,7 +251,9 @@ or
       -H HOSTSPEC                           Specify subnets (comma separated) to consider HOST, in CIDR form. In live capture this
                                             /may/ be detected automatically from capture device but /must/ be specified for pcaps.
                                             Example: "10.0.1.0/24,10.0.2.1/32,2001:db8::/64"
-                                            Specifying this for live capture will append to any automatic detection.
+                                            For live capture, specifying this defines the host set explicitly and
+                                            disables automatic detection from the capture device; list every address
+                                            family (IPv4 and IPv6) you need.
                                                           
 ```
 
@@ -396,7 +398,9 @@ docker run --rm netboxlabs/pktvisor pktvisor-reader --help
       --geo-asn FILE        GeoLite2 ASN database to use for IP to ASN mapping (if enabled)
       -H HOSTSPEC           Specify subnets (comma separated) to consider HOST, in CIDR form. In live capture this /may/ be detected automatically
                             from capture device but /must/ be specified for pcaps. Example: "10.0.1.0/24,10.0.2.1/32,2001:db8::/64"
-                            Specifying this for live capture will append to any automatic detection.
+                            For live capture, specifying this defines the host set explicitly and
+                            disables automatic detection from the capture device; list every address
+                            family (IPv4 and IPv6) you need.
 
 ```
 
@@ -526,6 +530,9 @@ If you are interested in centralized collection
 using [remote write](https://prometheus.io/docs/operating/integrations/#remote-endpoints-and-storage), including to
 cloud providers, there is a [docker image available](https://hub.docker.com/r/netboxlabs/pktvisor-prom-write) to make this
 easy. See [centralized_collection/prometheus](centralized_collection/prometheus) for more.
+
+To run pktvisor as a sidecar in Kubernetes and scrape it with Prometheus, see
+[centralized_collection/k8s](centralized_collection/k8s).
 
 Also see [getorb.io](https://getorb.io) for information on connecting pktvisor agents to the Orb observability platform.
 
