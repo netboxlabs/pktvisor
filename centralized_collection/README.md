@@ -9,3 +9,4 @@ See the individual READMEs for more information:
 
 * [Prometheus](prometheus/README.md)
 * [Elasticsearch](elastic/README.md)
+* [Kubernetes sidecar (scraped by Prometheus)](k8s/README.md)

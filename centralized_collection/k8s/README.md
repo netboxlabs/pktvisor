@@ -43,8 +43,8 @@ the same `eth0` as your application container.
 ## Deploy
 
 ```shell
-# from the repo root (or use the bare filename from inside k8s/)
-kubectl apply -f k8s/pktvisor-sidecar.yaml
+# from the repo root (or use the bare filename from inside centralized_collection/k8s/)
+kubectl apply -f centralized_collection/k8s/pktvisor-sidecar.yaml
 ```
 
 Creates a `pktvisor-demo` Deployment with three containers: your app (`nginx`
@@ -140,7 +140,7 @@ explicit selection, do it inside a pktvisor-only scrape job.
 ## Grafana dashboard
 
 Import the community dashboard **ID 14221**, or the JSON at
-`../centralized_collection/prometheus/grafana-dashboard-prometheus.json`.
+`../prometheus/grafana-dashboard-prometheus.json`.
 
 ## Use with your own workload
 

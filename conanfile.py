@@ -7,14 +7,14 @@ class Pktvisor(ConanFile):
     generators = "CMakeToolchain", "CMakeDeps"
 
     def requirements(self):
-        self.requires("catch2/3.15.1")
-        self.requires("cpp-httplib/0.27.0")
+        self.requires("catch2/3.16.0")
+        self.requires("cpp-httplib/0.47.0")
         self.requires("docopt.cpp/0.6.3")
         self.requires("fast-cpp-csv-parser/cci.20240102")
         self.requires("json-schema-validator/2.4.0")
         self.requires("libmaxminddb/1.12.2")
         self.requires("nlohmann_json/3.12.0", force=True)
-        self.requires("openssl/3.6.3")
+        self.requires("openssl/3.6.4")
         if self.settings.os != "Windows":
             self.requires("libpcap/1.10.6", force=True)
         else:
@@ -27,7 +27,7 @@ class Pktvisor(ConanFile):
         self.requires("uvw/3.4.0")
         self.requires("yaml-cpp/0.9.0")
         self.requires("robin-hood-hashing/3.11.5")
-        self.requires("libcurl/8.21.0")
+        self.requires("libcurl/8.22.0")
         self.requires("libnghttp2/1.68.1")
         if (
             "libc" not in self.settings.compiler.fields
@@ -37,6 +37,7 @@ class Pktvisor(ConanFile):
 
     def configure(self):
         self.options["libcurl"].with_nghttp2 = True
+        self.options["cpp-httplib"].use_non_blocking_getaddrinfo = False
 
     def build_requirements(self):
         self.tool_requires("protobuf/6.33.5")
