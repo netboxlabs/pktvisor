@@ -536,14 +536,6 @@ To run pktvisor as a sidecar in Kubernetes and scrape it with Prometheus, see
 
 Also see [getorb.io](https://getorb.io) for information on connecting pktvisor agents to the Orb observability platform.
 
-#### Names that are not text
-
-Some names in the metrics come from packets, such as the DNS query names in the top QNAME tables, and a DNS name may
-hold any byte. The JSON, Prometheus and OpenTelemetry outputs write these names as UTF-8. Valid UTF-8 is kept as it is,
-and each byte that is not part of a valid UTF-8 sequence is written as `\DDD`, its decimal value, as in DNS presentation
-format. For example, a query for `www.bad<0xff>name.test` is counted in `top_qname2` as `.bad\255name.test`. A
-backslash followed by three digits is written as `\092`, so a name that holds the text `\255` stays distinct.
-
 ### REST API
 
 REST API documentation is available in [OpenAPI Format](https://app.swaggerhub.com/apis/netboxlabs/pktvisor/3.0.0-oas3)
