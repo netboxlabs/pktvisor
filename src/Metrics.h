@@ -63,7 +63,7 @@ static inline uint64_t timespec_to_uint64(timespec &stamp)
 }
 
 template <typename DataPoint>
-static inline void add_label_attributes(DataPoint *data_point, const LabelMap &labels)
+inline void add_label_attributes(DataPoint *data_point, const LabelMap &labels)
 {
     for (const auto &label : labels) {
         auto attribute = data_point->add_attributes();

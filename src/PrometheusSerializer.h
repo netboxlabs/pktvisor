@@ -92,15 +92,17 @@ private:
         }
     }
 
-    // Label-value escaping: backslash, double-quote, newline. A value that is not
-    // UTF-8 is first rendered by utf8_label_value, as the OTLP output does.
+    // Label-value escaping: backslash, double-quote, newline. A value that needs it
+    // is first rendered by utf8_label_value, as the OTLP output does.
     static void append_escaped(std::string &out, const std::string &v)
     {
-        if (!is_utf8(v)) {
-            append_escaped(out, utf8_label_value(v));
-            return;
+        std::string rendered;
+        std::string_view text = v;
+        if (label_value_needs_escape(v)) {
+            rendered = utf8_label_value(v);
+            text = rendered;
         }
-        for (char c : v) {
+        for (char c : text) {
             switch (c) {
             case '\\': out.append("\\\\"); break;
             case '"': out.append("\\\""); break;

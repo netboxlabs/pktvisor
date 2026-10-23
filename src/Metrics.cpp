@@ -130,6 +130,14 @@ static size_t utf8_sequence_length(std::string_view value, size_t i)
     return len;
 }
 
+// True when value[i] is a backslash followed by three ASCII digits, which would
+// read as an escaped byte unless it is escaped itself.
+static bool backslash_before_digits(std::string_view value, size_t i)
+{
+    auto digit = [&](size_t k) { return value[k] >= '0' && value[k] <= '9'; };
+    return value[i] == '\\' && value.size() - i > 3 && digit(i + 1) && digit(i + 2) && digit(i + 3);
+}
+
 bool is_utf8(std::string_view value)
 {
     for (size_t i = 0; i < value.size();) {
@@ -142,12 +150,30 @@ bool is_utf8(std::string_view value)
     return true;
 }
 
+bool label_value_needs_escape(std::string_view value)
+{
+    for (size_t i = 0; i < value.size();) {
+        const auto len = utf8_sequence_length(value, i);
+        if (!len || backslash_before_digits(value, i)) {
+            return true;
+        }
+        i += len;
+    }
+    return false;
+}
+
 std::string utf8_label_value(std::string_view value)
 {
+    if (!label_value_needs_escape(value)) {
+        return std::string(value);
+    }
     std::string out;
     out.reserve(value.size());
     for (size_t i = 0; i < value.size();) {
-        if (const auto len = utf8_sequence_length(value, i)) {
+        if (backslash_before_digits(value, i)) {
+            out.append("\\092");
+            ++i;
+        } else if (const auto len = utf8_sequence_length(value, i)) {
             out.append(value.substr(i, len));
             i += len;
         } else {

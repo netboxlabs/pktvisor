@@ -1094,9 +1094,11 @@ TEST_CASE("DNS qname that is not UTF-8 is escaped in every output", "[pcap][dns]
     std::string qname;
     for (const auto &m : scope.metrics()) {
         if (m.name() == "dns_top_qname2_xacts") {
-            for (const auto &a : m.gauge().data_points(0).attributes()) {
-                if (a.key() == "qname") {
-                    qname = a.value().string_value();
+            for (const auto &point : m.gauge().data_points()) {
+                for (const auto &a : point.attributes()) {
+                    if (a.key() == "qname") {
+                        qname = a.value().string_value();
+                    }
                 }
             }
         }

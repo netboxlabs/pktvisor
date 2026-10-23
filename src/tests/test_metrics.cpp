@@ -616,10 +616,23 @@ TEST_CASE("Label values that are not UTF-8", "[metrics][utf8]")
 {
     SECTION("valid UTF-8 is unchanged")
     {
-        for (const auto &value : std::vector<std::string>{"", "dns.example", "caf\xc3\xa9", "\xed\x9f\xbf", "\xee\x80\x80", "\xf0\x9f\x98\x80", "\xf4\x8f\xbf\xbf", std::string("a\0b", 3)}) {
+        for (const auto &value : std::vector<std::string>{"", "dns.example", "caf\xc3\xa9", "\xe0\xa0\x80", "\xed\x9f\xbf", "\xee\x80\x80", "\xf0\x90\x80\x80", "\xf0\x9f\x98\x80", "\xf4\x8f\xbf\xbf", std::string("a\0b", 3)}) {
             CHECK(is_utf8(value));
+            CHECK_FALSE(label_value_needs_escape(value));
             CHECK(utf8_label_value(value) == value);
         }
+    }
+
+    SECTION("a backslash is escaped only before three digits")
+    {
+        for (const auto &value : std::vector<std::string>{R"(\Device\NPF_{0})", R"(a\12)", R"(a\12b)", "\\"}) {
+            CHECK_FALSE(label_value_needs_escape(value));
+            CHECK(utf8_label_value(value) == value);
+        }
+        CHECK(utf8_label_value(R"(a\255b)") == R"(a\092255b)");
+        CHECK(utf8_label_value("\\\xff") == R"(\\255)");
+        // The literal text \255 and the byte 0xff must not render the same.
+        CHECK(utf8_label_value(R"(\255)") != utf8_label_value("\xff"));
     }
 
     SECTION("each byte outside a UTF-8 sequence gets a decimal escape")
@@ -628,8 +641,12 @@ TEST_CASE("Label values that are not UTF-8", "[metrics][utf8]")
             {"\xff", R"(\255)"},
             {"a\x80", R"(a\128)"},                       // lone continuation byte
             {"\xc3(", R"(\195()"},                       // truncated sequence, next byte kept
+            {"\xe2\x82", R"(\226\130)"},                 // truncated at the end of the value
+            {"\xf0\x9f\x98", R"(\240\159\152)"},         // truncated at the end of the value
             {"\xc0\xaf", R"(\192\175)"},                 // overlong form
+            {"\xc1\x81", R"(\193\129)"},                 // overlong form
             {"\xe0\x80\xaf", R"(\224\128\175)"},         // overlong form
+            {"\xf0\x8f\xbf\xbf", R"(\240\143\191\191)"}, // overlong form
             {"\xed\xa0\x80", R"(\237\160\128)"},         // surrogate
             {"\xf4\x90\x80\x80", R"(\244\144\128\128)"}, // above U+10FFFF
             {"\xf5\x80\x80\x80", R"(\245\128\128\128)"},
@@ -637,6 +654,7 @@ TEST_CASE("Label values that are not UTF-8", "[metrics][utf8]")
         };
         for (const auto &[value, escaped] : cases) {
             CHECK_FALSE(is_utf8(value));
+            CHECK(label_value_needs_escape(value));
             CHECK(utf8_label_value(value) == escaped);
             CHECK(is_utf8(utf8_label_value(value)));
         }
