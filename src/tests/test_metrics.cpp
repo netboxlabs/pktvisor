@@ -601,3 +601,74 @@ TEST_CASE("Rate metrics", "[metrics][rate]")
         r.to_opentelemetry(scope, stamp, stamp, {{"policy", "default"}});
     }
 }
+
+static std::string otel_attribute(const metrics::v1::NumberDataPoint &point, const std::string &key)
+{
+    for (const auto &attribute : point.attributes()) {
+        if (attribute.key() == key) {
+            return attribute.value().string_value();
+        }
+    }
+    return {};
+}
+
+TEST_CASE("Label values that are not UTF-8", "[metrics][utf8]")
+{
+    SECTION("valid UTF-8 is unchanged")
+    {
+        for (const auto &value : std::vector<std::string>{"", "dns.example", "caf\xc3\xa9", "\xed\x9f\xbf", "\xee\x80\x80", "\xf0\x9f\x98\x80", "\xf4\x8f\xbf\xbf", std::string("a\0b", 3)}) {
+            CHECK(is_utf8(value));
+            CHECK(utf8_label_value(value) == value);
+        }
+    }
+
+    SECTION("each byte outside a UTF-8 sequence gets a decimal escape")
+    {
+        const std::vector<std::pair<std::string, std::string>> cases{
+            {"\xff", R"(\255)"},
+            {"a\x80", R"(a\128)"},                       // lone continuation byte
+            {"\xc3(", R"(\195()"},                       // truncated sequence, next byte kept
+            {"\xc0\xaf", R"(\192\175)"},                 // overlong form
+            {"\xe0\x80\xaf", R"(\224\128\175)"},         // overlong form
+            {"\xed\xa0\x80", R"(\237\160\128)"},         // surrogate
+            {"\xf4\x90\x80\x80", R"(\244\144\128\128)"}, // above U+10FFFF
+            {"\xf5\x80\x80\x80", R"(\245\128\128\128)"},
+            {"caf\xc3\xa9\xff", "caf\xc3\xa9\\255"},
+        };
+        for (const auto &[value, escaped] : cases) {
+            CHECK_FALSE(is_utf8(value));
+            CHECK(utf8_label_value(value) == escaped);
+            CHECK(is_utf8(utf8_label_value(value)));
+        }
+    }
+
+    SECTION("every output escapes them")
+    {
+        Metric::reset_static_labels();
+        const std::string raw = "bad\xff"
+                                "name";
+        const std::string escaped = R"(bad\255name)";
+        TopN<std::string> top("root", "string", {"test", "metric"}, "A topn test metric");
+        top.update(raw);
+
+        json j;
+        top.to_json(j);
+        CHECK(j["test"]["metric"][0]["name"] == escaped);
+        CHECK_NOTHROW(j.dump());
+
+        PrometheusSerializer ser;
+        top.to_prometheus(ser, {{"policy", "default"}});
+        CHECK(ser.finalize().find(R"(string="bad\\255name")") != std::string::npos);
+
+        metrics::v1::ScopeMetrics scope;
+        timespec stamp{};
+        top.to_opentelemetry(scope, stamp, stamp, {{"policy", "default"}});
+        Counter c("root", {"counter"}, "A counter test metric");
+        c.to_opentelemetry(scope, stamp, stamp, {{"policy", raw}});
+        CHECK(otel_attribute(scope.metrics(0).gauge().data_points(0), "string") == escaped);
+        CHECK(otel_attribute(scope.metrics(1).gauge().data_points(0), "policy") == escaped);
+
+        metrics::v1::ScopeMetrics decoded;
+        CHECK(decoded.ParseFromString(scope.SerializeAsString()));
+    }
+}

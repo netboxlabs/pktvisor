@@ -31,6 +31,7 @@
 #include <regex>
 #include <set>
 #include <shared_mutex>
+#include <type_traits>
 #include <vector>
 
 #define HIST_MIN_EXP -9
@@ -59,6 +60,16 @@ struct comparator {
 static inline uint64_t timespec_to_uint64(timespec &stamp)
 {
     return stamp.tv_sec * 1000000000ULL + stamp.tv_nsec;
+}
+
+template <typename DataPoint>
+static inline void add_label_attributes(DataPoint *data_point, const LabelMap &labels)
+{
+    for (const auto &label : labels) {
+        auto attribute = data_point->add_attributes();
+        attribute->set_key(label.first);
+        attribute->mutable_value()->set_string_value(utf8_label_value(label.second));
+    }
 }
 
 // Single source of truth for the SLA quantiles pktvisor reports, in the order
@@ -338,11 +349,7 @@ public:
         }
         hist_data_point->set_count(_sketch.get_n());
 
-        for (const auto &label : add_labels) {
-            auto attribute = hist_data_point->add_attributes();
-            attribute->set_key(label.first);
-            attribute->mutable_value()->set_string_value(label.second);
-        }
+        add_label_attributes(hist_data_point, add_labels);
     }
 };
 
@@ -481,11 +488,7 @@ public:
             quantile->set_quantile(QUANTILES[i].rank);
             quantile->set_value(quantiles[i]);
         }
-        for (const auto &label : add_labels) {
-            auto attribute = summary_data_point->add_attributes();
-            attribute->set_key(label.first);
-            attribute->mutable_value()->set_string_value(label.second);
-        }
+        add_label_attributes(summary_data_point, add_labels);
     }
 };
 
@@ -534,11 +537,7 @@ private:
         data_point->set_as_int(value);
         data_point->set_start_time_unix_nano(start);
         data_point->set_time_unix_nano(end);
-        for (const auto &label : l) {
-            auto attribute = data_point->add_attributes();
-            attribute->set_key(label.first);
-            attribute->mutable_value()->set_string_value(label.second);
-        }
+        add_label_attributes(data_point, l);
     }
 
 public:
@@ -668,7 +667,11 @@ public:
         auto threshold = _get_threshold(items);
         for (uint64_t i = 0; i < std::min(_top_count, items.size()); i++) {
             if (items[i].get_estimate() >= threshold) {
-                section[i]["name"] = items[i].get_item();
+                if constexpr (std::is_same_v<T, std::string>) {
+                    section[i]["name"] = utf8_label_value(items[i].get_item());
+                } else {
+                    section[i]["name"] = items[i].get_item();
+                }
                 section[i]["estimate"] = items[i].get_estimate();
             } else {
                 break;

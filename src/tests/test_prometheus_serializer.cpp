@@ -71,6 +71,17 @@ TEST_CASE("label values are escaped", "[prometheus][serializer]")
         "m{desc=\"a\\\"b\\\\c\\nd\"} 1\n");
 }
 
+TEST_CASE("label values that are not UTF-8 get decimal byte escapes", "[prometheus][serializer]")
+{
+    Metric::reset_static_labels();
+    PrometheusSerializer s;
+    s.write("m", Type::Gauge, "d", {}, {{"desc", "a\"b\xff"}}, 1);
+    CHECK(s.finalize() ==
+        "# HELP m d\n"
+        "# TYPE m gauge\n"
+        "m{desc=\"a\\\"b\\\\255\"} 1\n");
+}
+
 TEST_CASE("numeric formatting matches ostream operator<<", "[prometheus][serializer]")
 {
     Metric::reset_static_labels();
