@@ -1059,3 +1059,53 @@ TEST_CASE("DNS v2 specialized_merge aggregates two buckets", "[dns][unit]")
     target->to_opentelemetry(scope_after, st, et, {});
     CHECK(otel_gauge_sum(scope_after, "dns_xacts") == pre_b1 + pre_b2);
 }
+
+TEST_CASE("DNS qname that is not UTF-8 is escaped in every output", "[pcap][dns]")
+{
+    PcapInputStream stream{"pcap-test"};
+    stream.config_set("pcap_file", "tests/fixtures/dns_udp_non_utf8_qname.pcap");
+    stream.config_set("bpf", "");
+
+    visor::Config c;
+    auto stream_proxy = stream.add_event_proxy(c);
+    c.config_set<uint64_t>("num_periods", 1);
+    DnsStreamHandler dns_handler{"dns-test", stream_proxy, &c};
+
+    dns_handler.start();
+    stream.start();
+    dns_handler.stop();
+    stream.stop();
+
+    // The fixture's qname is www.bad<0xff>name.test; byte 0xff is written as \255.
+    const std::string escaped = R"(.bad\255name.test)";
+
+    json j;
+    dns_handler.metrics()->bucket(0)->to_json(j);
+    CHECK(j["unknown"]["top_qname2_xacts"][0]["name"] == escaped);
+    CHECK_NOTHROW(j.dump());
+
+    visor::PrometheusSerializer prom;
+    dns_handler.metrics()->bucket(0)->to_prometheus(prom, {});
+    CHECK(prom.finalize().find(R"(qname=".bad\\255name.test")") != std::string::npos);
+
+    opentelemetry::proto::metrics::v1::ScopeMetrics scope;
+    timespec start_ts{}, end_ts{};
+    dns_handler.metrics()->bucket(0)->to_opentelemetry(scope, start_ts, end_ts, {});
+    std::string qname;
+    for (const auto &m : scope.metrics()) {
+        if (m.name() == "dns_top_qname2_xacts") {
+            for (const auto &point : m.gauge().data_points()) {
+                for (const auto &a : point.attributes()) {
+                    if (a.key() == "qname") {
+                        qname = a.value().string_value();
+                    }
+                }
+            }
+        }
+    }
+    CHECK(qname == escaped);
+
+    // A strict decoder, like the agent's, refuses the whole export when one string is not UTF-8.
+    opentelemetry::proto::metrics::v1::ScopeMetrics decoded;
+    CHECK(decoded.ParseFromString(scope.SerializeAsString()));
+}

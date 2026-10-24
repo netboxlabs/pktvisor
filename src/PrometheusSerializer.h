@@ -92,10 +92,17 @@ private:
         }
     }
 
-    // Label-value escaping: backslash, double-quote, newline.
+    // Label-value escaping: backslash, double-quote, newline. A value that needs it
+    // is first rendered by utf8_label_value, as the OTLP output does.
     static void append_escaped(std::string &out, const std::string &v)
     {
-        for (char c : v) {
+        std::string rendered;
+        std::string_view text = v;
+        if (label_value_needs_escape(v)) {
+            rendered = utf8_label_value(v);
+            text = rendered;
+        }
+        for (char c : text) {
             switch (c) {
             case '\\': out.append("\\\\"); break;
             case '"': out.append("\\\""); break;
