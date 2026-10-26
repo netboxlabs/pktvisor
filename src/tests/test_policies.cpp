@@ -1380,6 +1380,16 @@ TEST_CASE("Policies and Metrics", "[policies][metrics]")
         REQUIRE_NOTHROW(policy->opentelemetry_metrics(scope));
     }
 
+    SECTION("Opentelemetry push carries only policies with a window")
+    {
+        metrics::v1::ResourceMetrics resource;
+        registry.policy_manager()->opentelemetry_metrics(resource);
+        // Whatever the first push held, nothing is new right after it.
+        resource.Clear();
+        CHECK_FALSE(registry.policy_manager()->opentelemetry_metrics(resource));
+        CHECK(resource.scope_metrics_size() == 0);
+    }
+
     config_file = YAML::Load(policies_config_merge);
     CHECK(config_file["visor"]["policies"]);
     CHECK(config_file["visor"]["policies"].IsMap());

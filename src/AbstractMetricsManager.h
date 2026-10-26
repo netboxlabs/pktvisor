@@ -14,6 +14,7 @@
 #include "Metrics.h"
 #include "PrometheusSerializer.h"
 #include <bitset>
+#include <optional>
 #include <shared_mutex>
 #include <sstream>
 #include <unordered_map>
@@ -21,6 +22,8 @@
 namespace visor {
 
 constexpr size_t GROUP_SIZE = 64;
+// The length of a metrics window, in seconds.
+constexpr unsigned int METRICS_PERIOD_SEC = 60;
 typedef uint32_t MetricGroupIntType;
 
 using json = nlohmann::json;
@@ -313,8 +316,25 @@ private:
         // expiring bucket will destruct here if it exists
     }
 
+    // Writes one bucket to scope. The caller holds the base and bucket locks.
+    void _bucket_opentelemetry(metrics::v1::ScopeMetrics &scope, const MetricsBucketClass *bucket, Metric::LabelMap add_labels) const
+    {
+        if (_groups && _groups->none()) {
+            return;
+        }
+        if (!_tap_name.empty() && add_labels.find("tap") == add_labels.end()) {
+            add_labels["tap"] = _tap_name;
+        }
+        auto start_ts = bucket->start_tstamp();
+        auto end_ts = bucket->end_tstamp();
+        if (!end_ts.tv_sec) {
+            timespec_get(&end_ts, TIME_UTC);
+        }
+        bucket->to_opentelemetry(scope, start_ts, end_ts, add_labels);
+    }
+
 public:
-    static const unsigned int PERIOD_SEC = 60;
+    static const unsigned int PERIOD_SEC = METRICS_PERIOD_SEC;
     static const unsigned int MERGE_CACHE_TTL_MS = 1000;
 
 protected:
@@ -555,20 +575,48 @@ public:
             throw PeriodException(err.str());
         }
 
-        if (_groups && _groups->none()) {
-            return;
-        }
+        _bucket_opentelemetry(scope, _metric_buckets.at(period).get(), add_labels);
+    }
 
-        if (!_tap_name.empty() && add_labels.find("tap") == add_labels.end()) {
-            add_labels["tap"] = _tap_name;
+    // The start of the most recent closed window, or none while no window has
+    // closed.
+    std::optional<timespec> closed_window_start() const
+    {
+        std::shared_lock rbl(_bucket_mutex);
+        if (_metric_buckets.size() < 2) {
+            return std::nullopt;
         }
-        auto bucket = _metric_buckets.at(period).get();
-        auto start_ts = bucket->start_tstamp();
-        auto end_ts = bucket->end_tstamp();
-        if (!end_ts.tv_sec) {
-            timespec_get(&end_ts, TIME_UTC);
+        return _metric_buckets[1]->start_tstamp();
+    }
+
+    // Exports every closed window that starts after last_start, oldest first,
+    // and records the newest one's start there; none means nothing was
+    // exported yet. A push that comes late, or a replay that closes windows
+    // faster than the exporter checks, then loses none of the windows still
+    // held. Checking and exporting under one lock keeps a window that closes in
+    // between from being sent twice or not at all. Returns whether any was.
+    bool window_closed_opentelemetry(metrics::v1::ScopeMetrics &scope, std::optional<timespec> &last_start, Metric::LabelMap add_labels = {}) const
+    {
+        std::shared_lock rl(_base_mutex);
+        std::shared_lock rbl(_bucket_mutex);
+        auto after_last = [&last_start](const timespec &t) {
+            return !last_start || t.tv_sec > last_start->tv_sec || (t.tv_sec == last_start->tv_sec && t.tv_nsec > last_start->tv_nsec);
+        };
+        std::optional<timespec> newest;
+        for (auto i = _metric_buckets.size(); i-- > 1;) {
+            auto bucket = _metric_buckets[i].get();
+            auto start_ts = bucket->start_tstamp();
+            if (!after_last(start_ts)) {
+                continue;
+            }
+            _bucket_opentelemetry(scope, bucket, add_labels);
+            newest = start_ts;
         }
-        bucket->to_opentelemetry(scope, start_ts, end_ts, add_labels);
+        if (!newest) {
+            return false;
+        }
+        last_start = newest;
+        return true;
     }
 
     void window_external_opentelemetry(metrics::v1::ScopeMetrics &scope, AbstractMetricsBucket *bucket, Metric::LabelMap add_labels = {}) const

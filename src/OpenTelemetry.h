@@ -29,7 +29,7 @@ struct OtelConfig {
     std::string endpoint{"localhost"};
     std::string path{"/v1/metrics"};
     uint32_t port_number{4318};
-    uint64_t interval_sec{60};
+    uint64_t interval_sec{5};
     std::string tls_cert;
     std::string tls_key;
 };

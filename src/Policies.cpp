@@ -406,19 +406,106 @@ void Policy::prometheus_metrics(std::stringstream &out)
     out << ser.finalize();
 }
 
+bool PolicyManager::opentelemetry_metrics(metrics::v1::ResourceMetrics &resource)
+{
+    for (const auto &p_mname : module_get_keys()) {
+        auto scopes_before = resource.scope_metrics_size();
+        try {
+            auto [policy, lock] = module_get_locked(p_mname);
+            auto scope = resource.add_scope_metrics();
+            scope->mutable_scope()->set_name("pktvisor/" + p_mname);
+            auto attr = scope->mutable_scope()->add_attributes();
+            attr->set_key("policy_name");
+            attr->mutable_value()->set_string_value(p_mname);
+            policy->opentelemetry_metrics(*scope);
+        } catch (const std::exception &) {
+            // A policy removed during the push is skipped rather than failing
+            // it. One that failed while writing keeps what its earlier handlers
+            // wrote, since they marked those windows as sent; the handler that
+            // failed dropped its own.
+        }
+        if (resource.scope_metrics_size() > scopes_before && resource.scope_metrics(scopes_before).metrics_size() == 0) {
+            resource.mutable_scope_metrics()->RemoveLast();
+        }
+    }
+    return resource.scope_metrics_size() > 0;
+}
+
+bool merged_window_due(const std::vector<StreamHandler *> &handlers, std::vector<timespec> &last_starts,
+    std::optional<std::chrono::steady_clock::time_point> &last_live)
+{
+    if (handlers.empty()) {
+        return false;
+    }
+    if (std::any_of(handlers.begin(), handlers.end(), [](auto h) { return !h->closes_windows(); })) {
+        return StreamHandler::live_window_due(last_live);
+    }
+    std::vector<timespec> starts;
+    for (auto h : handlers) {
+        auto start = h->closed_window_start();
+        if (!start) {
+            return false;
+        }
+        starts.push_back(*start);
+    }
+    if (last_starts.size() == starts.size()) {
+        for (size_t i = 0; i < starts.size(); ++i) {
+            if (starts[i].tv_sec == last_starts[i].tv_sec && starts[i].tv_nsec == last_starts[i].tv_nsec) {
+                return false;
+            }
+        }
+    }
+    last_starts = std::move(starts);
+    return true;
+}
+
+bool Policy::_merged_window_due()
+{
+    std::vector<StreamHandler *> handlers;
+    for (auto &mod : modules()) {
+        if (auto hmod = dynamic_cast<StreamHandler *>(mod)) {
+            handlers.push_back(hmod);
+        }
+    }
+    return merged_window_due(handlers, _otel_last_merged, _otel_last_merged_live);
+}
+
 void Policy::opentelemetry_metrics(metrics::v1::ScopeMetrics &scope)
 {
     if (_merge_like_handlers) {
-        auto bucket_map = _get_merged_buckets();
-        for (auto &[bucket, hmod] : bucket_map) {
-            hmod->window_opentelemetry(scope, bucket.get(), {{"policy", name()}, {"handler", hmod->schema_key() + "_merged"}});
+        // If the export fails, what it wrote is dropped and the window is not
+        // marked as sent, so the next push sends it whole.
+        auto last_starts = _otel_last_merged;
+        auto last_live = _otel_last_merged_live;
+        auto metrics_before = scope.metrics_size();
+        if (!_merged_window_due()) {
+            return;
+        }
+        try {
+            auto bucket_map = _get_merged_buckets();
+            for (auto &[bucket, hmod] : bucket_map) {
+                hmod->window_opentelemetry(scope, bucket.get(), {{"policy", name()}, {"handler", hmod->schema_key() + "_merged"}});
+            }
+        } catch (...) {
+            scope.mutable_metrics()->DeleteSubrange(metrics_before, scope.metrics_size() - metrics_before);
+            _otel_last_merged = std::move(last_starts);
+            _otel_last_merged_live = last_live;
+            throw;
         }
     } else {
         for (auto &mod : modules()) {
             auto hmod = dynamic_cast<StreamHandler *>(mod);
             if (hmod) {
                 spdlog::stopwatch sw;
-                hmod->window_opentelemetry(scope, {{"policy", name()}, {"handler", hmod->name()}});
+                // A handler marks its windows as sent only once written, so if
+                // it fails what it wrote is dropped and sent whole next time.
+                auto metrics_before = scope.metrics_size();
+                try {
+                    hmod->window_opentelemetry(scope, {{"policy", name()}, {"handler", hmod->name()}});
+                } catch (...) {
+                    scope.mutable_metrics()->DeleteSubrange(metrics_before, scope.metrics_size() - metrics_before);
+                    throw;
+                }
                 spdlog::get("visor")->debug("{} window_opentelemetry elapsed time: {}", hmod->name(), sw);
             }
         }

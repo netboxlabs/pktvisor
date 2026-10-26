@@ -19,10 +19,15 @@ public:
     {
         ser.write("test_performed", PrometheusSerializer::Type::Gauge, "", {}, {}, 1);
     }
-    void to_opentelemetry(metrics::v1::ScopeMetrics &scope, timespec &, timespec &, Metric::LabelMap) const
+    void to_opentelemetry(metrics::v1::ScopeMetrics &scope, timespec &start, timespec &, Metric::LabelMap) const
     {
-        scope.add_metrics()->set_name("test1");
-        scope.add_metrics()->set_name("test2");
+        // The description carries the window start, so a test can see the order
+        // windows are pushed in.
+        for (const auto *name : {"test1", "test2"}) {
+            auto metric = scope.add_metrics();
+            metric->set_name(name);
+            metric->set_description(std::to_string(start.tv_sec) + "." + std::to_string(start.tv_nsec));
+        }
     }
     void update_topn_metrics(size_t, uint64_t)
     {
@@ -689,4 +694,44 @@ TEST_CASE("Label values that are not UTF-8", "[metrics][utf8]")
         metrics::v1::ScopeMetrics decoded;
         CHECK(decoded.ParseFromString(scope.SerializeAsString()));
     }
+}
+
+TEST_CASE("Closed windows are pushed to OpenTelemetry once", "[metrics][abstract][opentelemetry]")
+{
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 4);
+    auto manager = std::make_unique<TestMetricsManager>(&c);
+    metrics::v1::ScopeMetrics scope;
+    std::optional<timespec> last;
+    timespec stamp;
+    timespec_get(&stamp, TIME_UTC);
+    auto close_window = [&]() {
+        stamp.tv_sec += TestMetricsManager::PERIOD_SEC;
+        manager->check_period_shift(stamp);
+    };
+
+    // The live window is still filling, so nothing is pushed.
+    CHECK_FALSE(manager->closed_window_start());
+    CHECK_FALSE(manager->window_closed_opentelemetry(scope, last));
+    CHECK(scope.metrics_size() == 0);
+
+    close_window();
+    REQUIRE(manager->current_periods() == 2);
+    CHECK(manager->window_closed_opentelemetry(scope, last));
+    CHECK(scope.metrics_size() == 2);
+    scope.Clear();
+    CHECK_FALSE(manager->window_closed_opentelemetry(scope, last));
+    CHECK(scope.metrics_size() == 0);
+
+    // Two windows closing between pushes are both pushed.
+    close_window();
+    close_window();
+    CHECK(manager->window_closed_opentelemetry(scope, last));
+    REQUIRE(scope.metrics_size() == 4);
+    // Oldest first: a backend refuses a sample older than one it already has.
+    CHECK(std::stod(scope.metrics(0).description()) < std::stod(scope.metrics(2).description()));
+    REQUIRE(last);
+    CHECK(last->tv_sec == manager->closed_window_start()->tv_sec);
+    scope.Clear();
+    CHECK_FALSE(manager->window_closed_opentelemetry(scope, last));
 }

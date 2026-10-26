@@ -11,7 +11,10 @@
 #include "InputModulePlugin.h"
 #include "OpenTelemetry.h"
 #include "Taps.h"
+#include <chrono>
+#include <ctime>
 #include <map>
+#include <optional>
 #include <vector>
 #include <yaml-cpp/yaml.h>
 
@@ -20,6 +23,16 @@ namespace visor {
 class CoreRegistry;
 class AbstractMetricsBucket;
 class PrometheusSerializer;
+
+// Whether merged handlers have a window to push. Merged windows are pushed once
+// every handler has closed a new one: handlers usually close theirs on the same
+// input event but can close them on different ones, and pushing on the first
+// would send the others' previous window again. Only the latest closed window
+// is merged, so the exporter must check at least twice a window. Handlers whose
+// windows never close are pushed once per window length. last_starts and
+// last_live record what was last pushed.
+bool merged_window_due(const std::vector<StreamHandler *> &handlers, std::vector<timespec> &last_starts,
+    std::optional<std::chrono::steady_clock::time_point> &last_live);
 
 class PolicyException : public std::runtime_error
 {
@@ -43,8 +56,13 @@ private:
     bool _modules_sequence{false};
     bool _merge_like_handlers{false};
     std::vector<AbstractRunnableModule *> _modules;
+    // What the merged OpenTelemetry export last pushed: each handler's closed
+    // window, or when a window that never closes was last pushed.
+    std::vector<timespec> _otel_last_merged;
+    std::optional<std::chrono::steady_clock::time_point> _otel_last_merged_live;
 
     BucketMap _get_merged_buckets(bool prometheus = true, uint64_t period = 0, bool merged = false);
+    bool _merged_window_due();
 
 public:
     Policy(const std::string &name)
@@ -134,6 +152,9 @@ public:
     std::vector<Policy *> load(const YAML::Node &tap_yaml, bool single = false);
     std::pair<std::string, std::string> create_resources_policy(const std::string &policy_name, InputStream *input, const Config &window_config);
     void remove_policy(const std::string &name);
+    // Adds one scope per policy with a window to push, and returns whether any
+    // policy had one, so the exporter sends nothing when none has.
+    bool opentelemetry_metrics(metrics::v1::ResourceMetrics &resource);
 };
 
 }
