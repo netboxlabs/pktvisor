@@ -431,35 +431,28 @@ bool PolicyManager::opentelemetry_metrics(metrics::v1::ResourceMetrics &resource
     return resource.scope_metrics_size() > 0;
 }
 
-bool merged_window_due(const std::vector<StreamHandler *> &handlers, std::vector<timespec> &last_starts,
-    std::optional<std::chrono::steady_clock::time_point> &last_live)
+std::optional<std::vector<timespec>> next_merged_windows(const std::vector<StreamHandler *> &handlers,
+    const std::vector<timespec> &last_starts)
 {
     if (handlers.empty()) {
-        return false;
-    }
-    if (std::any_of(handlers.begin(), handlers.end(), [](auto h) { return !h->closes_windows(); })) {
-        return StreamHandler::live_window_due(last_live);
+        return std::nullopt;
     }
     std::vector<timespec> starts;
-    for (auto h : handlers) {
-        auto start = h->closed_window_start();
+    for (size_t i = 0; i < handlers.size(); ++i) {
+        std::optional<timespec> after;
+        if (last_starts.size() == handlers.size()) {
+            after = last_starts[i];
+        }
+        auto start = handlers[i]->next_closed_window_start(after);
         if (!start) {
-            return false;
+            return std::nullopt;
         }
         starts.push_back(*start);
     }
-    if (last_starts.size() == starts.size()) {
-        for (size_t i = 0; i < starts.size(); ++i) {
-            if (starts[i].tv_sec == last_starts[i].tv_sec && starts[i].tv_nsec == last_starts[i].tv_nsec) {
-                return false;
-            }
-        }
-    }
-    last_starts = std::move(starts);
-    return true;
+    return starts;
 }
 
-bool Policy::_merged_window_due()
+void Policy::_merged_opentelemetry(metrics::v1::ScopeMetrics &scope)
 {
     std::vector<StreamHandler *> handlers;
     for (auto &mod : modules()) {
@@ -467,31 +460,55 @@ bool Policy::_merged_window_due()
             handlers.push_back(hmod);
         }
     }
-    return merged_window_due(handlers, _otel_last_merged, _otel_last_merged_live);
-}
-
-void Policy::opentelemetry_metrics(metrics::v1::ScopeMetrics &scope)
-{
-    if (_merge_like_handlers) {
-        // If the export fails, what it wrote is dropped and the window is not
-        // marked as sent, so the next push sends it whole.
-        auto last_starts = _otel_last_merged;
-        auto last_live = _otel_last_merged_live;
+    // If an export fails, what it wrote is dropped and its window is not
+    // marked as sent, so the next push sends it whole.
+    auto export_merged = [this, &scope](const BucketMap &bucket_map) {
         auto metrics_before = scope.metrics_size();
-        if (!_merged_window_due()) {
-            return;
-        }
         try {
-            auto bucket_map = _get_merged_buckets();
             for (auto &[bucket, hmod] : bucket_map) {
                 hmod->window_opentelemetry(scope, bucket.get(), {{"policy", name()}, {"handler", hmod->schema_key() + "_merged"}});
             }
         } catch (...) {
             scope.mutable_metrics()->DeleteSubrange(metrics_before, scope.metrics_size() - metrics_before);
-            _otel_last_merged = std::move(last_starts);
+            throw;
+        }
+    };
+
+    if (std::any_of(handlers.begin(), handlers.end(), [](auto h) { return !h->closes_windows(); })) {
+        // A window that never closes is pushed as it grows, once per window
+        // length.
+        auto last_live = _otel_last_merged_live;
+        if (!StreamHandler::live_window_due(_otel_last_merged_live)) {
+            return;
+        }
+        try {
+            export_merged(_get_merged_buckets());
+        } catch (...) {
             _otel_last_merged_live = last_live;
             throw;
         }
+        return;
+    }
+
+    // Each handler merges the window it holds by that window's start, so one
+    // that closes during the merge changes nothing: what is marked as sent is
+    // what was merged.
+    while (auto starts = next_merged_windows(handlers, _otel_last_merged)) {
+        std::map<StreamHandler *, timespec> start_of;
+        for (size_t i = 0; i < handlers.size(); ++i) {
+            start_of[handlers[i]] = (*starts)[i];
+        }
+        export_merged(_get_merged_buckets([&start_of](StreamHandler *hmod, AbstractMetricsBucket *bucket) {
+            return hmod->merge_closed(bucket, start_of.at(hmod));
+        }));
+        _otel_last_merged = std::move(*starts);
+    }
+}
+
+void Policy::opentelemetry_metrics(metrics::v1::ScopeMetrics &scope)
+{
+    if (_merge_like_handlers) {
+        _merged_opentelemetry(scope);
     } else {
         for (auto &mod : modules()) {
             auto hmod = dynamic_cast<StreamHandler *>(mod);
@@ -514,12 +531,19 @@ void Policy::opentelemetry_metrics(metrics::v1::ScopeMetrics &scope)
 
 Policy::BucketMap Policy::_get_merged_buckets(bool prometheus, uint64_t period, bool merged)
 {
+    return _get_merged_buckets([prometheus, period, merged](StreamHandler *hmod, AbstractMetricsBucket *bucket) {
+        return hmod->merge(bucket, period, prometheus, merged);
+    });
+}
+
+Policy::BucketMap Policy::_get_merged_buckets(const std::function<std::unique_ptr<AbstractMetricsBucket>(StreamHandler *, AbstractMetricsBucket *)> &merge)
+{
     BucketMap bucket_map;
     for (auto &mod : modules()) {
         auto hmod = dynamic_cast<StreamHandler *>(mod);
         assert(hmod);
         if (bucket_map.empty()) {
-            bucket_map.emplace(hmod->merge(nullptr, period, prometheus, merged), hmod);
+            bucket_map.emplace(merge(hmod, nullptr), hmod);
             continue;
         }
         for (auto &[bucket, handler] : bucket_map) {
@@ -528,7 +552,7 @@ Policy::BucketMap Policy::_get_merged_buckets(bool prometheus, uint64_t period, 
                 && (hmod->version() != handler->version())) {
                 continue;
             }
-            auto new_bucket = hmod->merge(bucket.get(), period, prometheus, merged);
+            auto new_bucket = merge(hmod, bucket.get());
             if (!new_bucket) {
                 break;
             } else if (is_last) {

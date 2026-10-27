@@ -96,8 +96,11 @@ public:
     }
     // Whether this handler's windows close, which takes more than one period.
     virtual bool closes_windows() const = 0;
-    // The start of the most recent closed window, or none while none has closed.
-    virtual std::optional<timespec> closed_window_start() const = 0;
+    // The start of the oldest closed window that starts after `after`, or none
+    // while no such window is held.
+    virtual std::optional<timespec> next_closed_window_start(const std::optional<timespec> &after) const = 0;
+    // Merges the closed window that starts at start, as merge() does a period.
+    virtual std::unique_ptr<AbstractMetricsBucket> merge_closed(AbstractMetricsBucket *bucket, timespec start) = 0;
 };
 
 template <class MetricsManagerClass>
@@ -282,9 +285,14 @@ public:
         return _metrics->num_periods() > 1;
     }
 
-    std::optional<timespec> closed_window_start() const override
+    std::optional<timespec> next_closed_window_start(const std::optional<timespec> &after) const override
     {
-        return _metrics->closed_window_start();
+        return _metrics->next_closed_window_start(after);
+    }
+
+    std::unique_ptr<AbstractMetricsBucket> merge_closed(AbstractMetricsBucket *bucket, timespec start) override
+    {
+        return _metrics->closed_merge(bucket, start);
     }
 
     void window_opentelemetry(metrics::v1::ScopeMetrics &scope, AbstractMetricsBucket *bucket, Metric::LabelMap add_labels = {}) override

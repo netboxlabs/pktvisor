@@ -711,7 +711,7 @@ TEST_CASE("Closed windows are pushed to OpenTelemetry once", "[metrics][abstract
     };
 
     // The live window is still filling, so nothing is pushed.
-    CHECK_FALSE(manager->closed_window_start());
+    CHECK_FALSE(manager->next_closed_window_start(std::nullopt));
     CHECK_FALSE(manager->window_closed_opentelemetry(scope, last));
     CHECK(scope.metrics_size() == 0);
 
@@ -731,7 +731,79 @@ TEST_CASE("Closed windows are pushed to OpenTelemetry once", "[metrics][abstract
     // Oldest first: a backend refuses a sample older than one it already has.
     CHECK(std::stod(scope.metrics(0).description()) < std::stod(scope.metrics(2).description()));
     REQUIRE(last);
-    CHECK(last->tv_sec == manager->closed_window_start()->tv_sec);
+    CHECK(last->tv_sec == manager->bucket(1)->start_tstamp().tv_sec);
     scope.Clear();
     CHECK_FALSE(manager->window_closed_opentelemetry(scope, last));
+}
+
+TEST_CASE("A recorded stream's last window is pushed once it ends", "[metrics][abstract][opentelemetry]")
+{
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 4);
+    auto manager = std::make_unique<TestMetricsManager>(&c);
+    metrics::v1::ScopeMetrics scope;
+    std::optional<timespec> last;
+    timespec stamp;
+    timespec_get(&stamp, TIME_UTC);
+    manager->set_start_tstamp(stamp);
+
+    SECTION("Shorter than a window")
+    {
+        CHECK_FALSE(manager->window_closed_opentelemetry(scope, last));
+        stamp.tv_sec += 10;
+        manager->set_end_tstamp(stamp);
+        REQUIRE(manager->current_periods() == 1);
+        CHECK(manager->window_closed_opentelemetry(scope, last));
+        CHECK(scope.metrics_size() == 2);
+        scope.Clear();
+        CHECK_FALSE(manager->window_closed_opentelemetry(scope, last));
+    }
+
+    SECTION("Longer than a window")
+    {
+        stamp.tv_sec += TestMetricsManager::PERIOD_SEC;
+        manager->check_period_shift(stamp);
+        stamp.tv_sec += 10;
+        manager->set_end_tstamp(stamp);
+        REQUIRE(manager->current_periods() == 2);
+        CHECK(manager->window_closed_opentelemetry(scope, last));
+        CHECK(scope.metrics_size() == 4);
+        scope.Clear();
+        CHECK_FALSE(manager->window_closed_opentelemetry(scope, last));
+    }
+}
+
+TEST_CASE("Closed windows are merged by their start", "[metrics][abstract]")
+{
+    visor::Config c;
+    c.config_set<uint64_t>("num_periods", 4);
+    auto manager = std::make_unique<TestMetricsManager>(&c);
+    timespec stamp;
+    timespec_get(&stamp, TIME_UTC);
+    auto close_window = [&]() {
+        stamp.tv_sec += TestMetricsManager::PERIOD_SEC;
+        manager->check_period_shift(stamp);
+    };
+
+    close_window();
+    auto first = manager->next_closed_window_start(std::nullopt);
+    REQUIRE(first);
+
+    // A window that closes before the merge leaves the one asked for in place.
+    close_window();
+    CHECK(manager->next_closed_window_start(std::nullopt)->tv_sec == first->tv_sec);
+    auto second = manager->next_closed_window_start(first);
+    REQUIRE(second);
+    CHECK(second->tv_sec > first->tv_sec);
+    CHECK_FALSE(manager->next_closed_window_start(second));
+    auto merged = manager->closed_merge(nullptr, *first);
+    REQUIRE(merged);
+    CHECK(merged->start_tstamp().tv_sec == first->tv_sec);
+    CHECK(merged->end_tstamp().tv_sec == manager->bucket(2)->end_tstamp().tv_sec);
+
+    // Merging into a bucket adds to it.
+    CHECK(manager->closed_merge(merged.get(), *second) == nullptr);
+
+    // A window no longer held is refused.
+    CHECK_THROWS_AS(manager->closed_merge(nullptr, timespec{1, 0}), PeriodException);
 }

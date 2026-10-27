@@ -13,6 +13,7 @@
 #include "Taps.h"
 #include <chrono>
 #include <ctime>
+#include <functional>
 #include <map>
 #include <optional>
 #include <vector>
@@ -24,15 +25,14 @@ class CoreRegistry;
 class AbstractMetricsBucket;
 class PrometheusSerializer;
 
-// Whether merged handlers have a window to push. Merged windows are pushed once
-// every handler has closed a new one: handlers usually close theirs on the same
-// input event but can close them on different ones, and pushing on the first
-// would send the others' previous window again. Only the latest closed window
-// is merged, so the exporter must check at least twice a window. Handlers whose
-// windows never close are pushed once per window length. last_starts and
-// last_live record what was last pushed.
-bool merged_window_due(const std::vector<StreamHandler *> &handlers, std::vector<timespec> &last_starts,
-    std::optional<std::chrono::steady_clock::time_point> &last_live);
+// The start of the window each handler merges next, or none until every handler
+// has one. A handler's next window is its oldest closed one after last_starts,
+// the windows it last merged; empty means none merged yet. Handlers usually
+// close their windows on the same input event but can close them on different
+// ones, so taking the next window rather than the newest keeps a handler that
+// closed one more from being merged with the others' previous window.
+std::optional<std::vector<timespec>> next_merged_windows(const std::vector<StreamHandler *> &handlers,
+    const std::vector<timespec> &last_starts);
 
 class PolicyException : public std::runtime_error
 {
@@ -62,7 +62,8 @@ private:
     std::optional<std::chrono::steady_clock::time_point> _otel_last_merged_live;
 
     BucketMap _get_merged_buckets(bool prometheus = true, uint64_t period = 0, bool merged = false);
-    bool _merged_window_due();
+    BucketMap _get_merged_buckets(const std::function<std::unique_ptr<AbstractMetricsBucket>(StreamHandler *, AbstractMetricsBucket *)> &merge);
+    void _merged_opentelemetry(metrics::v1::ScopeMetrics &scope);
 
 public:
     Policy(const std::string &name)

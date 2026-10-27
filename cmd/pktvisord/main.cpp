@@ -636,9 +636,8 @@ int main(int argc, char *argv[])
         otel_config.endpoint = options.otel_setup.host.value();
         otel_config.port_number = options.otel_setup.port.value();
         // Each closed window is pushed once, at the first check after it closes.
-        // Merged handlers push only their latest closed window, and two windows
-        // can close 59 seconds apart, so checking at least twice a window keeps
-        // one from being skipped.
+        // With num_periods 2 a window is held only until the next one closes,
+        // so checking at least twice a window keeps one from expiring unpushed.
         auto interval = options.otel_setup.interval.value();
         if (interval == 0 || interval > 30) {
             auto clamped = interval == 0 ? 5U : 30U;

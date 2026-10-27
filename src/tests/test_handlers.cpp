@@ -39,8 +39,8 @@ public:
     {
         return _config.config_get<uint64_t>("period");
     }
-    // A window has closed from two periods on, and "window_start" says which.
-    std::optional<timespec> closed_window_start() const
+    // One window has closed from two periods on, and "window_start" says which.
+    std::optional<timespec> next_closed_window_start(const std::optional<timespec> &after) const
     {
         if (current_periods() < 2) {
             return std::nullopt;
@@ -49,17 +49,26 @@ public:
         if (_live_config->config_exists("window_start")) {
             start.tv_sec = static_cast<time_t>(_live_config->config_get<uint64_t>("window_start"));
         }
+        if (after && after->tv_sec >= start.tv_sec) {
+            return std::nullopt;
+        }
         return start;
     }
     bool window_closed_opentelemetry(metrics::v1::ScopeMetrics &scope, std::optional<timespec> &last_start, Metric::LabelMap) const
     {
-        auto start = closed_window_start();
-        if (!start || (last_start && last_start->tv_sec == start->tv_sec)) {
+        auto start = next_closed_window_start(last_start);
+        if (!start) {
             return false;
         }
         last_start = start;
         scope.add_metrics()->set_name("first_window");
         return true;
+    }
+    std::unique_ptr<AbstractMetricsBucket> closed_merge(AbstractMetricsBucket *, timespec start)
+    {
+        auto result = std::make_unique<HandlerBucket>();
+        result->type = "closed " + std::to_string(start.tv_sec);
+        return result;
     }
     const HandlerBucket *bucket(uint64_t) const
     {
@@ -267,7 +276,7 @@ TEST_CASE("StreamMetricsHandler tests", "[metrics][handler]")
     SECTION("Merged windows")
     {
         std::vector<timespec> last_starts;
-        std::optional<std::chrono::steady_clock::time_point> last_live;
+        CHECK_FALSE(next_merged_windows({}, last_starts));
 
         // Merged windows go once every handler has closed a new one.
         Configurable other;
@@ -279,21 +288,24 @@ TEST_CASE("StreamMetricsHandler tests", "[metrics][handler]")
         TestStreamMetricsHandler first("first", &config);
         TestStreamMetricsHandler second("second", &other);
         std::vector<StreamHandler *> handlers{&first, &second};
-        CHECK(merged_window_due(handlers, last_starts, last_live));
-        CHECK_FALSE(merged_window_due(handlers, last_starts, last_live));
+        auto next = next_merged_windows(handlers, last_starts);
+        REQUIRE(next);
+        REQUIRE(next->size() == 2);
+        CHECK(next->at(0).tv_sec == 100);
+        CHECK(next->at(1).tv_sec == 100);
+        last_starts = *next;
+        CHECK_FALSE(next_merged_windows(handlers, last_starts));
         config.config_set<uint64_t>("window_start", 160);
-        CHECK_FALSE(merged_window_due(handlers, last_starts, last_live));
+        CHECK_FALSE(next_merged_windows(handlers, last_starts));
         other.config_set<uint64_t>("window_start", 160);
-        CHECK(merged_window_due(handlers, last_starts, last_live));
+        next = next_merged_windows(handlers, last_starts);
+        REQUIRE(next);
+        CHECK(next->at(0).tv_sec == 160);
+        CHECK(next->at(1).tv_sec == 160);
 
-        // A handler whose windows never close is pushed once per window length.
-        Configurable single;
-        single.config_set<uint64_t>("num_periods", 1);
-        single.config_set<uint64_t>("period", 0);
-        TestStreamMetricsHandler live("live", &single);
-        handlers.push_back(&live);
-        CHECK(merged_window_due(handlers, last_starts, last_live));
-        CHECK_FALSE(merged_window_due(handlers, last_starts, last_live));
+        // The window merged is the one asked for.
+        auto merged = first.merge_closed(nullptr, next->at(0));
+        CHECK(dynamic_cast<HandlerBucket *>(merged.get())->type == "closed 160");
     }
 
     SECTION("Merge")

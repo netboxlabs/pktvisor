@@ -316,6 +316,21 @@ private:
         // expiring bucket will destruct here if it exists
     }
 
+    // Whether a window that starts at t comes after the one that starts at
+    // after. None comes before every window.
+    static bool _starts_after(const timespec &t, const std::optional<timespec> &after)
+    {
+        return !after || t.tv_sec > after->tv_sec || (t.tv_sec == after->tv_sec && t.tv_nsec > after->tv_nsec);
+    }
+
+    // The index of the newest closed bucket. A recorded stream that ended has
+    // closed its live bucket too, since no period shift will. The caller holds
+    // the bucket lock.
+    size_t _newest_closed() const
+    {
+        return _metric_buckets.front()->read_only() ? 0 : 1;
+    }
+
     // Writes one bucket to scope. The caller holds the base and bucket locks.
     void _bucket_opentelemetry(metrics::v1::ScopeMetrics &scope, const MetricsBucketClass *bucket, Metric::LabelMap add_labels) const
     {
@@ -578,15 +593,19 @@ public:
         _bucket_opentelemetry(scope, _metric_buckets.at(period).get(), add_labels);
     }
 
-    // The start of the most recent closed window, or none while no window has
-    // closed.
-    std::optional<timespec> closed_window_start() const
+    // The start of the oldest closed window that starts after `after`, or none
+    // while no such window is held.
+    std::optional<timespec> next_closed_window_start(const std::optional<timespec> &after) const
     {
         std::shared_lock rbl(_bucket_mutex);
-        if (_metric_buckets.size() < 2) {
-            return std::nullopt;
+        auto newest = _newest_closed();
+        for (auto i = _metric_buckets.size(); i-- > newest;) {
+            auto start = _metric_buckets[i]->start_tstamp();
+            if (_starts_after(start, after)) {
+                return start;
+            }
         }
-        return _metric_buckets[1]->start_tstamp();
+        return std::nullopt;
     }
 
     // Exports every closed window that starts after last_start, oldest first,
@@ -599,14 +618,12 @@ public:
     {
         std::shared_lock rl(_base_mutex);
         std::shared_lock rbl(_bucket_mutex);
-        auto after_last = [&last_start](const timespec &t) {
-            return !last_start || t.tv_sec > last_start->tv_sec || (t.tv_sec == last_start->tv_sec && t.tv_nsec > last_start->tv_nsec);
-        };
         std::optional<timespec> newest;
-        for (auto i = _metric_buckets.size(); i-- > 1;) {
+        auto newest_closed = _newest_closed();
+        for (auto i = _metric_buckets.size(); i-- > newest_closed;) {
             auto bucket = _metric_buckets[i].get();
             auto start_ts = bucket->start_tstamp();
-            if (!after_last(start_ts)) {
+            if (!_starts_after(start_ts, last_start)) {
                 continue;
             }
             _bucket_opentelemetry(scope, bucket, add_labels);
@@ -728,6 +745,31 @@ public:
         merged->merge(*_metric_buckets[period].get());
 
         return merged;
+    }
+
+    // Like simple_merge, but of the closed window that starts at start, so a
+    // window that closes in the meantime does not change what is merged.
+    // Throws if that window is no longer held.
+    std::unique_ptr<AbstractMetricsBucket> closed_merge(AbstractMetricsBucket *bucket, timespec start)
+    {
+        std::shared_lock rl(_base_mutex);
+        std::shared_lock rbl(_bucket_mutex);
+
+        for (auto i = _newest_closed(); i < _metric_buckets.size(); ++i) {
+            auto held = _metric_buckets[i].get();
+            auto held_start = held->start_tstamp();
+            if (held_start.tv_sec != start.tv_sec || held_start.tv_nsec != start.tv_nsec) {
+                continue;
+            }
+            if (auto merged = dynamic_cast<MetricsBucketClass *>(bucket); merged) {
+                merged->merge(*held, Metric::Aggregate::SUM);
+                return nullptr;
+            }
+            auto merged = std::make_unique<MetricsBucketClass>();
+            merged->merge(*held);
+            return merged;
+        }
+        throw PeriodException("the closed window to merge is no longer held");
     }
 
     std::unique_ptr<AbstractMetricsBucket> multiple_merge(AbstractMetricsBucket *bucket, uint64_t period)
