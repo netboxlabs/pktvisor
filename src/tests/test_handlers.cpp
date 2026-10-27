@@ -146,6 +146,10 @@ public:
         };
         process_groups(group_defs);
     }
+    void test_end_recording(timespec stamp)
+    {
+        _metrics->set_end_tstamp(stamp);
+    }
 };
 
 TEST_CASE("StreamMetricsHandler tests", "[metrics][handler]")
@@ -242,6 +246,12 @@ TEST_CASE("StreamMetricsHandler tests", "[metrics][handler]")
         scope.Clear();
         handler->window_opentelemetry(scope);
         CHECK(scope.metrics().empty());
+
+        // Until a recorded stream ends, which closes it.
+        timespec end;
+        timespec_get(&end, TIME_UTC);
+        handler->test_end_recording(end);
+        CHECK(handler->closes_windows());
 
         // A closed window is pushed once, and the next one once it closes.
         config.config_set<uint64_t>("num_periods", 5);

@@ -771,6 +771,22 @@ TEST_CASE("A recorded stream's last window is pushed once it ends", "[metrics][a
         scope.Clear();
         CHECK_FALSE(manager->window_closed_opentelemetry(scope, last));
     }
+
+    SECTION("A single period")
+    {
+        c.config_set<uint64_t>("num_periods", 1);
+        manager = std::make_unique<TestMetricsManager>(&c);
+        manager->set_start_tstamp(stamp);
+        CHECK_FALSE(manager->live_window_closed());
+        CHECK_FALSE(manager->window_closed_opentelemetry(scope, last));
+        stamp.tv_sec += 2 * TestMetricsManager::PERIOD_SEC;
+        manager->set_end_tstamp(stamp);
+        CHECK(manager->live_window_closed());
+        CHECK(manager->window_closed_opentelemetry(scope, last));
+        CHECK(scope.metrics_size() == 2);
+        scope.Clear();
+        CHECK_FALSE(manager->window_closed_opentelemetry(scope, last));
+    }
 }
 
 TEST_CASE("Closed windows are merged by their start", "[metrics][abstract]")

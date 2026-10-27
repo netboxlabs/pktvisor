@@ -94,7 +94,8 @@ public:
         last_live = now;
         return true;
     }
-    // Whether this handler's windows close, which takes more than one period.
+    // Whether this handler's windows close: with more than one period, or once
+    // a recorded stream ends.
     virtual bool closes_windows() const = 0;
     // The start of the oldest closed window that starts after `after`, or none
     // while no such window is held.
@@ -273,8 +274,8 @@ public:
             _metrics->window_closed_opentelemetry(scope, _otel_last_window, add_labels);
             return;
         }
-        // A single period never closes, so it is pushed as it grows, once per
-        // window length as before.
+        // A single period closes only when a recorded stream ends, so until
+        // then it is pushed as it grows, once per window length as before.
         if (live_window_due(_otel_last_live)) {
             _metrics->window_single_opentelemetry(scope, 0, add_labels);
         }
@@ -282,7 +283,7 @@ public:
 
     bool closes_windows() const override
     {
-        return _metrics->num_periods() > 1;
+        return _metrics->num_periods() > 1 || _metrics->live_window_closed();
     }
 
     std::optional<timespec> next_closed_window_start(const std::optional<timespec> &after) const override

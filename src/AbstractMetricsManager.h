@@ -593,6 +593,14 @@ public:
         _bucket_opentelemetry(scope, _metric_buckets.at(period).get(), add_labels);
     }
 
+    // Whether the live window has closed, which happens when a recorded stream
+    // ends.
+    bool live_window_closed() const
+    {
+        std::shared_lock rbl(_bucket_mutex);
+        return _metric_buckets.front()->read_only();
+    }
+
     // The start of the oldest closed window that starts after `after`, or none
     // while no such window is held.
     std::optional<timespec> next_closed_window_start(const std::optional<timespec> &after) const
