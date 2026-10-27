@@ -96,7 +96,8 @@ static const char USAGE[] =
       --otel-host HOST                      Set OTEL destination IP where the data will be pushed to (default: localhost)
       --otel-path PATH                      Set OTEL destination URL path (default: /v1/metrics)
       --otel-port PORT                      Set OTEL destination port number (default: 4318)
-      --otel-interval N                     The interval in seconds that exporter will periodically push data (default: 60)
+      --otel-interval N                     How often, in seconds, the exporter checks for closed windows to push. Each
+                                            window is pushed once, so this bounds how late it arrives (1 to 30, default: 5)
       --otel-tls                            Enable TLS when connecting to OTEL destination
       --otel-tls-cert FILE                  Use given TLS cert. Required if --otel-tls is enabled.
       --otel-tls-key FILE                   Use given TLS private key. Required if --otel-tls is enabled.
@@ -345,7 +346,7 @@ void fill_cmd_options(std::map<std::string, docopt::value> args, CmdOptions &opt
     } else if (config["otel_interval"]) {
         options.otel_setup.interval = config["otel_interval"].as<unsigned int>();
     } else {
-        options.otel_setup.interval = 60;
+        options.otel_setup.interval = 5;
     }
 
     if (args["--otel-tls-cert"]) {
@@ -634,6 +635,16 @@ int main(int argc, char *argv[])
         otel_config.path = options.otel_setup.path.value();
         otel_config.endpoint = options.otel_setup.host.value();
         otel_config.port_number = options.otel_setup.port.value();
+        // Each closed window is pushed once, at the first check after it closes.
+        // With num_periods 2 a window is held only until the next one closes,
+        // so checking at least twice a window keeps one from expiring unpushed.
+        auto interval = options.otel_setup.interval.value();
+        if (interval == 0 || interval > 30) {
+            auto clamped = interval == 0 ? 5U : 30U;
+            logger->warn("--otel-interval {} is outside 1 to 30 seconds, using {}", interval, clamped);
+            interval = clamped;
+        }
+        otel_config.interval_sec = interval;
     }
 
     std::unique_ptr<CoreServer> svr;

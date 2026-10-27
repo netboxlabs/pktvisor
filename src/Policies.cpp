@@ -406,19 +406,123 @@ void Policy::prometheus_metrics(std::stringstream &out)
     out << ser.finalize();
 }
 
+bool PolicyManager::opentelemetry_metrics(metrics::v1::ResourceMetrics &resource)
+{
+    for (const auto &p_mname : module_get_keys()) {
+        auto scopes_before = resource.scope_metrics_size();
+        try {
+            auto [policy, lock] = module_get_locked(p_mname);
+            auto scope = resource.add_scope_metrics();
+            scope->mutable_scope()->set_name("pktvisor/" + p_mname);
+            auto attr = scope->mutable_scope()->add_attributes();
+            attr->set_key("policy_name");
+            attr->mutable_value()->set_string_value(p_mname);
+            policy->opentelemetry_metrics(*scope);
+        } catch (const std::exception &) {
+            // A policy removed during the push is skipped rather than failing
+            // it. One that failed while writing keeps what its earlier handlers
+            // wrote, since they marked those windows as sent; the handler that
+            // failed dropped its own.
+        }
+        if (resource.scope_metrics_size() > scopes_before && resource.scope_metrics(scopes_before).metrics_size() == 0) {
+            resource.mutable_scope_metrics()->RemoveLast();
+        }
+    }
+    return resource.scope_metrics_size() > 0;
+}
+
+std::optional<std::vector<timespec>> next_merged_windows(const std::vector<StreamHandler *> &handlers,
+    const std::vector<timespec> &last_starts)
+{
+    if (handlers.empty()) {
+        return std::nullopt;
+    }
+    std::vector<timespec> starts;
+    for (size_t i = 0; i < handlers.size(); ++i) {
+        std::optional<timespec> after;
+        if (last_starts.size() == handlers.size()) {
+            after = last_starts[i];
+        }
+        auto start = handlers[i]->next_closed_window_start(after);
+        if (!start) {
+            return std::nullopt;
+        }
+        starts.push_back(*start);
+    }
+    return starts;
+}
+
+void Policy::_merged_opentelemetry(metrics::v1::ScopeMetrics &scope)
+{
+    std::vector<StreamHandler *> handlers;
+    for (auto &mod : modules()) {
+        if (auto hmod = dynamic_cast<StreamHandler *>(mod)) {
+            handlers.push_back(hmod);
+        }
+    }
+    // If an export fails, what it wrote is dropped and its window is not
+    // marked as sent, so the next push sends it whole.
+    auto export_merged = [this, &scope](const BucketMap &bucket_map) {
+        auto metrics_before = scope.metrics_size();
+        try {
+            for (auto &[bucket, hmod] : bucket_map) {
+                hmod->window_opentelemetry(scope, bucket.get(), {{"policy", name()}, {"handler", hmod->schema_key() + "_merged"}});
+            }
+        } catch (...) {
+            scope.mutable_metrics()->DeleteSubrange(metrics_before, scope.metrics_size() - metrics_before);
+            throw;
+        }
+    };
+
+    if (std::any_of(handlers.begin(), handlers.end(), [](auto h) { return !h->closes_windows(); })) {
+        // A window that never closes is pushed as it grows, once per window
+        // length.
+        auto last_live = _otel_last_merged_live;
+        if (!StreamHandler::live_window_due(_otel_last_merged_live)) {
+            return;
+        }
+        try {
+            export_merged(_get_merged_buckets());
+        } catch (...) {
+            _otel_last_merged_live = last_live;
+            throw;
+        }
+        return;
+    }
+
+    // Each handler merges the window it holds by that window's start, so one
+    // that closes during the merge changes nothing: what is marked as sent is
+    // what was merged.
+    while (auto starts = next_merged_windows(handlers, _otel_last_merged)) {
+        std::map<StreamHandler *, timespec> start_of;
+        for (size_t i = 0; i < handlers.size(); ++i) {
+            start_of[handlers[i]] = (*starts)[i];
+        }
+        export_merged(_get_merged_buckets([&start_of](StreamHandler *hmod, AbstractMetricsBucket *bucket) {
+            return hmod->merge_closed(bucket, start_of.at(hmod));
+        }));
+        _otel_last_merged = std::move(*starts);
+    }
+}
+
 void Policy::opentelemetry_metrics(metrics::v1::ScopeMetrics &scope)
 {
     if (_merge_like_handlers) {
-        auto bucket_map = _get_merged_buckets();
-        for (auto &[bucket, hmod] : bucket_map) {
-            hmod->window_opentelemetry(scope, bucket.get(), {{"policy", name()}, {"handler", hmod->schema_key() + "_merged"}});
-        }
+        _merged_opentelemetry(scope);
     } else {
         for (auto &mod : modules()) {
             auto hmod = dynamic_cast<StreamHandler *>(mod);
             if (hmod) {
                 spdlog::stopwatch sw;
-                hmod->window_opentelemetry(scope, {{"policy", name()}, {"handler", hmod->name()}});
+                // A handler marks its windows as sent only once written, so if
+                // it fails what it wrote is dropped and sent whole next time.
+                auto metrics_before = scope.metrics_size();
+                try {
+                    hmod->window_opentelemetry(scope, {{"policy", name()}, {"handler", hmod->name()}});
+                } catch (...) {
+                    scope.mutable_metrics()->DeleteSubrange(metrics_before, scope.metrics_size() - metrics_before);
+                    throw;
+                }
                 spdlog::get("visor")->debug("{} window_opentelemetry elapsed time: {}", hmod->name(), sw);
             }
         }
@@ -427,12 +531,19 @@ void Policy::opentelemetry_metrics(metrics::v1::ScopeMetrics &scope)
 
 Policy::BucketMap Policy::_get_merged_buckets(bool prometheus, uint64_t period, bool merged)
 {
+    return _get_merged_buckets([prometheus, period, merged](StreamHandler *hmod, AbstractMetricsBucket *bucket) {
+        return hmod->merge(bucket, period, prometheus, merged);
+    });
+}
+
+Policy::BucketMap Policy::_get_merged_buckets(const std::function<std::unique_ptr<AbstractMetricsBucket>(StreamHandler *, AbstractMetricsBucket *)> &merge)
+{
     BucketMap bucket_map;
     for (auto &mod : modules()) {
         auto hmod = dynamic_cast<StreamHandler *>(mod);
         assert(hmod);
         if (bucket_map.empty()) {
-            bucket_map.emplace(hmod->merge(nullptr, period, prometheus, merged), hmod);
+            bucket_map.emplace(merge(hmod, nullptr), hmod);
             continue;
         }
         for (auto &[bucket, handler] : bucket_map) {
@@ -441,7 +552,7 @@ Policy::BucketMap Policy::_get_merged_buckets(bool prometheus, uint64_t period, 
                 && (hmod->version() != handler->version())) {
                 continue;
             }
-            auto new_bucket = hmod->merge(bucket.get(), period, prometheus, merged);
+            auto new_bucket = merge(hmod, bucket.get());
             if (!new_bucket) {
                 break;
             } else if (is_last) {

@@ -6,9 +6,12 @@
 #include "InputStreamManager.h"
 #include "Policies.h"
 #include "PrometheusSerializer.h"
+#include "handlers/dns/v1/DnsStreamHandler.h"
+#include "handlers/net/v1/NetStreamHandler.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
+#include <set>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 #include <yaml-cpp/yaml.h>
@@ -1380,6 +1383,16 @@ TEST_CASE("Policies and Metrics", "[policies][metrics]")
         REQUIRE_NOTHROW(policy->opentelemetry_metrics(scope));
     }
 
+    SECTION("Opentelemetry push carries only policies with a window")
+    {
+        metrics::v1::ResourceMetrics resource;
+        registry.policy_manager()->opentelemetry_metrics(resource);
+        // Whatever the first push held, nothing is new right after it.
+        resource.Clear();
+        CHECK_FALSE(registry.policy_manager()->opentelemetry_metrics(resource));
+        CHECK(resource.scope_metrics_size() == 0);
+    }
+
     config_file = YAML::Load(policies_config_merge);
     CHECK(config_file["visor"]["policies"]);
     CHECK(config_file["visor"]["policies"].IsMap());
@@ -1409,6 +1422,77 @@ TEST_CASE("Policies and Metrics", "[policies][metrics]")
         auto [policy, lock] = registry.policy_manager()->module_get_locked("default_merge");
         metrics::v1::ScopeMetrics scope;
         REQUIRE_NOTHROW(policy->opentelemetry_metrics(scope));
+    }
+
+    SECTION("Opentelemetry merge_like_handlers pushes each window once")
+    {
+        auto [policy, lock] = registry.policy_manager()->module_get_locked("default_merge");
+        auto mods = policy->modules();
+        REQUIRE(mods.size() == 4);
+        // Closes a window on the handlers given at stamp, as an input event would.
+        auto close_window = [](const std::vector<AbstractRunnableModule *> &handlers, timespec stamp) {
+            for (auto mod : handlers) {
+                if (auto dns = dynamic_cast<handler::dns::DnsStreamHandler *>(mod)) {
+                    dns->check_period_shift(stamp);
+                } else if (auto net = dynamic_cast<handler::net::NetStreamHandler *>(mod)) {
+                    net->check_period_shift(stamp);
+                }
+            }
+        };
+        // When each window in the push ended, which names the window.
+        auto window_ends = [](const metrics::v1::ScopeMetrics &scope) {
+            std::set<uint64_t> ends;
+            for (const auto &metric : scope.metrics()) {
+                for (const auto &point : metric.gauge().data_points()) {
+                    ends.insert(point.time_unix_nano());
+                }
+                for (const auto &point : metric.sum().data_points()) {
+                    ends.insert(point.time_unix_nano());
+                }
+                for (const auto &point : metric.summary().data_points()) {
+                    ends.insert(point.time_unix_nano());
+                }
+                for (const auto &point : metric.histogram().data_points()) {
+                    ends.insert(point.time_unix_nano());
+                }
+            }
+            return ends;
+        };
+        auto ns = [](timespec t) { return static_cast<uint64_t>(t.tv_sec) * 1000000000ULL; };
+        timespec t1;
+        timespec_get(&t1, TIME_UTC);
+        t1.tv_sec += 61;
+        auto t2 = t1;
+        t2.tv_sec += 60;
+        auto t3 = t2;
+        t3.tv_sec += 60;
+
+        metrics::v1::ScopeMetrics scope;
+        policy->opentelemetry_metrics(scope);
+        CHECK(scope.metrics_size() == 0);
+
+        close_window(mods, t1);
+        policy->opentelemetry_metrics(scope);
+        CHECK(window_ends(scope) == std::set<uint64_t>{ns(t1)});
+        scope.Clear();
+        policy->opentelemetry_metrics(scope);
+        CHECK(scope.metrics_size() == 0);
+
+        // One handler closes two windows while the others close one, and each
+        // push still merges the same window from every handler.
+        close_window({mods[0]}, t2);
+        policy->opentelemetry_metrics(scope);
+        CHECK(scope.metrics_size() == 0);
+        close_window({mods[0]}, t3);
+        close_window({mods[1], mods[2], mods[3]}, t2);
+        policy->opentelemetry_metrics(scope);
+        CHECK(window_ends(scope) == std::set<uint64_t>{ns(t2)});
+        scope.Clear();
+        policy->opentelemetry_metrics(scope);
+        CHECK(scope.metrics_size() == 0);
+        close_window({mods[1], mods[2], mods[3]}, t3);
+        policy->opentelemetry_metrics(scope);
+        CHECK(window_ends(scope) == std::set<uint64_t>{ns(t3)});
     }
 }
 

@@ -9,10 +9,12 @@
 #include "CoreRegistry.h"
 #include "InputEventProxy.h"
 #include "PrometheusSerializer.h"
+#include <chrono>
 #include <ctime>
 #include <fmt/ostream.h>
 #include <fmt/ranges.h>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <sstream>
 
 namespace visor {
@@ -74,9 +76,32 @@ public:
     virtual void window_json(json &j, AbstractMetricsBucket *bucket) = 0;
     virtual void window_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels = {}) = 0;
     virtual void window_prometheus(PrometheusSerializer &ser, AbstractMetricsBucket *bucket, Metric::LabelMap add_labels = {}) = 0;
-    virtual void window_opentelemetry(metrics::v1::ScopeMetrics &scope, Metric::LabelMap add_labels = {}) = 0;
     virtual void window_opentelemetry(metrics::v1::ScopeMetrics &scope, AbstractMetricsBucket *bucket, Metric::LabelMap add_labels = {}) = 0;
+    // Pushes each closed window once: the exporter checks more often than
+    // windows close, and a window pushed again is stored again downstream.
+    virtual void window_opentelemetry(metrics::v1::ScopeMetrics &scope, Metric::LabelMap add_labels = {}) = 0;
     virtual std::unique_ptr<AbstractMetricsBucket> merge(AbstractMetricsBucket *bucket, uint64_t period, bool prometheus, bool merged) = 0;
+    // How often a window that never closes is pushed: the window length.
+    static constexpr std::chrono::seconds LIVE_WINDOW_PUSH_INTERVAL{METRICS_PERIOD_SEC};
+    // Whether a window that never closes is due to be pushed again, and if so
+    // records now in last_live.
+    static bool live_window_due(std::optional<std::chrono::steady_clock::time_point> &last_live,
+        std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now())
+    {
+        if (last_live && now - *last_live < LIVE_WINDOW_PUSH_INTERVAL) {
+            return false;
+        }
+        last_live = now;
+        return true;
+    }
+    // Whether this handler's windows close: with more than one period, or once
+    // a recorded stream ends.
+    virtual bool closes_windows() const = 0;
+    // The start of the oldest closed window that starts after `after`, or none
+    // while no such window is held.
+    virtual std::optional<timespec> next_closed_window_start(const std::optional<timespec> &after) const = 0;
+    // Merges the closed window that starts at start, as merge() does a period.
+    virtual std::unique_ptr<AbstractMetricsBucket> merge_closed(AbstractMetricsBucket *bucket, timespec start) = 0;
 };
 
 template <class MetricsManagerClass>
@@ -105,6 +130,10 @@ private:
         }
         return it->second;
     }
+
+    // What window_opentelemetry last pushed. Only the exporter calls it.
+    std::optional<timespec> _otel_last_window;
+    std::optional<std::chrono::steady_clock::time_point> _otel_last_live;
 
 protected:
     std::unique_ptr<MetricsManagerClass> _metrics;
@@ -241,11 +270,30 @@ public:
 
     void window_opentelemetry(metrics::v1::ScopeMetrics &scope, Metric::LabelMap add_labels = {}) override
     {
-        if (_metrics->current_periods() > 1) {
-            _metrics->window_single_opentelemetry(scope, 1, add_labels);
-        } else {
+        if (closes_windows()) {
+            _metrics->window_closed_opentelemetry(scope, _otel_last_window, add_labels);
+            return;
+        }
+        // A single period closes only when a recorded stream ends, so until
+        // then it is pushed as it grows, once per window length as before.
+        if (live_window_due(_otel_last_live)) {
             _metrics->window_single_opentelemetry(scope, 0, add_labels);
         }
+    }
+
+    bool closes_windows() const override
+    {
+        return _metrics->num_periods() > 1 || _metrics->live_window_closed();
+    }
+
+    std::optional<timespec> next_closed_window_start(const std::optional<timespec> &after) const override
+    {
+        return _metrics->next_closed_window_start(after);
+    }
+
+    std::unique_ptr<AbstractMetricsBucket> merge_closed(AbstractMetricsBucket *bucket, timespec start) override
+    {
+        return _metrics->closed_merge(bucket, start);
     }
 
     void window_opentelemetry(metrics::v1::ScopeMetrics &scope, AbstractMetricsBucket *bucket, Metric::LabelMap add_labels = {}) override
