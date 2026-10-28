@@ -7,6 +7,7 @@
 #include "Policies.h"
 #include "PrometheusSerializer.h"
 #include "handlers/dns/v1/DnsStreamHandler.h"
+#include "handlers/input_resources/InputResourcesStreamHandler.h"
 #include "handlers/net/v1/NetStreamHandler.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -941,8 +942,8 @@ TEST_CASE("Policies", "[policies]")
         REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"]));
         REQUIRE_NOTHROW(registry.policy_manager()->load(config_file["visor"]["policies"]));
 
-        // The file is read while the policy loads, so the policy's handlers
-        // must be running before its input starts.
+        // The file is read while the policy loads, so the policy's handlers and
+        // the input's resources handler must both be running before it starts.
         std::string resources_name;
         {
             auto [policy, lock] = registry.policy_manager()->module_get_locked("recorded_view");
@@ -957,6 +958,12 @@ TEST_CASE("Policies", "[policies]")
         REQUIRE(registry.policy_manager()->module_exists(resources_name));
         auto [resources, lock] = registry.policy_manager()->module_get_locked(resources_name);
         CHECK(resources->running());
+        auto resources_handler = dynamic_cast<handler::resources::InputResourcesStreamHandler *>(resources->modules()[0]);
+        REQUIRE(resources_handler);
+        json j;
+        resources_handler->metrics()->bucket(0)->to_json(j);
+        CHECK(j["cpu_usage"]["p50"] != nullptr);
+        CHECK(j["memory_bytes"]["p50"] != nullptr);
     }
 
     // TODO multiple collection policies in the same yaml
