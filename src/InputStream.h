@@ -50,10 +50,16 @@ public:
         }
     }
 
+    // a no-op for a policy that is not attached, so a failed load can detach its policy from every input it
+    // may have reached without signalling a removal twice
     void remove_policy(const Policy *policy)
     {
         std::unique_lock lock(_input_mutex);
-        _policies.erase(std::remove(_policies.begin(), _policies.end(), policy), _policies.end());
+        auto removed = std::remove(_policies.begin(), _policies.end(), policy);
+        if (removed == _policies.end()) {
+            return;
+        }
+        _policies.erase(removed, _policies.end());
         for (auto const &proxy : _event_proxies) {
             proxy->policy_cb(policy, Action::RemovePolicy);
         }

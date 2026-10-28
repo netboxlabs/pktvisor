@@ -842,6 +842,74 @@ visor:
             type: net
 )";
 
+auto policies_config_shared_input = R"(
+version: "1.0"
+
+visor:
+  taps:
+    live_a:
+      input_type: pcap
+      config:
+        pcap_source: mock
+      tags:
+        group: g1
+    broken_b:
+      input_type: pcap
+      config:
+        pcap_file: tests/fixtures/does_not_exist.pcap
+      tags:
+        group: g1
+  policies:
+    first_view:
+      kind: collection
+      input:
+        tap: live_a
+        input_type: pcap
+      handlers:
+        modules:
+          first_net:
+            type: net
+)";
+
+auto policies_config_shared_input_failing = R"(
+version: "1.0"
+
+visor:
+  policies:
+    second_view:
+      kind: collection
+      input:
+        tap_selector:
+          any:
+            - group: g1
+        input_type: pcap
+      handlers:
+        modules:
+          second_net:
+            type: net
+)";
+
+auto policies_config_logic_error_on_start = R"(
+visor:
+  taps:
+    anycast:
+      input_type: mock
+      config:
+        iface: eth0
+  policies:
+    default_view:
+      kind: collection
+      input:
+        tap: anycast
+        input_type: mock
+        config:
+          except_on_start_logic: true
+      handlers:
+        modules:
+          default_net:
+            type: net
+)";
+
 TEST_CASE("Policies", "[policies]")
 {
 
@@ -1098,6 +1166,53 @@ TEST_CASE("Policies", "[policies]")
         CHECK_FALSE(registry.policy_manager()->module_exists("broken_view"));
         CHECK_FALSE(registry.handler_manager()->module_exists("broken_view-broken-broken_dns"));
         CHECK_FALSE(registry.handler_manager()->module_exists("broken_view-broken-broken_net"));
+    }
+
+    SECTION("Bad Config: a failed load leaves no reference on a shared input")
+    {
+        CoreRegistry registry;
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
+        YAML::Node config_file = YAML::Load(policies_config_shared_input);
+        REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"]));
+        REQUIRE_NOTHROW(registry.policy_manager()->load(config_file["visor"]["policies"]));
+
+        std::string input_name;
+        size_t policies_before;
+        {
+            auto [policy, lock] = registry.policy_manager()->module_get_locked("first_view");
+            input_name = policy->input_stream().back()->name();
+            policies_before = policy->input_stream().back()->policies_count();
+        }
+
+        // second_view reuses first_view's input and adds one that fails to start, so it fails before it has
+        // started; it must still be detached from the input it shares
+        YAML::Node failing = YAML::Load(policies_config_shared_input_failing);
+        REQUIRE_THROWS_WITH(registry.policy_manager()->load(failing["visor"]["policies"]), "policy [second_view] failed to start: Cannot open pcap/pcapng file");
+        {
+            auto [input, lock] = registry.input_manager()->module_get_locked(input_name);
+            CHECK(input->policies_count() == policies_before);
+        }
+
+        // so removing the last policy on that input still tears it down
+        REQUIRE_NOTHROW(registry.policy_manager()->remove_policy("first_view"));
+        CHECK_FALSE(registry.input_manager()->module_exists(input_name));
+    }
+
+    SECTION("Bad Config: an exception that is not a runtime_error is rolled back too")
+    {
+        CoreRegistry registry;
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
+
+        REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(policies_config_logic_error_on_start));
+        // rethrown as it was, so the API still answers it as before; and rolled back, so a retry fails the
+        // same way rather than as a name clash
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            REQUIRE_THROWS_AS(registry.policy_manager()->load_from_str(policies_config_logic_error_on_start), std::logic_error);
+        }
+        CHECK_FALSE(registry.policy_manager()->module_exists("default_view"));
+        CHECK_FALSE(registry.handler_manager()->module_exists("default_view-anycast-default_net"));
     }
 
     SECTION("Bad Config: mis-matched input_type on tap")

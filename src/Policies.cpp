@@ -83,6 +83,26 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
 
         std::vector<std::string> added_inputs;
         std::vector<std::string> added_handlers;
+        std::vector<std::unique_ptr<Policy>> resources_policies;
+        std::vector<std::string> added_resources_policies;
+        // undo everything this load did. stop() undoes a completed start (Policy::start undoes a partial one
+        // itself). the policy is then detached from every input it reached, started or not: a reused input
+        // outlives this load and must not keep counting it
+        auto rollback = [&]() {
+            policy_ptr->stop();
+            for (auto input : policy_ptr->input_stream()) {
+                input->remove_policy(policy_ptr);
+            }
+            for (auto &p : added_resources_policies) {
+                module_remove(p);
+            }
+            for (auto &m : added_handlers) {
+                _registry->handler_manager()->module_remove(m);
+            }
+            for (auto &p : added_inputs) {
+                _registry->input_manager()->module_remove(p);
+            }
+        };
         try {
             for (const auto &tap_name : taps_name) {
                 auto [tap, tap_lock] = _registry->tap_manager()->module_get_locked(tap_name);
@@ -139,19 +159,12 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
                 input_ptr->add_policy(policy_ptr);
             }
 
-        } catch (std::runtime_error &e) {
+        } catch (...) {
             // failed to create policy
-            for (auto &m : added_handlers) {
-                _registry->handler_manager()->module_remove(m);
-            }
-            for (auto &p : added_inputs) {
-                _registry->input_manager()->module_remove(p);
-            }
+            rollback();
             throw;
         }
 
-        std::vector<std::unique_ptr<Policy>> resources_policies;
-        std::vector<std::string> added_resources_policies;
         try {
             // every handler on a new input must be running before the input starts: an input that reads all
             // its data as it starts, such as a pcap_file or dnstap_file, is consumed by whichever policy starts
@@ -174,19 +187,13 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
                 resources_policy_ptr->input_stream().back()->add_policy(resources_policy_ptr);
             }
             module_add(std::move(policy));
-        } catch (std::runtime_error &e) {
-            // undoes a completed start; Policy::start undoes a partial one itself
-            policy_ptr->stop();
-            for (auto &p : added_resources_policies) {
-                module_remove(p);
-            }
-            for (auto &m : added_handlers) {
-                _registry->handler_manager()->module_remove(m);
-            }
-            for (auto &p : added_inputs) {
-                _registry->input_manager()->module_remove(p);
-            }
+        } catch (const std::runtime_error &e) {
+            rollback();
             throw PolicyException(fmt::format("policy [{}] failed to start: {}", policy_name, e.what()));
+        } catch (...) {
+            // anything else, such as a std::invalid_argument, is rethrown as it was so callers still tell it apart
+            rollback();
+            throw;
         }
 
         result.push_back(policy_ptr);
