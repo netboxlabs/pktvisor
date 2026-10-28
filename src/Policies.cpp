@@ -83,7 +83,9 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
 
         std::vector<std::string> added_inputs;
         std::vector<std::string> added_handlers;
-        std::vector<InputStream *> attached_inputs;
+        // by name, like the resources policies below: once the policy is detached from an input, nothing keeps
+        // that input alive, and a concurrent removal of its last policy can free it while this load runs
+        std::vector<std::string> attached_inputs;
         std::vector<std::unique_ptr<Policy>> resources_policies;
         // by name: once registered, a resources policy can be deleted through the API while this load runs
         std::vector<std::string> added_resources_policies;
@@ -101,8 +103,14 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
                 }
             };
             step([&] { policy_ptr->stop(); });
-            for (auto input : attached_inputs) {
-                step([&] { input->remove_policy(policy_ptr); });
+            for (auto &name : attached_inputs) {
+                step([&] {
+                    // looked up under the input map lock; one that is gone was freed after stop() detached it
+                    auto [inputs, lock] = _registry->input_manager()->module_get_all_locked();
+                    if (auto input = inputs.find(name); input != inputs.end()) {
+                        input->second->remove_policy(policy_ptr);
+                    }
+                });
             }
             for (auto &name : added_resources_policies) {
                 step([&] {
@@ -173,7 +181,7 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
 
                 // success
                 input_ptr->add_policy(policy_ptr);
-                attached_inputs.push_back(input_ptr);
+                attached_inputs.push_back(input_stream_name);
             }
 
         } catch (...) {
