@@ -85,7 +85,8 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
         std::vector<std::string> added_handlers;
         std::vector<InputStream *> attached_inputs;
         std::vector<std::unique_ptr<Policy>> resources_policies;
-        std::vector<Policy *> added_resources_policies;
+        // by name: once registered, a resources policy can be deleted through the API while this load runs
+        std::vector<std::string> added_resources_policies;
         // Undo everything this load did, one step at a time, so that a step that fails neither skips the rest
         // nor replaces the exception that started the rollback. stop() undoes a completed start; after a
         // partial one, Policy::start has already stopped the handlers, and the input manager stops the inputs
@@ -103,9 +104,11 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
             for (auto input : attached_inputs) {
                 step([&] { input->remove_policy(policy_ptr); });
             }
-            for (auto resources_policy : added_resources_policies) {
-                auto name = resources_policy->name();
-                step([&] { resources_policy->stop(); });
+            for (auto &name : added_resources_policies) {
+                step([&] {
+                    auto [resources_policy, lock] = module_get_locked(name);
+                    resources_policy->stop();
+                });
                 // unregistered even if it did not stop, since its input is removed below
                 step([&] { module_remove(name); });
             }
@@ -194,11 +197,12 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
             }
             policy_ptr->start();
             for (auto &resources_policy : resources_policies) {
-                auto resources_policy_ptr = resources_policy.get();
-                resources_policy_ptr->start();
+                // attached before it is registered, and not touched after: from then on the API can delete it
+                auto resources_name = resources_policy->name();
+                resources_policy->start();
+                resources_policy->input_stream().back()->add_policy(resources_policy.get());
                 module_add(std::move(resources_policy));
-                added_resources_policies.push_back(resources_policy_ptr);
-                resources_policy_ptr->input_stream().back()->add_policy(resources_policy_ptr);
+                added_resources_policies.push_back(resources_name);
             }
             module_add(std::move(policy));
         } catch (const std::runtime_error &e) {
