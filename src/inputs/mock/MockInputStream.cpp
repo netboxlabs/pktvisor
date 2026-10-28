@@ -31,6 +31,9 @@ void MockInputStream::start()
     if (config_exists("except_on_start")) {
         throw std::runtime_error("mock error on start");
     }
+    if (config_exists("except_on_start_logic")) {
+        throw std::logic_error("mock logic error on start");
+    }
 
     static timer timer_thread{500ms};
     std::srand(std::time(nullptr));

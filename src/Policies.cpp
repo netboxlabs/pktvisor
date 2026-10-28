@@ -83,6 +83,63 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
 
         std::vector<std::string> added_inputs;
         std::vector<std::string> added_handlers;
+        // by name, like the resources policies below: once the policy is detached from an input, nothing keeps
+        // that input alive, and a concurrent removal of its last policy can free it while this load runs
+        std::vector<std::string> attached_inputs;
+        std::vector<std::unique_ptr<Policy>> resources_policies;
+        // by name: once registered, a resources policy can be deleted through the API while this load runs
+        std::vector<std::string> added_resources_policies;
+        // Undo everything this load did, one step at a time, so that a step that fails neither skips the rest
+        // nor replaces the exception that started the rollback. stop() undoes a completed start; after a
+        // partial one, Policy::start has already stopped the handlers, and the input manager stops the inputs
+        // it removes. The policy is detached from the inputs it was attached to: a reused input outlives this
+        // load and must not keep counting it, and an input it reached but never joined is left alone.
+        auto rollback = [&]() {
+            auto step = [&policy_name](auto &&undo) {
+                try {
+                    undo();
+                } catch (const std::exception &e) {
+                    spdlog::get("visor")->warn("policy [{}]: rollback: {}", policy_name, e.what());
+                }
+            };
+            step([&] { policy_ptr->stop(); });
+            for (auto &name : attached_inputs) {
+                step([&] {
+                    // under the policy map lock, as remove_policy does: no other removal can free the input
+                    // meanwhile. one that is already gone was freed after stop() detached the policy
+                    std::unique_lock policies_lock(_map_mutex);
+                    InputStream *input = nullptr;
+                    {
+                        auto [inputs, inputs_lock] = _registry->input_manager()->module_get_all_locked();
+                        auto found = inputs.find(name);
+                        if (found == inputs.end()) {
+                            return;
+                        }
+                        input = found->second.get();
+                    }
+                    input->remove_policy(policy_ptr);
+                    // a reused input outlives this load. If its last other policy was removed while this one
+                    // still counted on it, that removal left it running, so finish the teardown here
+                    if (std::find(added_inputs.begin(), added_inputs.end(), name) == added_inputs.end()) {
+                        _remove_input_if_unused(name, input, policy_name);
+                    }
+                });
+            }
+            for (auto &name : added_resources_policies) {
+                step([&] {
+                    auto [resources_policy, lock] = module_get_locked(name);
+                    resources_policy->stop();
+                });
+                // unregistered even if it did not stop, since its input is removed below
+                step([&] { module_remove(name); });
+            }
+            for (auto &m : added_handlers) {
+                step([&] { _registry->handler_manager()->module_remove(m); });
+            }
+            for (auto &p : added_inputs) {
+                step([&] { _registry->input_manager()->module_remove(p); });
+            }
+        };
         try {
             for (const auto &tap_name : taps_name) {
                 auto [tap, tap_lock] = _registry->tap_manager()->module_get_locked(tap_name);
@@ -137,21 +194,15 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
 
                 // success
                 input_ptr->add_policy(policy_ptr);
+                attached_inputs.push_back(input_stream_name);
             }
 
-        } catch (std::runtime_error &e) {
+        } catch (...) {
             // failed to create policy
-            for (auto &m : added_handlers) {
-                _registry->handler_manager()->module_remove(m);
-            }
-            for (auto &p : added_inputs) {
-                _registry->input_manager()->module_remove(p);
-            }
+            rollback();
             throw;
         }
 
-        std::vector<std::unique_ptr<Policy>> resources_policies;
-        std::vector<std::string> added_resources_policies;
         try {
             // every handler on a new input must be running before the input starts: an input that reads all
             // its data as it starts, such as a pcap_file or dnstap_file, is consumed by whichever policy starts
@@ -167,26 +218,27 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
             }
             policy_ptr->start();
             for (auto &resources_policy : resources_policies) {
-                auto resources_policy_ptr = resources_policy.get();
-                resources_policy_ptr->start();
-                module_add(std::move(resources_policy));
-                added_resources_policies.push_back(resources_policy_ptr->name());
-                resources_policy_ptr->input_stream().back()->add_policy(resources_policy_ptr);
+                // attached before it is registered, and not touched after: from then on the API can delete it
+                auto resources_name = resources_policy->name();
+                resources_policy->start();
+                resources_policy->input_stream().back()->add_policy(resources_policy.get());
+                try {
+                    module_add(std::move(resources_policy));
+                } catch (...) {
+                    // not registered, so still ours: stopping it also detaches it from its input
+                    resources_policy->stop();
+                    throw;
+                }
+                added_resources_policies.push_back(resources_name);
             }
             module_add(std::move(policy));
-        } catch (std::runtime_error &e) {
-            // undoes a completed start; Policy::start undoes a partial one itself
-            policy_ptr->stop();
-            for (auto &p : added_resources_policies) {
-                module_remove(p);
-            }
-            for (auto &m : added_handlers) {
-                _registry->handler_manager()->module_remove(m);
-            }
-            for (auto &p : added_inputs) {
-                _registry->input_manager()->module_remove(p);
-            }
+        } catch (const std::runtime_error &e) {
+            rollback();
             throw PolicyException(fmt::format("policy [{}] failed to start: {}", policy_name, e.what()));
+        } catch (...) {
+            // anything else, such as a std::invalid_argument, is rethrown as it was so callers still tell it apart
+            rollback();
+            throw;
         }
 
         result.push_back(policy_ptr);
@@ -273,23 +325,28 @@ void PolicyManager::remove_policy(const std::string &name)
     }
 
     for (const auto &input : input_stream) {
-        if (input.second->policies_count() == 1) {
-            // if there is only one policy left on the input stream, and that policy is the input resources policy, then remove it
-            auto input_resources_name = input.first + "-resources";
-            if (name != input_resources_name && _map.count(input_resources_name) != 0) {
-                auto resources_policy = _map[input_resources_name].get();
-                resources_policy->stop();
-                _registry->handler_manager()->module_remove(input_resources_name);
-                _map.erase(input_resources_name);
-            }
-        }
-
-        if (!input.second->policies_count()) {
-            _registry->input_manager()->module_remove(input.first);
-        }
+        _remove_input_if_unused(input.first, input.second, name);
     }
 
     _map.erase(name);
+}
+
+void PolicyManager::_remove_input_if_unused(const std::string &input_name, InputStream *input, const std::string &leaving_policy)
+{
+    if (input->policies_count() == 1) {
+        // if there is only one policy left on the input stream, and that policy is the input resources policy, then remove it
+        auto input_resources_name = input_name + "-resources";
+        if (leaving_policy != input_resources_name && _map.count(input_resources_name) != 0) {
+            auto resources_policy = _map[input_resources_name].get();
+            resources_policy->stop();
+            _registry->handler_manager()->module_remove(input_resources_name);
+            _map.erase(input_resources_name);
+        }
+    }
+
+    if (!input->policies_count()) {
+        _registry->input_manager()->module_remove(input_name);
+    }
 }
 void Policy::info_json(json &j) const
 {

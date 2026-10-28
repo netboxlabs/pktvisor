@@ -12,6 +12,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <fmt/format.h>
+#include <future>
 #include <set>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
@@ -842,6 +847,74 @@ visor:
             type: net
 )";
 
+auto policies_config_shared_input = R"(
+version: "1.0"
+
+visor:
+  taps:
+    live_a:
+      input_type: pcap
+      config:
+        pcap_source: mock
+      tags:
+        group: g1
+    broken_b:
+      input_type: pcap
+      config:
+        pcap_file: tests/fixtures/does_not_exist.pcap
+      tags:
+        group: g1
+  policies:
+    first_view:
+      kind: collection
+      input:
+        tap: live_a
+        input_type: pcap
+      handlers:
+        modules:
+          first_net:
+            type: net
+)";
+
+auto policies_config_shared_input_failing = R"(
+version: "1.0"
+
+visor:
+  policies:
+    second_view:
+      kind: collection
+      input:
+        tap_selector:
+          any:
+            - group: g1
+        input_type: pcap
+      handlers:
+        modules:
+          second_net:
+            type: net
+)";
+
+auto policies_config_logic_error_on_start = R"(
+visor:
+  taps:
+    anycast:
+      input_type: mock
+      config:
+        iface: eth0
+  policies:
+    default_view:
+      kind: collection
+      input:
+        tap: anycast
+        input_type: mock
+        config:
+          except_on_start_logic: true
+      handlers:
+        modules:
+          default_net:
+            type: net
+)";
+
 TEST_CASE("Policies", "[policies]")
 {
 
@@ -1098,6 +1171,112 @@ TEST_CASE("Policies", "[policies]")
         CHECK_FALSE(registry.policy_manager()->module_exists("broken_view"));
         CHECK_FALSE(registry.handler_manager()->module_exists("broken_view-broken-broken_dns"));
         CHECK_FALSE(registry.handler_manager()->module_exists("broken_view-broken-broken_net"));
+    }
+
+    SECTION("Bad Config: a failed load leaves no reference on a shared input")
+    {
+        CoreRegistry registry;
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
+        YAML::Node config_file = YAML::Load(policies_config_shared_input);
+        REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"]));
+        REQUIRE_NOTHROW(registry.policy_manager()->load(config_file["visor"]["policies"]));
+
+        std::string input_name;
+        size_t policies_before;
+        {
+            auto [policy, lock] = registry.policy_manager()->module_get_locked("first_view");
+            input_name = policy->input_stream().back()->name();
+            policies_before = policy->input_stream().back()->policies_count();
+        }
+
+        // second_view reuses first_view's input and adds one that fails to start, so it fails before it has
+        // started; it must still be detached from the input it shares
+        YAML::Node failing = YAML::Load(policies_config_shared_input_failing);
+        REQUIRE_THROWS_WITH(registry.policy_manager()->load(failing["visor"]["policies"]), "policy [second_view] failed to start: Cannot open pcap/pcapng file");
+        {
+            auto [input, lock] = registry.input_manager()->module_get_locked(input_name);
+            CHECK(input->policies_count() == policies_before);
+        }
+        CHECK_FALSE(registry.handler_manager()->module_exists("second_view-live_a-second_net"));
+        CHECK_FALSE(registry.handler_manager()->module_exists("second_view-broken_b-second_net"));
+        {
+            auto [inputs, lock] = registry.input_manager()->module_get_all_locked();
+            CHECK(inputs.size() == 1);
+        }
+
+        // so removing the last policy on that input still tears it down
+        REQUIRE_NOTHROW(registry.policy_manager()->remove_policy("first_view"));
+        CHECK_FALSE(registry.input_manager()->module_exists(input_name));
+    }
+
+    SECTION("Bad Config: an exception that is not a runtime_error is rolled back too")
+    {
+        CoreRegistry registry;
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
+
+        REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(policies_config_logic_error_on_start));
+        // rethrown as it was, so the API still answers it as before; and rolled back, so a retry fails the
+        // same way rather than as a name clash
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            REQUIRE_THROWS_AS(registry.policy_manager()->load_from_str(policies_config_logic_error_on_start), std::logic_error);
+        }
+        CHECK_FALSE(registry.policy_manager()->module_exists("default_view"));
+        CHECK_FALSE(registry.handler_manager()->module_exists("default_view-anycast-default_net"));
+        auto [inputs, lock] = registry.input_manager()->module_get_all_locked();
+        CHECK(inputs.empty());
+    }
+
+    SECTION("Bad Config: a resources policy that cannot be registered is rolled back")
+    {
+        CoreRegistry registry;
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
+        REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(policies_config_logic_error_on_start));
+        auto policy_on = [](const std::string &name, const std::string &sample) {
+            return fmt::format(R"(
+visor:
+  policies:
+    {0}:
+      kind: collection
+      input:
+        tap: anycast
+        input_type: mock
+        config:
+          sample: {1}
+      handlers:
+        modules:
+          {0}_net:
+            type: net
+)",
+                name, sample);
+        };
+
+        // learn the input clash_view will get, then free it
+        REQUIRE_NOTHROW(registry.policy_manager()->load_from_str(policy_on("clash_view", "one")));
+        std::string input_name;
+        {
+            auto [policy, lock] = registry.policy_manager()->module_get_locked("clash_view");
+            input_name = policy->input_stream().back()->name();
+        }
+        REQUIRE_NOTHROW(registry.policy_manager()->remove_policy("clash_view"));
+
+        // a policy on another input takes the name clash_view's resources policy needs, so its registration
+        // fails after the policy and its input have started
+        auto taken = input_name + "-resources";
+        REQUIRE_NOTHROW(registry.policy_manager()->load_from_str(policy_on(taken, "two")));
+        REQUIRE_THROWS_WITH(registry.policy_manager()->load_from_str(policy_on("clash_view", "one")),
+            fmt::format("policy [clash_view] failed to start: module name '{}' already exists", taken));
+
+        // the rollback removes what the load made, and leaves the policy that owns the name alone
+        CHECK_FALSE(registry.policy_manager()->module_exists("clash_view"));
+        CHECK_FALSE(registry.input_manager()->module_exists(input_name));
+        CHECK_FALSE(registry.handler_manager()->module_exists("clash_view-anycast-clash_view_net"));
+        CHECK_FALSE(registry.handler_manager()->module_exists(taken));
+        REQUIRE(registry.policy_manager()->module_exists(taken));
+        auto [owner, lock] = registry.policy_manager()->module_get_locked(taken);
+        CHECK(owner->running());
     }
 
     SECTION("Bad Config: mis-matched input_type on tap")
@@ -1682,4 +1861,83 @@ TEST_CASE("Multi-policy Prometheus shared serializer", "[policies][prometheus][m
         CHECK(count_occurrences(output, "policy=\"policy_alpha\"") >= 1);
         CHECK(count_occurrences(output, "policy=\"policy_beta\"") >= 1);
     }
+}
+
+TEST_CASE("Loading and removing policies concurrently does not deadlock", "[policies][concurrency]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(R"(
+visor:
+  taps:
+    anycast:
+      input_type: mock
+      config:
+        iface: eth0
+)"));
+
+    // every iteration logs several lines; keep this test's output to warnings
+    struct QuietLogger {
+        std::shared_ptr<spdlog::logger> logger = spdlog::get("visor");
+        spdlog::level::level_enum level = logger->level();
+        QuietLogger()
+        {
+            logger->set_level(spdlog::level::warn);
+        }
+        ~QuietLogger()
+        {
+            logger->set_level(level);
+        }
+    } quiet;
+
+    // every policy gets an input of its own, so each load creates an input and its resources policy and each
+    // removal tears both down: load and remove_policy then take the input and policy maps on every iteration,
+    // and a load runs while the other thread removes. A slow build stops early; the deadlock this guards
+    // against showed up within 2000 iterations.
+    auto stop_at = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    auto churn = [&registry, stop_at](const std::string &prefix) {
+        for (int i = 0; i < 5000 && std::chrono::steady_clock::now() < stop_at; ++i) {
+            auto name = fmt::format("{}_{}", prefix, i);
+            registry.policy_manager()->load_from_str(fmt::format(R"(
+visor:
+  policies:
+    {0}:
+      kind: collection
+      input:
+        tap: anycast
+        input_type: mock
+        config:
+          sample: {0}
+      handlers:
+        modules:
+          {0}_net:
+            type: net
+)",
+                name));
+            registry.policy_manager()->remove_policy(name);
+        }
+    };
+
+    auto a = std::async(std::launch::async, churn, std::string("a"));
+    auto b = std::async(std::launch::async, churn, std::string("b"));
+    // well past the time box, so it only fires on a hang
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
+    if (a.wait_until(deadline) == std::future_status::timeout || b.wait_until(deadline) == std::future_status::timeout) {
+        // the stuck threads can never be joined, so fail loudly instead of hanging the suite
+        std::fprintf(stderr, "load and remove_policy did not finish within 180 s, most likely a deadlock\n");
+        std::abort();
+    }
+    REQUIRE_NOTHROW(a.get());
+    REQUIRE_NOTHROW(b.get());
+    {
+        auto [policies, lock] = registry.policy_manager()->module_get_all_locked();
+        CHECK(policies.empty());
+    }
+    {
+        auto [handlers, lock] = registry.handler_manager()->module_get_all_locked();
+        CHECK(handlers.empty());
+    }
+    auto [inputs, lock] = registry.input_manager()->module_get_all_locked();
+    CHECK(inputs.empty());
 }
