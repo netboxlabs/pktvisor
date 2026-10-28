@@ -151,7 +151,7 @@ public:
 
     std::vector<Policy *> load_from_str(const std::string &str);
     std::vector<Policy *> load(const YAML::Node &tap_yaml, bool single = false);
-    std::pair<std::string, std::string> create_resources_policy(const std::string &policy_name, InputStream *input, const Config &window_config);
+    std::pair<std::string, std::string> create_resources_policy(InputStream *input, const Config &window_config);
     void remove_policy(const std::string &name);
     // Adds one scope per policy with a window to push, and returns whether any
     // policy had one, so the exporter sends nothing when none has.

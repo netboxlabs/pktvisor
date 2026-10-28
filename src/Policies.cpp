@@ -81,7 +81,6 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
             }
         }
 
-        std::vector<std::string> added_resources_policies;
         std::vector<std::string> added_inputs;
         std::vector<std::string> added_handlers;
         try {
@@ -140,18 +139,8 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
                 input_ptr->add_policy(policy_ptr);
             }
 
-            for (auto &p : added_inputs) {
-                auto [input_ptr, input_lock] = _registry->input_manager()->module_get_locked(p);
-                auto [resource_name, module_name] = create_resources_policy(policy_name, input_ptr, window_config);
-                added_resources_policies.push_back(resource_name);
-                added_handlers.push_back(module_name);
-            }
-
         } catch (std::runtime_error &e) {
             // failed to create policy
-            for (auto &p : added_resources_policies) {
-                module_remove(p);
-            }
             for (auto &m : added_handlers) {
                 _registry->handler_manager()->module_remove(m);
             }
@@ -161,10 +150,22 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
             throw;
         }
 
+        std::vector<std::string> added_resources_policies;
         try {
+            // the policy starts its handlers before its inputs, so start it before the resources policies:
+            // an input that reads all its data as it starts, such as a pcap_file or dnstap_file, would
+            // otherwise be consumed before the policy's handlers are running
             policy_ptr->start();
+            for (auto &p : added_inputs) {
+                auto [input_ptr, input_lock] = _registry->input_manager()->module_get_locked(p);
+                auto [resource_name, module_name] = create_resources_policy(input_ptr, window_config);
+                added_resources_policies.push_back(resource_name);
+                added_handlers.push_back(module_name);
+            }
             module_add(std::move(policy));
         } catch (std::runtime_error &e) {
+            // undoes a completed start; Policy::start undoes a partial one itself
+            policy_ptr->stop();
             for (auto &p : added_resources_policies) {
                 module_remove(p);
             }
@@ -183,7 +184,7 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
     return result;
 }
 
-std::pair<std::string, std::string> PolicyManager::create_resources_policy(const std::string &policy_name, InputStream *input, const Config &window_config)
+std::pair<std::string, std::string> PolicyManager::create_resources_policy(InputStream *input, const Config &window_config)
 {
     auto resources_handler_plugin = _registry->handler_plugins().find(std::make_pair("input_resources", CoreRegistry::DEFAULT_HANDLER_PLUGIN_VERSION));
     if (resources_handler_plugin == _registry->handler_plugins().end()) {
@@ -204,9 +205,9 @@ std::pair<std::string, std::string> PolicyManager::create_resources_policy(const
     try {
         resources_policy->start();
         module_add(std::move(resources_policy));
-    } catch (std::runtime_error &e) {
+    } catch (const std::runtime_error &) {
         resources_module->stop();
-        throw PolicyException(fmt::format("policy [{}] failed to start: {}", policy_name, e.what()));
+        throw;
     }
 
     _registry->handler_manager()->module_add(std::move(resources_module));
@@ -306,15 +307,25 @@ void Policy::start()
     // configurations
     _merge_like_handlers = (config_exists("merge_like_handlers") && config_get<bool>("merge_like_handlers"));
 
-    for (auto &mod : _modules) {
-        spdlog::get("visor")->debug("policy [{}]: starting handler instance: {}", _name, mod->name());
-        mod->start();
-    }
-    // start input stream _after_ modules, since input stream will create a new thread and we need to catch any startup errors
-    // from handlers in the same thread we are starting the policy from
-    for (auto &input : _input_streams) {
-        spdlog::get("visor")->debug("policy [{}]: starting input instance: {}", _name, input->name());
-        input->start();
+    try {
+        for (auto &mod : _modules) {
+            spdlog::get("visor")->debug("policy [{}]: starting handler instance: {}", _name, mod->name());
+            mod->start();
+        }
+        // start input stream _after_ modules, since input stream will create a new thread and we need to catch any startup errors
+        // from handlers in the same thread we are starting the policy from
+        for (auto &input : _input_streams) {
+            spdlog::get("visor")->debug("policy [{}]: starting input instance: {}", _name, input->name());
+            input->start();
+        }
+    } catch (...) {
+        // undo a partial start: in a sequence, a handler cannot be removed while the next one still runs connected to it
+        for (auto &mod : _modules) {
+            if (mod->running()) {
+                mod->stop();
+            }
+        }
+        throw;
     }
     _running = true;
 }
