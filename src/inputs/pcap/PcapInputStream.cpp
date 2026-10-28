@@ -155,8 +155,12 @@ void PcapInputStream::start()
             }
             config_set("iface", TARGET);
         }
-        interfaceIP4 = TARGET;
-        interfaceIP6 = TARGET;
+        // iface is an interface name or an address; parsing a name as an address throws
+        if (pcpp::IPv4Address::isValidIPv4Address(TARGET)) {
+            interfaceIP4 = pcpp::IPv4Address(TARGET);
+        } else if (pcpp::IPv6Address::isValidIPv6Address(TARGET)) {
+            interfaceIP6 = pcpp::IPv6Address(TARGET);
+        }
     }
     std::string ifNameList = _get_interface_list();
 
