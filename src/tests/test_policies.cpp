@@ -12,6 +12,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <fmt/format.h>
+#include <future>
 #include <set>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
@@ -1797,4 +1802,58 @@ TEST_CASE("Multi-policy Prometheus shared serializer", "[policies][prometheus][m
         CHECK(count_occurrences(output, "policy=\"policy_alpha\"") >= 1);
         CHECK(count_occurrences(output, "policy=\"policy_beta\"") >= 1);
     }
+}
+
+TEST_CASE("Loading and removing policies concurrently does not deadlock", "[policies][concurrency]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(R"(
+visor:
+  taps:
+    anycast:
+      input_type: mock
+      config:
+        iface: eth0
+)"));
+
+    // every policy gets an input of its own, so each load creates an input and its resources policy and each
+    // removal tears both down: load and remove_policy then take the input and policy maps on every iteration,
+    // and a load runs while the other thread removes
+    auto churn = [&registry](const std::string &prefix) {
+        for (int i = 0; i < 5000; ++i) {
+            auto name = fmt::format("{}_{}", prefix, i);
+            registry.policy_manager()->load_from_str(fmt::format(R"(
+visor:
+  policies:
+    {0}:
+      kind: collection
+      input:
+        tap: anycast
+        input_type: mock
+        config:
+          sample: {0}
+      handlers:
+        modules:
+          {0}_net:
+            type: net
+)",
+                name));
+            registry.policy_manager()->remove_policy(name);
+        }
+    };
+
+    auto a = std::async(std::launch::async, churn, std::string("a"));
+    auto b = std::async(std::launch::async, churn, std::string("b"));
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    if (a.wait_until(deadline) == std::future_status::timeout || b.wait_until(deadline) == std::future_status::timeout) {
+        // the stuck threads can never be joined, so fail loudly instead of hanging the suite
+        std::fprintf(stderr, "load and remove_policy deadlocked\n");
+        std::abort();
+    }
+    REQUIRE_NOTHROW(a.get());
+    REQUIRE_NOTHROW(b.get());
+    auto [policies, lock] = registry.policy_manager()->module_get_all_locked();
+    CHECK(policies.empty());
 }
