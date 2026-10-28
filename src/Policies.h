@@ -138,6 +138,9 @@ class PolicyManager : public AbstractManager<Policy>
     CoreRegistry *_registry;
 
     std::string _get_policy_name(YAML::const_iterator it);
+    // once leaving_policy is off input: removes the input's resources policy if it is the only one left, then
+    // the input if none is. the caller holds _map_mutex, which keeps any other removal from freeing the input
+    void _remove_input_if_unused(const std::string &input_name, InputStream *input, const std::string &leaving_policy);
 
 public:
     PolicyManager(CoreRegistry *registry)

@@ -1228,6 +1228,57 @@ TEST_CASE("Policies", "[policies]")
         CHECK(inputs.empty());
     }
 
+    SECTION("Bad Config: a resources policy that cannot be registered is rolled back")
+    {
+        CoreRegistry registry;
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
+        REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(policies_config_logic_error_on_start));
+        auto policy_on = [](const std::string &name, const std::string &sample) {
+            return fmt::format(R"(
+visor:
+  policies:
+    {0}:
+      kind: collection
+      input:
+        tap: anycast
+        input_type: mock
+        config:
+          sample: {1}
+      handlers:
+        modules:
+          {0}_net:
+            type: net
+)",
+                name, sample);
+        };
+
+        // learn the input clash_view will get, then free it
+        REQUIRE_NOTHROW(registry.policy_manager()->load_from_str(policy_on("clash_view", "one")));
+        std::string input_name;
+        {
+            auto [policy, lock] = registry.policy_manager()->module_get_locked("clash_view");
+            input_name = policy->input_stream().back()->name();
+        }
+        REQUIRE_NOTHROW(registry.policy_manager()->remove_policy("clash_view"));
+
+        // a policy on another input takes the name clash_view's resources policy needs, so its registration
+        // fails after the policy and its input have started
+        auto taken = input_name + "-resources";
+        REQUIRE_NOTHROW(registry.policy_manager()->load_from_str(policy_on(taken, "two")));
+        REQUIRE_THROWS_WITH(registry.policy_manager()->load_from_str(policy_on("clash_view", "one")),
+            fmt::format("policy [clash_view] failed to start: module name '{}' already exists", taken));
+
+        // the rollback removes what the load made, and leaves the policy that owns the name alone
+        CHECK_FALSE(registry.policy_manager()->module_exists("clash_view"));
+        CHECK_FALSE(registry.input_manager()->module_exists(input_name));
+        CHECK_FALSE(registry.handler_manager()->module_exists("clash_view-anycast-clash_view_net"));
+        CHECK_FALSE(registry.handler_manager()->module_exists(taken));
+        REQUIRE(registry.policy_manager()->module_exists(taken));
+        auto [owner, lock] = registry.policy_manager()->module_get_locked(taken);
+        CHECK(owner->running());
+    }
+
     SECTION("Bad Config: mis-matched input_type on tap")
     {
         CoreRegistry registry;

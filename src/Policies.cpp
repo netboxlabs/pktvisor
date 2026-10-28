@@ -105,10 +105,23 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
             step([&] { policy_ptr->stop(); });
             for (auto &name : attached_inputs) {
                 step([&] {
-                    // looked up under the input map lock; one that is gone was freed after stop() detached it
-                    auto [inputs, lock] = _registry->input_manager()->module_get_all_locked();
-                    if (auto input = inputs.find(name); input != inputs.end()) {
-                        input->second->remove_policy(policy_ptr);
+                    // under the policy map lock, as remove_policy does: no other removal can free the input
+                    // meanwhile. one that is already gone was freed after stop() detached the policy
+                    std::unique_lock policies_lock(_map_mutex);
+                    InputStream *input = nullptr;
+                    {
+                        auto [inputs, inputs_lock] = _registry->input_manager()->module_get_all_locked();
+                        auto found = inputs.find(name);
+                        if (found == inputs.end()) {
+                            return;
+                        }
+                        input = found->second.get();
+                    }
+                    input->remove_policy(policy_ptr);
+                    // a reused input outlives this load. If its last other policy was removed while this one
+                    // still counted on it, that removal left it running, so finish the teardown here
+                    if (std::find(added_inputs.begin(), added_inputs.end(), name) == added_inputs.end()) {
+                        _remove_input_if_unused(name, input, policy_name);
                     }
                 });
             }
@@ -209,7 +222,13 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
                 auto resources_name = resources_policy->name();
                 resources_policy->start();
                 resources_policy->input_stream().back()->add_policy(resources_policy.get());
-                module_add(std::move(resources_policy));
+                try {
+                    module_add(std::move(resources_policy));
+                } catch (...) {
+                    // not registered, so still ours: stopping it also detaches it from its input
+                    resources_policy->stop();
+                    throw;
+                }
                 added_resources_policies.push_back(resources_name);
             }
             module_add(std::move(policy));
@@ -306,23 +325,28 @@ void PolicyManager::remove_policy(const std::string &name)
     }
 
     for (const auto &input : input_stream) {
-        if (input.second->policies_count() == 1) {
-            // if there is only one policy left on the input stream, and that policy is the input resources policy, then remove it
-            auto input_resources_name = input.first + "-resources";
-            if (name != input_resources_name && _map.count(input_resources_name) != 0) {
-                auto resources_policy = _map[input_resources_name].get();
-                resources_policy->stop();
-                _registry->handler_manager()->module_remove(input_resources_name);
-                _map.erase(input_resources_name);
-            }
-        }
-
-        if (!input.second->policies_count()) {
-            _registry->input_manager()->module_remove(input.first);
-        }
+        _remove_input_if_unused(input.first, input.second, name);
     }
 
     _map.erase(name);
+}
+
+void PolicyManager::_remove_input_if_unused(const std::string &input_name, InputStream *input, const std::string &leaving_policy)
+{
+    if (input->policies_count() == 1) {
+        // if there is only one policy left on the input stream, and that policy is the input resources policy, then remove it
+        auto input_resources_name = input_name + "-resources";
+        if (leaving_policy != input_resources_name && _map.count(input_resources_name) != 0) {
+            auto resources_policy = _map[input_resources_name].get();
+            resources_policy->stop();
+            _registry->handler_manager()->module_remove(input_resources_name);
+            _map.erase(input_resources_name);
+        }
+    }
+
+    if (!input->policies_count()) {
+        _registry->input_manager()->module_remove(input_name);
+    }
 }
 void Policy::info_json(json &j) const
 {
