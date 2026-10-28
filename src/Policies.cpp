@@ -83,24 +83,37 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
 
         std::vector<std::string> added_inputs;
         std::vector<std::string> added_handlers;
+        std::vector<InputStream *> attached_inputs;
         std::vector<std::unique_ptr<Policy>> resources_policies;
-        std::vector<std::string> added_resources_policies;
-        // undo everything this load did. stop() undoes a completed start (Policy::start undoes a partial one
-        // itself). the policy is then detached from every input it reached, started or not: a reused input
-        // outlives this load and must not keep counting it
+        std::vector<Policy *> added_resources_policies;
+        // Undo everything this load did, one step at a time, so that a step that fails neither skips the rest
+        // nor replaces the exception that started the rollback. stop() undoes a completed start; after a
+        // partial one, Policy::start has already stopped the handlers, and the input manager stops the inputs
+        // it removes. The policy is detached from the inputs it was attached to: a reused input outlives this
+        // load and must not keep counting it, and an input it reached but never joined is left alone.
         auto rollback = [&]() {
-            policy_ptr->stop();
-            for (auto input : policy_ptr->input_stream()) {
-                input->remove_policy(policy_ptr);
+            auto step = [&policy_name](auto &&undo) {
+                try {
+                    undo();
+                } catch (const std::exception &e) {
+                    spdlog::get("visor")->warn("policy [{}]: rollback: {}", policy_name, e.what());
+                }
+            };
+            step([&] { policy_ptr->stop(); });
+            for (auto input : attached_inputs) {
+                step([&] { input->remove_policy(policy_ptr); });
             }
-            for (auto &p : added_resources_policies) {
-                module_remove(p);
+            for (auto resources_policy : added_resources_policies) {
+                auto name = resources_policy->name();
+                step([&] { resources_policy->stop(); });
+                // unregistered even if it did not stop, since its input is removed below
+                step([&] { module_remove(name); });
             }
             for (auto &m : added_handlers) {
-                _registry->handler_manager()->module_remove(m);
+                step([&] { _registry->handler_manager()->module_remove(m); });
             }
             for (auto &p : added_inputs) {
-                _registry->input_manager()->module_remove(p);
+                step([&] { _registry->input_manager()->module_remove(p); });
             }
         };
         try {
@@ -157,6 +170,7 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
 
                 // success
                 input_ptr->add_policy(policy_ptr);
+                attached_inputs.push_back(input_ptr);
             }
 
         } catch (...) {
@@ -183,7 +197,7 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
                 auto resources_policy_ptr = resources_policy.get();
                 resources_policy_ptr->start();
                 module_add(std::move(resources_policy));
-                added_resources_policies.push_back(resources_policy_ptr->name());
+                added_resources_policies.push_back(resources_policy_ptr);
                 resources_policy_ptr->input_stream().back()->add_policy(resources_policy_ptr);
             }
             module_add(std::move(policy));

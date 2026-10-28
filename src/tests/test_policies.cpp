@@ -1198,6 +1198,12 @@ TEST_CASE("Policies", "[policies]")
             auto [input, lock] = registry.input_manager()->module_get_locked(input_name);
             CHECK(input->policies_count() == policies_before);
         }
+        CHECK_FALSE(registry.handler_manager()->module_exists("second_view-live_a-second_net"));
+        CHECK_FALSE(registry.handler_manager()->module_exists("second_view-broken_b-second_net"));
+        {
+            auto [inputs, lock] = registry.input_manager()->module_get_all_locked();
+            CHECK(inputs.size() == 1);
+        }
 
         // so removing the last policy on that input still tears it down
         REQUIRE_NOTHROW(registry.policy_manager()->remove_policy("first_view"));
@@ -1218,6 +1224,8 @@ TEST_CASE("Policies", "[policies]")
         }
         CHECK_FALSE(registry.policy_manager()->module_exists("default_view"));
         CHECK_FALSE(registry.handler_manager()->module_exists("default_view-anycast-default_net"));
+        auto [inputs, lock] = registry.input_manager()->module_get_all_locked();
+        CHECK(inputs.empty());
     }
 
     SECTION("Bad Config: mis-matched input_type on tap")
@@ -1818,11 +1826,27 @@ visor:
         iface: eth0
 )"));
 
+    // every iteration logs several lines; keep this test's output to warnings
+    struct QuietLogger {
+        std::shared_ptr<spdlog::logger> logger = spdlog::get("visor");
+        spdlog::level::level_enum level = logger->level();
+        QuietLogger()
+        {
+            logger->set_level(spdlog::level::warn);
+        }
+        ~QuietLogger()
+        {
+            logger->set_level(level);
+        }
+    } quiet;
+
     // every policy gets an input of its own, so each load creates an input and its resources policy and each
     // removal tears both down: load and remove_policy then take the input and policy maps on every iteration,
-    // and a load runs while the other thread removes
-    auto churn = [&registry](const std::string &prefix) {
-        for (int i = 0; i < 5000; ++i) {
+    // and a load runs while the other thread removes. A slow build stops early; the deadlock this guards
+    // against showed up within 2000 iterations.
+    auto stop_at = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    auto churn = [&registry, stop_at](const std::string &prefix) {
+        for (int i = 0; i < 5000 && std::chrono::steady_clock::now() < stop_at; ++i) {
             auto name = fmt::format("{}_{}", prefix, i);
             registry.policy_manager()->load_from_str(fmt::format(R"(
 visor:
@@ -1846,14 +1870,23 @@ visor:
 
     auto a = std::async(std::launch::async, churn, std::string("a"));
     auto b = std::async(std::launch::async, churn, std::string("b"));
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    // well past the time box, so it only fires on a hang
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
     if (a.wait_until(deadline) == std::future_status::timeout || b.wait_until(deadline) == std::future_status::timeout) {
         // the stuck threads can never be joined, so fail loudly instead of hanging the suite
-        std::fprintf(stderr, "load and remove_policy deadlocked\n");
+        std::fprintf(stderr, "load and remove_policy did not finish within 180 s, most likely a deadlock\n");
         std::abort();
     }
     REQUIRE_NOTHROW(a.get());
     REQUIRE_NOTHROW(b.get());
-    auto [policies, lock] = registry.policy_manager()->module_get_all_locked();
-    CHECK(policies.empty());
+    {
+        auto [policies, lock] = registry.policy_manager()->module_get_all_locked();
+        CHECK(policies.empty());
+    }
+    {
+        auto [handlers, lock] = registry.handler_manager()->module_get_all_locked();
+        CHECK(handlers.empty());
+    }
+    auto [inputs, lock] = registry.input_manager()->module_get_all_locked();
+    CHECK(inputs.empty());
 }

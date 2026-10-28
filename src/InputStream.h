@@ -50,8 +50,8 @@ public:
         }
     }
 
-    // a no-op for a policy that is not attached, so a failed load can detach its policy from every input it
-    // may have reached without signalling a removal twice
+    // a no-op for a policy that is not attached, so detaching twice, as a failed load's rollback may after
+    // stop(), never signals a removal for a policy the input no longer counts
     void remove_policy(const Policy *policy)
     {
         std::unique_lock lock(_input_mutex);
