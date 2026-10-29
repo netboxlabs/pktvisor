@@ -1,5 +1,7 @@
 #!/bin/sh
 #
+set -e
+
 build() {
   echo "========================= Building pktvisor-cli ========================="
   cp -rf golang/ /src/
@@ -8,7 +10,7 @@ build() {
   cd /src
   # CGO_ENABLED=0 produces a portable static binary that runs on the glibc
   # runtime image, even though it is built on an Alpine/musl toolchain.
-  CGO_ENABLED=0 GOOS=$INPUT_GOOS GOARCH=$INPUT_GOARCH go build -o pktvisor-cli cmd/pktvisor-cli/main.go
+  CGO_ENABLED=0 GOPROXY='https://proxy.golang.org|direct' GOOS=$INPUT_GOOS GOARCH=$INPUT_GOARCH go build -o pktvisor-cli cmd/pktvisor-cli/main.go
 }
 
 copy() {
