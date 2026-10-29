@@ -12,6 +12,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -915,6 +916,45 @@ visor:
             type: net
 )";
 
+auto policies_config_flow_port_in_use = R"(
+visor:
+  taps:
+    flow_tap:
+      input_type: flow
+  policies:
+    sflow_view:
+      kind: collection
+      input:
+        tap: flow_tap
+        input_type: flow
+        config:
+          flow_type: sflow
+          bind: 127.0.0.1
+          port: 6346
+      handlers:
+        modules:
+          sflow_flow:
+            type: flow
+)";
+
+auto policies_config_flow_port_in_use_second = R"(
+visor:
+  policies:
+    netflow_view:
+      kind: collection
+      input:
+        tap: flow_tap
+        input_type: flow
+        config:
+          flow_type: netflow
+          bind: 127.0.0.1
+          port: 6346
+      handlers:
+        modules:
+          netflow_flow:
+            type: flow
+)";
+
 TEST_CASE("Policies", "[policies]")
 {
 
@@ -1226,6 +1266,32 @@ TEST_CASE("Policies", "[policies]")
         CHECK_FALSE(registry.handler_manager()->module_exists("default_view-anycast-default_net"));
         auto [inputs, lock] = registry.input_manager()->module_get_all_locked();
         CHECK(inputs.empty());
+    }
+
+    SECTION("Bad Config: a flow policy on a port another flow input listens on is refused")
+    {
+        CoreRegistry registry;
+        visor::load_builtin_plugins(registry);
+        registry.start(nullptr);
+        YAML::Node config_file = YAML::Load(policies_config_flow_port_in_use);
+        REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"]));
+        REQUIRE_NOTHROW(registry.policy_manager()->load(config_file["visor"]["policies"]));
+
+        // a different config on the same port gives a second input stream, whose listener cannot bind
+        YAML::Node second = YAML::Load(policies_config_flow_port_in_use_second);
+        CHECK_THROWS_WITH(registry.policy_manager()->load(second["visor"]["policies"]), Catch::Matchers::StartsWith("policy [netflow_view] failed to start: unable to bind flow UDP server on 127.0.0.1:6346: "));
+        CHECK_FALSE(registry.policy_manager()->module_exists("netflow_view"));
+        CHECK_FALSE(registry.handler_manager()->module_exists("netflow_view-flow_tap-netflow_flow"));
+
+        // the first policy keeps its listener
+        REQUIRE(registry.policy_manager()->module_exists("sflow_view"));
+        {
+            auto [policy, lock] = registry.policy_manager()->module_get_locked("sflow_view");
+            CHECK(policy->running());
+            CHECK(policy->input_stream().back()->running());
+        }
+        auto [inputs, lock] = registry.input_manager()->module_get_all_locked();
+        CHECK(inputs.size() == 1);
     }
 
     SECTION("Bad Config: a resources policy that cannot be registered is rolled back")

@@ -69,6 +69,7 @@ class DnstapInputStream : public visor::InputStream
     void _read_frame_stream_file();
     void _create_frame_stream_unix_socket();
     void _create_frame_stream_tcp_socket();
+    void _close_unstarted_loop();
 
     inline bool _filtering([[maybe_unused]] const ::dnstap::Dnstap &d)
     {

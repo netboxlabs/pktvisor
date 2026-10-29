@@ -2,6 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/catch_test_visor.hpp>
 
 using namespace visor::input::dnstap;
@@ -124,6 +125,33 @@ TEST_CASE("dnstap unix socket", "[dnstap][unix]")
 
     stream.start();
     stream.stop();
+}
+
+TEST_CASE("dnstap tcp socket on a port in use fails to start", "[dnstap][tcp]")
+{
+    DnstapInputStream first{"dnstap-first"};
+    first.config_set("tcp", "127.0.0.1:5354");
+    REQUIRE_NOTHROW(first.start());
+
+    // the second server must fail rather than run without listening on the port
+    DnstapInputStream second{"dnstap-second"};
+    second.config_set("tcp", "127.0.0.1:5354");
+    CHECK_THROWS_WITH(second.start(), Catch::Matchers::ContainsSubstring("dnstap server on 127.0.0.1:5354: address already in use"));
+    CHECK_FALSE(second.running());
+    CHECK_NOTHROW(second.stop());
+
+    CHECK(first.running());
+    CHECK_NOTHROW(first.stop());
+}
+
+TEST_CASE("dnstap unix socket that cannot be bound fails to start", "[dnstap][unix]")
+{
+    DnstapInputStream stream{"dnstap-test"};
+    stream.config_set("socket", "/nonexistent-pktvisor-dir/dnstap-test.sock");
+
+    CHECK_THROWS_WITH(stream.start(), Catch::Matchers::StartsWith("unable to bind dnstap server on /nonexistent-pktvisor-dir/dnstap-test.sock: "));
+    CHECK_FALSE(stream.running());
+    CHECK_NOTHROW(stream.stop());
 }
 
 TEST_CASE("dnstap file filter by valid subnet", "[dnstap][file][filter][!mayfail]")
