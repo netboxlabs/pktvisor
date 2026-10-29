@@ -390,6 +390,67 @@ TEST_CASE("dnstap unix socket path as long as a socket address holds is replaced
     std::filesystem::remove(path);
 }
 
+TEST_CASE("dnstap unix socket a datagram server listens on is refused", "[dnstap][unix]")
+{
+    const std::string path = "/tmp/dnstap-test-datagram.sock";
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+    // a live socket of another type refuses a stream connect with EPROTOTYPE, and a stale one would refuse it outright
+    int live = ::socket(AF_UNIX, SOCK_DGRAM, 0);
+    auto addr = unix_address(path);
+    REQUIRE(::bind(live, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == 0);
+
+    DnstapInputStream stream{"dnstap-test"};
+    stream.config_set("socket", path);
+    CHECK_THROWS_WITH(stream.start(), "unable to bind dnstap server on " + path + ": address already in use");
+    CHECK_FALSE(stream.running());
+    CHECK_NOTHROW(stream.stop());
+    CHECK(std::filesystem::is_socket(path));
+    ::close(live);
+    std::filesystem::remove(path, ec);
+}
+
+TEST_CASE("dnstap unix socket left by a datagram server that stopped is replaced", "[dnstap][unix]")
+{
+    const std::string path = "/tmp/dnstap-test-stale-datagram.sock";
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+    int stale = ::socket(AF_UNIX, SOCK_DGRAM, 0);
+    auto addr = unix_address(path);
+    REQUIRE(::bind(stale, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == 0);
+    ::close(stale);
+
+    DnstapInputStream stream{"dnstap-test"};
+    stream.config_set("socket", path);
+    CHECK_NOTHROW(stream.start());
+    CHECK_NOTHROW(stream.stop());
+    std::filesystem::remove(path, ec);
+}
+
+TEST_CASE("dnstap unix socket that cannot be checked for a server is reported and kept", "[dnstap][unix]")
+{
+    if (::geteuid() == 0) {
+        SKIP("root can connect to the socket regardless of its permissions");
+    }
+    const std::string path = "/tmp/dnstap-test-no-access.sock";
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+    int stale = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    auto addr = unix_address(path);
+    REQUIRE(::bind(stale, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == 0);
+    ::close(stale);
+    // without write permission on the socket nobody but root can connect, so whether a server is there is unknown
+    std::filesystem::permissions(path, std::filesystem::perms::none);
+
+    DnstapInputStream stream{"dnstap-test"};
+    stream.config_set("socket", path);
+    CHECK_THROWS_WITH(stream.start(), Catch::Matchers::StartsWith("unable to bind dnstap server on " + path + ": unable to tell whether a server listens on the socket there: "));
+    CHECK_FALSE(stream.running());
+    CHECK_NOTHROW(stream.stop());
+    CHECK(std::filesystem::is_socket(path));
+    std::filesystem::remove(path, ec);
+}
+
 TEST_CASE("dnstap unix socket left behind that cannot be removed is reported", "[dnstap][unix]")
 {
     if (::geteuid() == 0) {

@@ -32,26 +32,28 @@ namespace visor::input::dnstap {
 
 #ifndef _WIN32
 namespace {
-// true when the Unix socket at path refuses connections: its server is gone and left the file behind.
-// macOS also refuses when a live server's backlog is full, where Linux returns EAGAIN
-bool unix_socket_is_stale(const std::string &path)
+// connects to the Unix socket at path: 0 when a server is there, ECONNREFUSED when its server is gone and left the
+// file behind, ENOENT when the file went away since it was found, or the errno that leaves it unknown. macOS also
+// refuses when a live server's backlog is full, where Linux returns EAGAIN
+int probe_unix_socket(const std::string &path)
 {
     sockaddr_un addr{};
     // libuv binds a name that fills sun_path without a terminating NUL, so that length is probed too
     if (path.size() > sizeof(addr.sun_path)) {
-        return false;
+        return ENAMETOOLONG;
     }
     addr.sun_family = AF_UNIX;
     std::memcpy(addr.sun_path, path.c_str(), path.size());
     int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {
-        return false;
+        return errno;
     }
     // non-blocking, so a live server with a full backlog cannot stall the start
     ::fcntl(fd, F_SETFL, O_NONBLOCK);
-    bool stale = ::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0 && errno == ECONNREFUSED;
+    int result = ::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == 0 ? 0 : errno;
     ::close(fd);
-    return stale;
+    // a full backlog, or a live socket of another type, which refuses a stream connect with EPROTOTYPE
+    return (result == EAGAIN || result == EINPROGRESS || result == EPROTOTYPE) ? 0 : result;
 }
 }
 #endif
@@ -481,9 +483,15 @@ void DnstapInputStream::_create_frame_stream_unix_socket()
             _close_unstarted_loop();
             throw DnstapException(fmt::format("unable to bind dnstap server on {}: the path exists and is not a socket", socket_path));
         }
-        if (unix_socket_is_stale(socket_path) && !std::filesystem::remove(socket_path, ec) && ec) {
+        if (auto probe = probe_unix_socket(socket_path); probe == ECONNREFUSED) {
+            if (!std::filesystem::remove(socket_path, ec) && ec) {
+                _close_unstarted_loop();
+                throw DnstapException(fmt::format("unable to bind dnstap server on {}: unable to remove the stale socket there: {}", socket_path, ec.message()));
+            }
+        } else if (probe != 0 && probe != ENOENT) {
             _close_unstarted_loop();
-            throw DnstapException(fmt::format("unable to bind dnstap server on {}: unable to remove the stale socket there: {}", socket_path, ec.message()));
+            throw DnstapException(fmt::format("unable to bind dnstap server on {}: unable to tell whether a server listens on the socket there: {}",
+                socket_path, std::error_code(probe, std::generic_category()).message()));
         }
     }
 #endif
