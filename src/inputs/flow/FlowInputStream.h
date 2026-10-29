@@ -55,6 +55,7 @@ class FlowInputStream : public visor::InputStream
 
     void _read_from_pcap_file();
     void _create_frame_stream_udp_socket();
+    void _close_unstarted_loop();
 
 public:
     FlowInputStream(const std::string &name);

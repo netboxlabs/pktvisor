@@ -194,16 +194,18 @@ void DnstapInputStream::_create_frame_stream_tcp_socket()
         throw DnstapException("unable to initialize server pipe_handle");
     }
 
+    // only reached from the loop thread, where a throw would terminate the process
     _tcp_server_h->on<uvw::error_event>([this](const auto &err, auto &) {
         _logger->error("[{}] socket error: {}", _name, err.what());
-        throw DnstapException(err.what());
     });
 
     // listen_event happens on client connection
     _tcp_server_h->on<uvw::listen_event>([this](const uvw::listen_event &, uvw::tcp_handle &) {
+        // on the loop thread, so failures are logged: a throw here would terminate the process
         auto client = _io_loop->resource<uvw::tcp_handle>();
         if (!client) {
-            throw DnstapException("unable to initialize connected client TCPHandle");
+            _logger->error("[{}]: unable to initialize connected client TCPHandle", _name);
+            return;
         }
 
         auto on_data_frame = [this](const void *data, std::size_t len_data) {
@@ -256,15 +258,29 @@ void DnstapInputStream::_create_frame_stream_tcp_socket()
             c_sock.close();
         });
 
-        _tcp_server_h->accept(*client);
+        if (auto rc = _tcp_server_h->accept(*client); rc < 0) {
+            _logger->error("[{}]: unable to accept dnstap client: {}", _name, uv_strerror(rc));
+            client->close();
+            return;
+        }
         _logger->info("[{}]: dnstap client connected {}", _name, client->peer().ip);
         _tcp_sessions[client->fd()] = std::make_unique<FrameSessionData<uvw::tcp_handle>>(client, CONTENT_TYPE, on_data_frame);
-        client->read();
+        if (auto rc = client->read(); rc < 0) {
+            _logger->error("[{}]: unable to read from dnstap client: {}", _name, uv_strerror(rc));
+            client->close();
+        }
     });
 
     _logger->info("[{}]: opening dnstap server on {}", _name, config_get<std::string>("tcp"));
-    _tcp_server_h->bind(host, port);
-    _tcp_server_h->listen();
+    // uvw returns these errors rather than emitting them: a port another server holds must fail the start
+    if (auto rc = _tcp_server_h->bind(host, port); rc < 0) {
+        _close_unstarted_loop();
+        throw DnstapException(fmt::format("unable to bind dnstap server on {}: {}", config_get<std::string>("tcp"), uv_strerror(rc)));
+    }
+    if (auto rc = _tcp_server_h->listen(); rc < 0) {
+        _close_unstarted_loop();
+        throw DnstapException(fmt::format("unable to listen with dnstap server on {}: {}", config_get<std::string>("tcp"), uv_strerror(rc)));
+    }
 
     // spawn the loop
     _io_thread = std::make_unique<std::thread>([this] {
@@ -338,16 +354,18 @@ void DnstapInputStream::_create_frame_stream_unix_socket()
         throw DnstapException("unable to initialize server pipe_handle");
     }
 
+    // only reached from the loop thread, where a throw would terminate the process
     _unix_server_h->on<uvw::error_event>([this](const auto &err, auto &) {
         _logger->error("[{}] socket error: {}", _name, err.what());
-        throw DnstapException(err.what());
     });
 
     // listen_event happens on client connection
     _unix_server_h->on<uvw::listen_event>([this](const uvw::listen_event &, uvw::pipe_handle &) {
+        // on the loop thread, so failures are logged: a throw here would terminate the process
         auto client = _io_loop->resource<uvw::pipe_handle>();
         if (!client) {
-            throw DnstapException("unable to initialize connected client pipe_handle");
+            _logger->error("[{}]: unable to initialize connected client pipe_handle", _name);
+            return;
         }
 
         auto on_data_frame = [this](const void *data, std::size_t len_data) {
@@ -399,18 +417,32 @@ void DnstapInputStream::_create_frame_stream_unix_socket()
             c_sock.close();
         });
 
-        _unix_server_h->accept(*client);
+        if (auto rc = _unix_server_h->accept(*client); rc < 0) {
+            _logger->error("[{}]: unable to accept dnstap client: {}", _name, uv_strerror(rc));
+            client->close();
+            return;
+        }
         _logger->info("[{}]: dnstap client connected {}", _name, client->sock());
         _unix_sessions[client->fd()] = std::make_unique<FrameSessionData<uvw::pipe_handle>>(client, CONTENT_TYPE, on_data_frame);
-        client->read();
+        if (auto rc = client->read(); rc < 0) {
+            _logger->error("[{}]: unable to read from dnstap client: {}", _name, uv_strerror(rc));
+            client->close();
+        }
     });
 
     // attempt to remove socket if it exists, ignore errors
     std::filesystem::remove(config_get<std::string>("socket"));
 
     _logger->info("[{}]: opening dnstap server on {}", _name, config_get<std::string>("socket"));
-    _unix_server_h->bind(config_get<std::string>("socket"));
-    _unix_server_h->listen();
+    // uvw returns these errors rather than emitting them: a socket that cannot be bound must fail the start
+    if (auto rc = _unix_server_h->bind(config_get<std::string>("socket")); rc < 0) {
+        _close_unstarted_loop();
+        throw DnstapException(fmt::format("unable to bind dnstap server on {}: {}", config_get<std::string>("socket"), uv_strerror(rc)));
+    }
+    if (auto rc = _unix_server_h->listen(); rc < 0) {
+        _close_unstarted_loop();
+        throw DnstapException(fmt::format("unable to listen with dnstap server on {}: {}", config_get<std::string>("socket"), uv_strerror(rc)));
+    }
 
     // spawn the loop
     _io_thread = std::make_unique<std::thread>([this] {
@@ -420,6 +452,28 @@ void DnstapInputStream::_create_frame_stream_unix_socket()
         // run() has returned and every handle is closed; safe to close the loop.
         _io_loop->close();
     });
+}
+
+void DnstapInputStream::_close_unstarted_loop()
+{
+    // the loop never ran: close its handles, let one pass of the loop finish the closes, then close the loop
+    _timer->close();
+    if (_tcp_server_h) {
+        _tcp_server_h->close();
+    }
+    if (_unix_server_h) {
+        _unix_server_h->close();
+    }
+    _async_h->close();
+    _io_loop->run(uvw::loop::run_mode::NOWAIT);
+    if (auto rc = _io_loop->close(); rc != 0) {
+        _logger->warn("[{}] unable to close io loop: {}", _name, uv_strerror(rc));
+    }
+    _tcp_server_h.reset();
+    _unix_server_h.reset();
+    _timer.reset();
+    _async_h.reset();
+    _io_loop.reset();
 }
 
 void DnstapInputStream::stop()

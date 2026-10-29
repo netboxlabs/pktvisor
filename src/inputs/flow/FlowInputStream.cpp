@@ -139,6 +139,16 @@ void FlowInputStream::_create_frame_stream_udp_socket()
 {
     auto bind = config_get<std::string>("bind");
     auto port = config_get<uint64_t>("port");
+    // port 0 would bind an ephemeral port no exporter sends to
+    if (port == 0 || port > 65535) {
+        throw FlowException(fmt::format("flow port {} is out of range 1-65535", port));
+    }
+    // built here rather than by uvw's bind(ip, port), which cuts an IPv6 address down to a 16-byte sockaddr
+    sockaddr_storage bind_addr{};
+    if (uv_ip4_addr(bind.c_str(), static_cast<int>(port), reinterpret_cast<sockaddr_in *>(&bind_addr)) != 0
+        && uv_ip6_addr(bind.c_str(), static_cast<int>(port), reinterpret_cast<sockaddr_in6 *>(&bind_addr)) != 0) {
+        throw FlowException(fmt::format("flow bind \"{}\" is not an IPv4 or IPv6 address", bind));
+    }
     // main io loop, run in its own thread
     _io_loop = uvw::loop::create();
     if (!_io_loop) {
@@ -190,9 +200,9 @@ void FlowInputStream::_create_frame_stream_udp_socket()
         throw FlowException("unable to initialize server pipe_handle");
     }
 
+    // only reached from the loop thread, where a throw would terminate the process
     _udp_server_h->on<uvw::error_event>([this](const auto &err, auto &) {
         _logger->error("[{}] socket error: {}", _name, err.what());
-        throw FlowException(err.what());
     });
 
     // listen_event happens on client connection
@@ -201,10 +211,25 @@ void FlowInputStream::_create_frame_stream_udp_socket()
             SFSample sample;
             sample.rawSample = reinterpret_cast<uint8_t *>(event.data.get());
             sample.rawSampleLen = event.length;
-            sample.sourceIP.type = SFLADDRESSTYPE_IP_V4;
-            struct sockaddr_in peer4;
-            inet_pton(AF_INET, event.sender.ip.c_str(), &(peer4.sin_addr));
-            std::memcpy(&sample.sourceIP.address.ip_v4.addr, &peer4.sin_addr, 4);
+            // the sender by its own family: an IPv6 bind receives from IPv6 peers, and a dual-stack one sees
+            // IPv4 peers as IPv4-mapped addresses, which are kept as IPv4
+            sample.sourceIP = SFLAddress{};
+            in_addr peer4{};
+            in6_addr peer6{};
+            static const uint8_t v4_mapped_prefix[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
+            if (inet_pton(AF_INET, event.sender.ip.c_str(), &peer4) == 1) {
+                sample.sourceIP.type = SFLADDRESSTYPE_IP_V4;
+                std::memcpy(&sample.sourceIP.address.ip_v4.addr, &peer4, 4);
+            } else if (inet_pton(AF_INET6, event.sender.ip.c_str(), &peer6) == 1) {
+                auto bytes = reinterpret_cast<const uint8_t *>(&peer6);
+                if (std::memcmp(bytes, v4_mapped_prefix, sizeof(v4_mapped_prefix)) == 0) {
+                    sample.sourceIP.type = SFLADDRESSTYPE_IP_V4;
+                    std::memcpy(&sample.sourceIP.address.ip_v4.addr, bytes + 12, 4);
+                } else {
+                    sample.sourceIP.type = SFLADDRESSTYPE_IP_V6;
+                    std::memcpy(&sample.sourceIP.address.ip_v6.addr, bytes, 16);
+                }
+            }
             try {
                 read_sflow_datagram(&sample);
                 std::shared_lock lock(_input_mutex);
@@ -241,8 +266,16 @@ void FlowInputStream::_create_frame_stream_udp_socket()
     }
 
     _logger->info("[{}] binding flow UDP server on {}:{}", _name, bind, port);
-    _udp_server_h->bind(bind, port);
-    _udp_server_h->recv();
+    // uvw returns these errors rather than emitting them. A port another listener holds must fail the start:
+    // otherwise recv() starts on a socket that never got the port, and the input runs without receiving anything
+    if (auto rc = _udp_server_h->bind(reinterpret_cast<const sockaddr &>(bind_addr)); rc < 0) {
+        _close_unstarted_loop();
+        throw FlowException(fmt::format("unable to bind flow UDP server on {}:{}: {}", bind, port, uv_strerror(rc)));
+    }
+    if (auto rc = _udp_server_h->recv(); rc < 0) {
+        _close_unstarted_loop();
+        throw FlowException(fmt::format("unable to receive on flow UDP server {}:{}: {}", bind, port, uv_strerror(rc)));
+    }
 
     // spawn the loop
     _io_thread = std::make_unique<std::thread>([this] {
@@ -252,6 +285,22 @@ void FlowInputStream::_create_frame_stream_udp_socket()
         // run() has returned and every handle is closed; safe to close the loop.
         _io_loop->close();
     });
+}
+
+void FlowInputStream::_close_unstarted_loop()
+{
+    // the loop never ran: close its handles, let one pass of the loop finish the closes, then close the loop
+    _timer->close();
+    _udp_server_h->close();
+    _async_h->close();
+    _io_loop->run(uvw::loop::run_mode::NOWAIT);
+    if (auto rc = _io_loop->close(); rc != 0) {
+        _logger->warn("[{}] unable to close io loop: {}", _name, uv_strerror(rc));
+    }
+    _udp_server_h.reset();
+    _timer.reset();
+    _async_h.reset();
+    _io_loop.reset();
 }
 
 void FlowInputStream::stop()
