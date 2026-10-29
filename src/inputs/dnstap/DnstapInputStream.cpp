@@ -32,11 +32,13 @@ namespace visor::input::dnstap {
 
 #ifndef _WIN32
 namespace {
-// true when the Unix socket at path refuses connections: its server is gone and left the file behind
+// true when the Unix socket at path refuses connections: its server is gone and left the file behind.
+// macOS also refuses when a live server's backlog is full, where Linux returns EAGAIN
 bool unix_socket_is_stale(const std::string &path)
 {
     sockaddr_un addr{};
-    if (path.size() >= sizeof(addr.sun_path)) {
+    // libuv binds a name that fills sun_path without a terminating NUL, so that length is probed too
+    if (path.size() > sizeof(addr.sun_path)) {
         return false;
     }
     addr.sun_family = AF_UNIX;
@@ -479,8 +481,9 @@ void DnstapInputStream::_create_frame_stream_unix_socket()
             _close_unstarted_loop();
             throw DnstapException(fmt::format("unable to bind dnstap server on {}: the path exists and is not a socket", socket_path));
         }
-        if (unix_socket_is_stale(socket_path)) {
-            std::filesystem::remove(socket_path, ec);
+        if (unix_socket_is_stale(socket_path) && !std::filesystem::remove(socket_path, ec) && ec) {
+            _close_unstarted_loop();
+            throw DnstapException(fmt::format("unable to bind dnstap server on {}: unable to remove the stale socket there: {}", socket_path, ec.message()));
         }
     }
 #endif
