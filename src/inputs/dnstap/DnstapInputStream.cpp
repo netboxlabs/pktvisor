@@ -49,7 +49,11 @@ int probe_unix_socket(const std::string &path)
         return errno;
     }
     // non-blocking, so a live server with a full backlog cannot stall the start
-    ::fcntl(fd, F_SETFL, O_NONBLOCK);
+    if (::fcntl(fd, F_SETFL, O_NONBLOCK) != 0) {
+        int err = errno;
+        ::close(fd);
+        return err;
+    }
     int result = ::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == 0 ? 0 : errno;
     ::close(fd);
     // a full backlog, or a live socket of another type, which refuses a stream connect with EPROTOTYPE
