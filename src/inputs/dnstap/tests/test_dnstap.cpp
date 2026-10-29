@@ -4,9 +4,53 @@
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/catch_test_visor.hpp>
+#include <thread>
+#ifndef _WIN32
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#endif
 
 using namespace visor::input::dnstap;
 using namespace std::chrono;
+
+#ifndef _WIN32
+namespace {
+int dnstap_clients(const DnstapInputStream &stream)
+{
+    nlohmann::json j;
+    stream.info_json(j);
+    return j["dnstap"].is_object() ? j["dnstap"].value("clients", -1) : -1;
+}
+
+// the server accepts and drops clients on its own loop thread, so give it up to 2 s to settle
+int wait_for_clients(const DnstapInputStream &stream, int want)
+{
+    int clients = dnstap_clients(stream);
+    for (int i = 0; i < 200 && clients != want; ++i) {
+        std::this_thread::sleep_for(10ms);
+        clients = dnstap_clients(stream);
+    }
+    return clients;
+}
+
+int connect_tcp(uint16_t port)
+{
+    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+    if (fd >= 0 && ::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
+        ::close(fd);
+        return -1;
+    }
+    return fd;
+}
+}
+#endif
 
 // bidirectional: READY with dnstap content-type
 static uint8_t bi_frame_1_len42[] = {
@@ -143,6 +187,48 @@ TEST_CASE("dnstap tcp socket on a port in use fails to start", "[dnstap][tcp]")
     CHECK(first.running());
     CHECK_NOTHROW(first.stop());
 }
+
+#ifndef _WIN32
+TEST_CASE("dnstap tcp server reports its connected clients", "[dnstap][tcp]")
+{
+    DnstapInputStream stream{"dnstap-clients"};
+    stream.config_set("tcp", "127.0.0.1:5355");
+    REQUIRE_NOTHROW(stream.start());
+    CHECK(dnstap_clients(stream) == 0);
+
+    // CHECK rather than REQUIRE while the server runs, so a failure still reaches stop()
+    int fd = connect_tcp(5355);
+    CHECK(fd >= 0);
+    CHECK(wait_for_clients(stream, 1) == 1);
+
+    ::close(fd);
+    CHECK_NOTHROW(stream.stop());
+}
+
+TEST_CASE("dnstap tcp clients that disconnect are released", "[dnstap][tcp]")
+{
+    DnstapInputStream stream{"dnstap-disconnects"};
+    stream.config_set("tcp", "127.0.0.1:5356");
+    REQUIRE_NOTHROW(stream.start());
+
+    // CHECK rather than REQUIRE while the server runs, so a failure still reaches stop()
+    int staying = connect_tcp(5356);
+    CHECK(staying >= 0);
+    CHECK(wait_for_clients(stream, 1) == 1);
+    // each client is dropped by the server once it disconnects, while the one that stays is kept
+    for (int i = 0; i < 3; ++i) {
+        int fd = connect_tcp(5356);
+        CHECK(fd >= 0);
+        CHECK(wait_for_clients(stream, 2) == 2);
+        ::close(fd);
+        CHECK(wait_for_clients(stream, 1) == 1);
+    }
+
+    ::close(staying);
+    CHECK(wait_for_clients(stream, 0) == 0);
+    CHECK_NOTHROW(stream.stop());
+}
+#endif
 
 TEST_CASE("dnstap unix socket that cannot be bound fails to start", "[dnstap][unix]")
 {

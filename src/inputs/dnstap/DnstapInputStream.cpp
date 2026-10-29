@@ -237,9 +237,9 @@ void DnstapInputStream::_create_frame_stream_tcp_socket()
 
         // client sent data
         client->on<uvw::data_event>([this](const uvw::data_event &data, uvw::tcp_handle &c_sock) {
-            assert(_tcp_sessions[c_sock.fd()]);
+            assert(_tcp_sessions[&c_sock]);
             try {
-                _tcp_sessions[c_sock.fd()]->receive_socket_data(reinterpret_cast<uint8_t *>(data.data.get()), data.length);
+                _tcp_sessions[&c_sock]->receive_socket_data(reinterpret_cast<uint8_t *>(data.data.get()), data.length);
             } catch (DnstapException &err) {
                 _logger->error("[{}] dnstap client read error: {}", _name, err.what());
                 c_sock.stop();
@@ -249,7 +249,8 @@ void DnstapInputStream::_create_frame_stream_tcp_socket()
         // client was closed
         client->on<uvw::close_event>([this](const uvw::close_event &, uvw::tcp_handle &c_sock) {
             _logger->info("[{}]: dnstap client disconnected", _name);
-            _tcp_sessions.erase(c_sock.fd());
+            _tcp_sessions.erase(&c_sock);
+            _clients = _tcp_sessions.size();
         });
         // client read EOF
         client->on<uvw::end_event>([this](const uvw::end_event &, uvw::tcp_handle &c_sock) {
@@ -264,7 +265,8 @@ void DnstapInputStream::_create_frame_stream_tcp_socket()
             return;
         }
         _logger->info("[{}]: dnstap client connected {}", _name, client->peer().ip);
-        _tcp_sessions[client->fd()] = std::make_unique<FrameSessionData<uvw::tcp_handle>>(client, CONTENT_TYPE, on_data_frame);
+        _tcp_sessions[client.get()] = std::make_unique<FrameSessionData<uvw::tcp_handle>>(client, CONTENT_TYPE, on_data_frame);
+        _clients = _tcp_sessions.size();
         if (auto rc = client->read(); rc < 0) {
             _logger->error("[{}]: unable to read from dnstap client: {}", _name, uv_strerror(rc));
             client->close();
@@ -396,9 +398,9 @@ void DnstapInputStream::_create_frame_stream_unix_socket()
 
         // client sent data
         client->on<uvw::data_event>([this](const uvw::data_event &data, uvw::pipe_handle &c_sock) {
-            assert(_unix_sessions[c_sock.fd()]);
+            assert(_unix_sessions[&c_sock]);
             try {
-                _unix_sessions[c_sock.fd()]->receive_socket_data(reinterpret_cast<uint8_t *>(data.data.get()), data.length);
+                _unix_sessions[&c_sock]->receive_socket_data(reinterpret_cast<uint8_t *>(data.data.get()), data.length);
             } catch (DnstapException &err) {
                 _logger->error("[{}] dnstap client read error: {}", _name, err.what());
                 c_sock.stop();
@@ -408,7 +410,8 @@ void DnstapInputStream::_create_frame_stream_unix_socket()
         // client was closed
         client->on<uvw::close_event>([this](const uvw::close_event &, uvw::pipe_handle &c_sock) {
             _logger->info("[{}]: dnstap client disconnected", _name);
-            _unix_sessions.erase(c_sock.fd());
+            _unix_sessions.erase(&c_sock);
+            _clients = _unix_sessions.size();
         });
         // client read EOF
         client->on<uvw::end_event>([this](const uvw::end_event &, uvw::pipe_handle &c_sock) {
@@ -423,7 +426,8 @@ void DnstapInputStream::_create_frame_stream_unix_socket()
             return;
         }
         _logger->info("[{}]: dnstap client connected {}", _name, client->sock());
-        _unix_sessions[client->fd()] = std::make_unique<FrameSessionData<uvw::pipe_handle>>(client, CONTENT_TYPE, on_data_frame);
+        _unix_sessions[client.get()] = std::make_unique<FrameSessionData<uvw::pipe_handle>>(client, CONTENT_TYPE, on_data_frame);
+        _clients = _unix_sessions.size();
         if (auto rc = client->read(); rc < 0) {
             _logger->error("[{}]: unable to read from dnstap client: {}", _name, uv_strerror(rc));
             client->close();
@@ -497,6 +501,7 @@ void DnstapInputStream::stop()
 void DnstapInputStream::info_json(json &j) const
 {
     common_info_json(j);
+    j[schema_key()]["clients"] = _clients.load();
 }
 
 std::unique_ptr<InputEventProxy> DnstapInputStream::create_event_proxy(const Configurable &filter)
