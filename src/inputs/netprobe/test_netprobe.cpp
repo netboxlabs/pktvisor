@@ -1,6 +1,7 @@
 #include "NetProbeInputStream.h"
 #include "NetProbeStreamHandler.h"
 #include "PingProbe.h"
+#include "TcpProbe.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
@@ -8,11 +9,14 @@
 #include <catch2/catch_test_visor.hpp>
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <httplib.h>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <thread>
+#include <vector>
 #ifdef __GNUC__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wold-style-cast"
@@ -21,6 +25,8 @@
 #endif
 #include <pcapplusplus/DnsLayer.h>
 #include <pcapplusplus/DnsResourceData.h>
+// loop::walk needs every handle type
+#include <uvw.hpp>
 #ifdef __GNUC__
 #pragma GCC diagnostic pop
 #endif
@@ -82,6 +88,224 @@ TEST_CASE("NetProbe TCP config", "[netprobe][tcp]")
     nlohmann::json j;
     stream.info_json(j);
     CHECK(j["module"]["config"]["test_type"] == "tcp");
+}
+
+namespace {
+struct TcpProbeRun {
+    int sent{0};
+    int received{0};
+    int failed{0};
+    int timed_out{0};
+    // how long the youngest attempt reported as timed out had been running, in ms
+    int64_t youngest_timeout_ms{-1};
+    // with block_tick: the attempts made by the sixth tick of a timer that ticks with the probe
+    int sent_by_sixth_tick{-1};
+    int left_open{0};
+    int loop_close{0};
+};
+
+// Runs a TCP probe every 50 ms with a 40 ms timeout against ip:port on its own loop, stops it 25 ms after its
+// sixth attempt, closes the handles the test set up for it, then counts the handles the probe left open before
+// closing them so the loop can close. With block_tick, the loop is blocked for 30 ms just before that tick of the
+// probe (the first is 1), as a slow DNS lookup for another target would, and the run records how many attempts
+// the probe had made by its own sixth tick.
+TcpProbeRun run_tcp_probe(const std::shared_ptr<uvw::loop> &loop, const std::string &ip, uint32_t port,
+    std::vector<std::shared_ptr<uvw::tcp_handle>> &test_handles, std::optional<int> block_tick = std::nullopt)
+{
+    TcpProbeRun run;
+    TcpProbe probe(0, "tcp-target", pcpp::IPAddress(ip), std::string(), port);
+    probe.set_configs(50, 40, 1, 0, 0);
+
+    auto stop = loop->resource<uvw::timer_handle>();
+    stop->on<uvw::timer_event>([&probe, &test_handles](const auto &, auto &timer) {
+        probe.stop();
+        for (auto &handle : test_handles) {
+            handle->close();
+        }
+        timer.close();
+    });
+    // a cap, so a probe that stops attempting cannot hang the test; the sixth attempt brings the stop forward
+    stop->start(uvw::timer_handle::time{2000}, uvw::timer_handle::time{0});
+
+    steady_clock::time_point last_send;
+    probe.set_callbacks(
+        [&run, &last_send, &stop](pcpp::Packet &, TestType, const std::string &, timespec) {
+            last_send = steady_clock::now();
+            if (++run.sent == 6) {
+                stop->start(uvw::timer_handle::time{25}, uvw::timer_handle::time{0});
+            }
+        },
+        [&run](pcpp::Packet &, TestType, const std::string &, timespec) { ++run.received; },
+        [&run, &last_send](ErrorType error, TestType, const std::string &) {
+            if (error != ErrorType::Timeout) {
+                ++run.failed;
+                return;
+            }
+            ++run.timed_out;
+            auto age = duration_cast<milliseconds>(steady_clock::now() - last_send).count();
+            if (run.youngest_timeout_ms < 0 || age < run.youngest_timeout_ms) {
+                run.youngest_timeout_ms = age;
+            }
+        });
+    int ticks = 0;
+    int witness_ticks = 0;
+    if (block_tick) {
+        // ticks with the probe and is started before it: both re-arm from the same loop time, so this runs first
+        // in the same pass of the loop's timers. Its close matters too: a closing handle makes the next poll return
+        // at once and refresh the loop clock, so the next tick comes early rather than 30 ms late
+        auto block = loop->resource<uvw::timer_handle>();
+        block->on<uvw::timer_event>([&ticks, tick = *block_tick](const auto &, auto &timer) {
+            if (++ticks == tick) {
+                uv_sleep(30);
+                timer.close();
+            }
+        });
+        block->start(uvw::timer_handle::time{0}, uvw::timer_handle::time{50});
+        // ticks with the probe too, between the block and the probe: libuv runs due timers in order of due time,
+        // so its sixth tick sees the attempts of the probe's first five, whatever the load
+        auto witness = loop->resource<uvw::timer_handle>();
+        witness->on<uvw::timer_event>([&run, &witness_ticks](const auto &, auto &timer) {
+            if (++witness_ticks == 6) {
+                run.sent_by_sixth_tick = run.sent;
+                timer.close();
+            }
+        });
+        witness->start(uvw::timer_handle::time{0}, uvw::timer_handle::time{50});
+    }
+    REQUIRE(probe.start(loop));
+    loop->run();
+
+    loop->walk([&run](auto &handle) {
+        if (!handle.closing()) {
+            ++run.left_open;
+            handle.close();
+        }
+    });
+    loop->run();
+    run.loop_close = loop->close();
+    return run;
+}
+
+// a server that never accepts: libuv takes one connection off its queue and the backlog holds one or two more (two
+// attempts connect on macOS, three on Linux), then the kernel drops later SYNs, so those attempts are still
+// connecting at the next tick
+std::shared_ptr<uvw::tcp_handle> never_accepting_server(const std::shared_ptr<uvw::loop> &loop)
+{
+    auto server = loop->resource<uvw::tcp_handle>();
+    server->on<uvw::listen_event>([](const uvw::listen_event &, uvw::tcp_handle &) {});
+    REQUIRE(server->bind("127.0.0.1", 0) == 0);
+    REQUIRE(server->listen(1) == 0);
+    return server;
+}
+}
+
+// stop() cuts the last attempt short when it is still connecting, or when the loop stalls past the 25 ms after it,
+// so the checks allow for one attempt with no result
+
+TEST_CASE("NetProbe TCP probe connects to an IPv6 target", "[netprobe][tcp][ipv6]")
+{
+    auto loop = uvw::loop::create();
+    auto server = loop->resource<uvw::tcp_handle>();
+    std::vector<std::shared_ptr<uvw::tcp_handle>> handles{server};
+    server->on<uvw::listen_event>([&loop, &handles](const uvw::listen_event &, uvw::tcp_handle &srv) {
+        auto client = loop->resource<uvw::tcp_handle>();
+        srv.accept(*client);
+        handles.push_back(client);
+    });
+    sockaddr_in6 addr{};
+    REQUIRE(uv_ip6_addr("::1", 0, &addr) == 0);
+    if (server->bind(reinterpret_cast<const sockaddr &>(addr)) != 0) {
+        server->close();
+        loop->run();
+        SKIP("this host has no IPv6 loopback");
+    }
+    REQUIRE(server->listen() == 0);
+
+    auto run = run_tcp_probe(loop, "::1", server->sock().port, handles);
+
+    CHECK(run.sent == 6);
+    CHECK(run.received >= run.sent - 1);
+    CHECK(run.failed == 0);
+    CHECK(run.timed_out == 0);
+    CHECK(run.left_open == 0);
+    CHECK(run.loop_close == 0);
+}
+
+TEST_CASE("NetProbe TCP probe closes every attempt that is refused", "[netprobe][tcp]")
+{
+    auto loop = uvw::loop::create();
+    // a port nothing listens on: bind one to learn a free port, then release it
+    uint32_t port;
+    {
+        auto free_port = loop->resource<uvw::tcp_handle>();
+        REQUIRE(free_port->bind("127.0.0.1", 0) == 0);
+        port = free_port->sock().port;
+        free_port->close();
+        loop->run();
+    }
+    std::vector<std::shared_ptr<uvw::tcp_handle>> handles;
+
+    auto run = run_tcp_probe(loop, "127.0.0.1", port, handles);
+
+    CHECK(run.sent == 6);
+    CHECK(run.received == 0);
+    CHECK(run.failed >= run.sent - 1);
+    CHECK(run.timed_out == 0);
+    CHECK(run.left_open == 0);
+    CHECK(run.loop_close == 0);
+}
+
+TEST_CASE("NetProbe TCP probe reports a connect that fails at once", "[netprobe][tcp]")
+{
+    // a TCP connect to a multicast address fails inside connect() itself, so uvw returns the error rather than emitting it
+    auto loop = uvw::loop::create();
+    std::vector<std::shared_ptr<uvw::tcp_handle>> handles;
+
+    auto run = run_tcp_probe(loop, "224.0.0.1", 9, handles);
+
+    CHECK(run.sent == 6);
+    CHECK(run.received == 0);
+    CHECK(run.failed == run.sent);
+    CHECK(run.timed_out == 0);
+    CHECK(run.left_open == 0);
+    CHECK(run.loop_close == 0);
+}
+
+TEST_CASE("NetProbe TCP probe counts an attempt still connecting at the next one as timed out", "[netprobe][tcp]")
+{
+    auto loop = uvw::loop::create();
+    auto server = never_accepting_server(loop);
+    std::vector<std::shared_ptr<uvw::tcp_handle>> handles{server};
+
+    auto run = run_tcp_probe(loop, "127.0.0.1", server->sock().port, handles);
+
+    CHECK(run.sent == 6);
+    CHECK(run.timed_out >= 1);
+    CHECK(run.received + run.timed_out >= run.sent - 1);
+    CHECK(run.failed == 0);
+    CHECK(run.left_open == 0);
+    CHECK(run.loop_close == 0);
+}
+
+TEST_CASE("NetProbe TCP probe counts an attempt as timed out only once it has run for the timeout", "[netprobe][tcp]")
+{
+    // the fourth tick's attempt starts 30 ms late, behind a blocked loop, and the fifth tick comes 20 ms after it:
+    // by then the server's backlog is full, so the attempt is still connecting but has not timed out
+    auto loop = uvw::loop::create();
+    auto server = never_accepting_server(loop);
+    std::vector<std::shared_ptr<uvw::tcp_handle>> handles{server};
+
+    auto run = run_tcp_probe(loop, "127.0.0.1", server->sock().port, handles, 4);
+
+    CHECK(run.sent == 6);
+    CHECK(run.timed_out >= 1);
+    CHECK(run.youngest_timeout_ms >= 40);
+    // every attempt is accounted for, and the fifth comes once the fourth has run its 40 ms, not a whole tick later
+    CHECK(run.received + run.timed_out >= run.sent - 1);
+    CHECK(run.sent_by_sixth_tick >= 5);
+    CHECK(run.failed == 0);
+    CHECK(run.left_open == 0);
+    CHECK(run.loop_close == 0);
 }
 
 TEST_CASE("NetProbe Boundaries", "[netprobe]")

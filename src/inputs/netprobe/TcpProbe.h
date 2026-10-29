@@ -6,6 +6,7 @@
 
 #include "NetProbe.h"
 
+#include <chrono>
 #include <optional>
 #include <uvw/tcp.h>
 #include <uvw/timer.h>
@@ -17,12 +18,17 @@ class TcpProbe final : public NetProbe
     uint32_t _dst_port;
     bool _init{false};
     bool _is_ipv4{false};
+    // the current attempt has not connected or failed yet
+    bool _connecting{false};
+    std::chrono::steady_clock::time_point _attempt_start;
     std::string _ip_str;
     std::shared_ptr<uvw::timer_handle> _interval_timer;
     std::optional<bool> _force_ipv6;
 
     std::shared_ptr<uvw::tcp_handle> _client;
 
+    // ends the previous attempt, or returns false and puts the tick off while that attempt is younger than timeout_msec
+    bool _drop_attempt();
     void _perform_tcp_process();
 
 public:
