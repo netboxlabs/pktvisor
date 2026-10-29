@@ -4,6 +4,9 @@
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/catch_test_visor.hpp>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <thread>
 #ifndef _WIN32
 #include <arpa/inet.h>
@@ -43,6 +46,25 @@ int connect_tcp(uint16_t port)
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
     inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+    if (fd >= 0 && ::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
+        ::close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+sockaddr_un unix_address(const std::string &path)
+{
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
+    return addr;
+}
+
+int connect_unix(const std::string &path)
+{
+    int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    auto addr = unix_address(path);
     if (fd >= 0 && ::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
         ::close(fd);
         return -1;
@@ -226,6 +248,71 @@ TEST_CASE("dnstap tcp clients that disconnect are released", "[dnstap][tcp]")
 
     ::close(staying);
     CHECK(wait_for_clients(stream, 0) == 0);
+    CHECK_NOTHROW(stream.stop());
+}
+
+TEST_CASE("dnstap unix socket another server listens on is refused", "[dnstap][unix]")
+{
+    const std::string path = "/tmp/dnstap-test-in-use.sock";
+    DnstapInputStream first{"dnstap-first"};
+    first.config_set("socket", path);
+    REQUIRE_NOTHROW(first.start());
+
+    // the second server must fail rather than remove the first one's socket and take its clients
+    DnstapInputStream second{"dnstap-second"};
+    second.config_set("socket", path);
+    CHECK_THROWS_WITH(second.start(), "unable to bind dnstap server on " + path + ": address already in use");
+    CHECK_FALSE(second.running());
+    CHECK_NOTHROW(second.stop());
+
+    // a client on the path still reaches the first server
+    CHECK(wait_for_clients(first, 0) == 0);
+    int fd = connect_unix(path);
+    CHECK(fd >= 0);
+    CHECK(wait_for_clients(first, 1) == 1);
+    ::close(fd);
+    CHECK_NOTHROW(first.stop());
+}
+
+TEST_CASE("dnstap unix socket path that is not a socket is refused", "[dnstap][unix]")
+{
+    const std::string path = "/tmp/dnstap-test-not-a-socket.sock";
+    {
+        std::ofstream file(path, std::ios::trunc);
+        file << "not a socket";
+    }
+    DnstapInputStream stream{"dnstap-test"};
+    stream.config_set("socket", path);
+
+    CHECK_THROWS_WITH(stream.start(), "unable to bind dnstap server on " + path + ": the path exists and is not a socket");
+    CHECK_FALSE(stream.running());
+    CHECK_NOTHROW(stream.stop());
+    // the file is left alone
+    std::ifstream file(path);
+    std::string content;
+    std::getline(file, content);
+    CHECK(content == "not a socket");
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("dnstap unix socket left by a server that stopped is replaced", "[dnstap][unix]")
+{
+    const std::string path = "/tmp/dnstap-test-stale.sock";
+    std::filesystem::remove(path);
+    // a socket bound and closed without removing its file, as a server that crashed leaves it
+    int stale = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    auto addr = unix_address(path);
+    REQUIRE(::bind(stale, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == 0);
+    ::close(stale);
+    REQUIRE(std::filesystem::is_socket(path));
+
+    DnstapInputStream stream{"dnstap-test"};
+    stream.config_set("socket", path);
+    REQUIRE_NOTHROW(stream.start());
+    int fd = connect_unix(path);
+    CHECK(fd >= 0);
+    CHECK(wait_for_clients(stream, 1) == 1);
+    ::close(fd);
     CHECK_NOTHROW(stream.stop());
 }
 #endif

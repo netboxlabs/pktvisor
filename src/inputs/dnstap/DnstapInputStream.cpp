@@ -19,8 +19,40 @@
 #ifdef __GNUC__
 #pragma GCC diagnostic pop
 #endif
+#ifndef _WIN32
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#endif
 
 namespace visor::input::dnstap {
+
+#ifndef _WIN32
+namespace {
+// true when the Unix socket at path refuses connections: its server is gone and left the file behind
+bool unix_socket_is_stale(const std::string &path)
+{
+    sockaddr_un addr{};
+    if (path.size() >= sizeof(addr.sun_path)) {
+        return false;
+    }
+    addr.sun_family = AF_UNIX;
+    std::memcpy(addr.sun_path, path.c_str(), path.size());
+    int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return false;
+    }
+    // non-blocking, so a live server with a full backlog cannot stall the start
+    ::fcntl(fd, F_SETFL, O_NONBLOCK);
+    bool stale = ::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0 && errno == ECONNREFUSED;
+    ::close(fd);
+    return stale;
+}
+}
+#endif
 
 DnstapInputStream::DnstapInputStream(const std::string &name)
     : visor::InputStream(name)
@@ -434,8 +466,24 @@ void DnstapInputStream::_create_frame_stream_unix_socket()
         }
     });
 
+#ifdef _WIN32
     // attempt to remove socket if it exists, ignore errors
     std::filesystem::remove(config_get<std::string>("socket"));
+#else
+    // a socket file is replaced only when nothing listens on it: removing a live server's socket would take its
+    // clients, and anything else at the path is not ours to delete. A live server's socket fails the bind below
+    const auto socket_path = config_get<std::string>("socket");
+    std::error_code ec;
+    if (auto status = std::filesystem::symlink_status(socket_path, ec); !ec && std::filesystem::exists(status)) {
+        if (!std::filesystem::is_socket(status)) {
+            _close_unstarted_loop();
+            throw DnstapException(fmt::format("unable to bind dnstap server on {}: the path exists and is not a socket", socket_path));
+        }
+        if (unix_socket_is_stale(socket_path)) {
+            std::filesystem::remove(socket_path, ec);
+        }
+    }
+#endif
 
     _logger->info("[{}]: opening dnstap server on {}", _name, config_get<std::string>("socket"));
     // uvw returns these errors rather than emitting them: a socket that cannot be bound must fail the start
