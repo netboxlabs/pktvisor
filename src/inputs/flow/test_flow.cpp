@@ -14,6 +14,12 @@
 #ifdef __GNUC__
 #pragma GCC diagnostic pop
 #endif
+#include <cstring>
+#include <mutex>
+#include <pcapplusplus/Packet.h>
+#include <pcapplusplus/PcapFileDevice.h>
+#include <pcapplusplus/UdpLayer.h>
+#include <vector>
 
 using namespace visor::input::flow;
 
@@ -156,15 +162,29 @@ TEST_CASE("flow udp socket on an IPv6 address", "[flow][udp][ipv6]")
     stream.config_set("flow_type", "sflow");
     stream.config_set("bind", "::1");
     stream.config_set("port", port);
+
+    std::mutex samples_mutex;
+    std::vector<SFLAddress> sources;
+    auto proxy = static_cast<FlowInputEventProxy *>(stream.add_event_proxy(visor::Configurable()));
+    proxy->sflow_signal.connect([&](const SFSample &sample, std::size_t) {
+        std::lock_guard lock(samples_mutex);
+        sources.push_back(sample.sourceIP);
+    });
     REQUIRE_NOTHROW(stream.start());
 
-    // a datagram the listener can only count if it is bound to [::1]:6347
+    // a valid sFlow datagram, from ::1 to [::1]:6347: the listener only gets it if it is bound there
+    auto reader = std::unique_ptr<pcpp::IFileReaderDevice>(pcpp::IFileReaderDevice::getReader("tests/fixtures/sflow_keyed.pcap"));
+    REQUIRE(reader->open());
+    pcpp::RawPacket raw;
+    REQUIRE(reader->getNextPacket(raw));
+    pcpp::Packet packet(&raw);
+    auto udp = packet.getLayerOfType<pcpp::UdpLayer>();
+    REQUIRE(udp);
     sockaddr_in6 to{};
     REQUIRE(uv_ip6_addr("::1", static_cast<int>(port), &to) == 0);
-    auto loop = uvw::loop::get_default();
-    auto client = loop->resource<uvw::udp_handle>();
-    char data[2] = {'b', 'c'};
-    CHECK(client->try_send(reinterpret_cast<const sockaddr &>(to), data, 2) == 2);
+    auto client = uvw::loop::get_default()->resource<uvw::udp_handle>();
+    auto len = static_cast<unsigned int>(udp->getLayerPayloadSize());
+    CHECK(client->try_send(reinterpret_cast<const sockaddr &>(to), reinterpret_cast<char *>(udp->getLayerPayload()), len) == static_cast<int>(len));
     client->close();
 
     uv_sleep(100);
@@ -172,7 +192,15 @@ TEST_CASE("flow udp socket on an IPv6 address", "[flow][udp][ipv6]")
 
     nlohmann::json j;
     stream.info_json(j);
-    CHECK(j["flow"]["packet_errors"] == 1);
+    CHECK(j["flow"]["packet_errors"] == 0);
+
+    // the sample carries the IPv6 sender
+    std::lock_guard lock(samples_mutex);
+    REQUIRE(sources.size() == 1);
+    CHECK(sources[0].type == SFLADDRESSTYPE_IP_V6);
+    in6_addr loopback{};
+    REQUIRE(uv_inet_pton(AF_INET6, "::1", &loopback) == 0);
+    CHECK(std::memcmp(&sources[0].address.ip_v6.addr, &loopback, 16) == 0);
 }
 
 TEST_CASE("flow udp socket bind must be an address", "[flow][udp]")

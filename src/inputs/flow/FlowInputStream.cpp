@@ -211,10 +211,25 @@ void FlowInputStream::_create_frame_stream_udp_socket()
             SFSample sample;
             sample.rawSample = reinterpret_cast<uint8_t *>(event.data.get());
             sample.rawSampleLen = event.length;
-            sample.sourceIP.type = SFLADDRESSTYPE_IP_V4;
-            struct sockaddr_in peer4;
-            inet_pton(AF_INET, event.sender.ip.c_str(), &(peer4.sin_addr));
-            std::memcpy(&sample.sourceIP.address.ip_v4.addr, &peer4.sin_addr, 4);
+            // the sender by its own family: an IPv6 bind receives from IPv6 peers, and a dual-stack one sees
+            // IPv4 peers as IPv4-mapped addresses, which are kept as IPv4
+            sample.sourceIP = SFLAddress{};
+            in_addr peer4{};
+            in6_addr peer6{};
+            static const uint8_t v4_mapped_prefix[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
+            if (inet_pton(AF_INET, event.sender.ip.c_str(), &peer4) == 1) {
+                sample.sourceIP.type = SFLADDRESSTYPE_IP_V4;
+                std::memcpy(&sample.sourceIP.address.ip_v4.addr, &peer4, 4);
+            } else if (inet_pton(AF_INET6, event.sender.ip.c_str(), &peer6) == 1) {
+                auto bytes = reinterpret_cast<const uint8_t *>(&peer6);
+                if (std::memcmp(bytes, v4_mapped_prefix, sizeof(v4_mapped_prefix)) == 0) {
+                    sample.sourceIP.type = SFLADDRESSTYPE_IP_V4;
+                    std::memcpy(&sample.sourceIP.address.ip_v4.addr, bytes + 12, 4);
+                } else {
+                    sample.sourceIP.type = SFLADDRESSTYPE_IP_V6;
+                    std::memcpy(&sample.sourceIP.address.ip_v6.addr, bytes, 16);
+                }
+            }
             try {
                 read_sflow_datagram(&sample);
                 std::shared_lock lock(_input_mutex);
