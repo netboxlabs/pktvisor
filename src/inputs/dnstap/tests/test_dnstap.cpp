@@ -217,6 +217,40 @@ TEST_CASE("bi-directional frame stream split across reads at every byte", "[dnst
     CHECK(df_count == 4);
 }
 
+TEST_CASE("bi-directional frame stream split into two reads anywhere", "[dnstap][frmstrm]")
+{
+#ifdef _WIN32
+    return;
+#endif
+    // whole frames and part of the next in one read: the part waits for the rest in the next read
+    std::basic_string<uint8_t> stream;
+    stream.append(bi_frame_1_len42, sizeof(bi_frame_1_len42));
+    stream.append(bi_frame_2_len12, sizeof(bi_frame_2_len12));
+    stream.append(bi_frame_3_len400, sizeof(bi_frame_3_len400));
+
+    for (std::size_t split = 0; split <= stream.size(); ++split) {
+        CAPTURE(split);
+        std::vector<std::basic_string<uint8_t>> frames;
+        auto client = std::make_shared<MockClient>();
+        FrameSessionData<MockClient> session(client, CONTENT_TYPE, [&frames](const void *data, std::size_t len) {
+            frames.emplace_back(static_cast<const uint8_t *>(data), len);
+        });
+        REQUIRE_NOTHROW(session.receive_socket_data(stream.data(), split));
+        REQUIRE_NOTHROW(session.receive_socket_data(stream.data() + split, stream.size() - split));
+        CHECK(session.state() == FrameSessionData<MockClient>::FrameState::Running);
+        CHECK(client->writes == 1);
+        // the four data frames of bi_frame_3_len400, each as it was sent
+        REQUIRE(frames.size() == 4);
+        std::size_t offset = sizeof(bi_frame_1_len42) + sizeof(bi_frame_2_len12);
+        for (const auto &frame : frames) {
+            REQUIRE(frame.size() + 4 <= stream.size() - offset);
+            CHECK(frame == stream.substr(offset + 4, frame.size()));
+            offset += 4 + frame.size();
+        }
+        CHECK(offset == stream.size());
+    }
+}
+
 // unidirectional: START with dnstap content-type
 static uint8_t uni_frame_start_len42[] = {
     0x00, 0x00, 0x00, 0x00, // escape: expect control frame

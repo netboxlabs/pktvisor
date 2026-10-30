@@ -50,7 +50,7 @@ private:
     bool _decode_control_frame(const void *control_frame, size_t len_control_frame);
     void _check_content_type(const fstrm_control *c) const;
     void _send_control_frame(fstrm_control_type type, const char *name, bool with_content_type = false);
-    bool _try_yield_frame();
+    bool _try_yield_frame(std::size_t &pos);
 
 public:
     FrameSessionData(
@@ -176,16 +176,22 @@ template <typename C>
 void FrameSessionData<C>::receive_socket_data(const uint8_t data[], std::size_t data_len)
 {
     _buffer.append(data, data_len);
-    while (_try_yield_frame()) { }
+    // frames are read in place and the buffer is trimmed once per read, since erasing each frame would move the
+    // rest of the buffer every time. A DnstapException ends the session, so it skips the trim
+    std::size_t pos{0};
+    while (_try_yield_frame(pos)) { }
+    _buffer.erase(0, pos);
 }
 template <typename C>
-bool FrameSessionData<C>::_try_yield_frame()
+bool FrameSessionData<C>::_try_yield_frame(std::size_t &pos)
 {
 
     std::uint32_t frame_len{0};
+    const uint8_t *frame = _buffer.data() + pos;
+    const std::size_t available = _buffer.size() - pos;
 
     // a socket read can end anywhere in a frame, so a partial length or frame waits for more data
-    if (_buffer.size() < sizeof(frame_len)) {
+    if (available < sizeof(frame_len)) {
         return false;
     }
 
@@ -193,7 +199,7 @@ bool FrameSessionData<C>::_try_yield_frame()
         throw DnstapException("received a frame after STOP, aborting");
     }
 
-    std::memcpy(&frame_len, _buffer.data(), sizeof(frame_len));
+    std::memcpy(&frame_len, frame, sizeof(frame_len));
     frame_len = ntohl(frame_len);
 
     if (frame_len != 0) {
@@ -208,9 +214,9 @@ bool FrameSessionData<C>::_try_yield_frame()
             throw DnstapException("data frame too large");
         }
 
-        if (_buffer.size() >= sizeof(frame_len) + frame_len) {
-            _on_data_frame_cb(_buffer.data() + sizeof(frame_len), frame_len);
-            _buffer.erase(0, sizeof(frame_len) + frame_len);
+        if (available >= sizeof(frame_len) + frame_len) {
+            _on_data_frame_cb(frame + sizeof(frame_len), frame_len);
+            pos += sizeof(frame_len) + frame_len;
         } else {
             // need more data
             return false;
@@ -222,12 +228,12 @@ bool FrameSessionData<C>::_try_yield_frame()
         // get control frame length
         std::uint32_t ctrl_len{0};
 
-        if (_buffer.size() < sizeof(frame_len) + sizeof(ctrl_len)) {
+        if (available < sizeof(frame_len) + sizeof(ctrl_len)) {
             // need more data
             return false;
         }
 
-        std::memcpy(&ctrl_len, _buffer.data() + sizeof(frame_len), sizeof(ctrl_len));
+        std::memcpy(&ctrl_len, frame + sizeof(frame_len), sizeof(ctrl_len));
         ctrl_len = ntohl(ctrl_len);
 
         // ensure we never allocate more than max
@@ -235,18 +241,18 @@ bool FrameSessionData<C>::_try_yield_frame()
             throw DnstapException("control frame too large");
         }
 
-        if (_buffer.size() >= sizeof(frame_len) + sizeof(ctrl_len) + ctrl_len) {
-            if (!_decode_control_frame(_buffer.data() + sizeof(frame_len) + sizeof(ctrl_len), ctrl_len)) {
+        if (available >= sizeof(frame_len) + sizeof(ctrl_len) + ctrl_len) {
+            if (!_decode_control_frame(frame + sizeof(frame_len) + sizeof(ctrl_len), ctrl_len)) {
                 throw DnstapException("unable to parse control frame");
             }
-            _buffer.erase(0, sizeof(frame_len) + sizeof(ctrl_len) + ctrl_len);
+            pos += sizeof(frame_len) + sizeof(ctrl_len) + ctrl_len;
         } else {
             // need more data
             return false;
         }
     }
     // parsed ok. if we have more data, try to parse another frame.
-    return _buffer.size();
+    return pos < _buffer.size();
 }
 
 }
