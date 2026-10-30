@@ -308,6 +308,19 @@ TEST_CASE("NetProbe TCP probe counts an attempt as timed out only once it has ru
     CHECK(run.loop_close == 0);
 }
 
+TEST_CASE("NetProbe handler transaction TTL is the input's timeout_msec", "[netprobe][config]")
+{
+    // a policy load creates the handler's event proxy before it starts the input
+    NetProbeInputStream stream{"net-probe-ttl"};
+    stream.config_set("test_type", "tcp");
+    stream.config_set<uint64_t>("timeout_msec", 500);
+
+    auto *proxy = stream.add_event_proxy(visor::Configurable());
+
+    REQUIRE(proxy->config_exists("xact_ttl_ms"));
+    CHECK(proxy->config_get<uint64_t>("xact_ttl_ms") == 500);
+}
+
 TEST_CASE("NetProbe Boundaries", "[netprobe]")
 {
     NetProbeInputStream stream{"net-probe-test"};
