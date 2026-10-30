@@ -19,8 +19,48 @@
 #ifdef __GNUC__
 #pragma GCC diagnostic pop
 #endif
+#ifndef _WIN32
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#endif
 
 namespace visor::input::dnstap {
+
+#ifndef _WIN32
+namespace {
+// connects to the Unix socket at path: 0 when a server is there, ECONNREFUSED when its server is gone and left the
+// file behind, ENOENT when the file went away since it was found, or the errno that leaves it unknown. macOS also
+// refuses when a live server's backlog is full, where Linux returns EAGAIN
+int probe_unix_socket(const std::string &path)
+{
+    sockaddr_un addr{};
+    // libuv binds a name that fills sun_path without a terminating NUL, so that length is probed too
+    if (path.size() > sizeof(addr.sun_path)) {
+        return ENAMETOOLONG;
+    }
+    addr.sun_family = AF_UNIX;
+    std::memcpy(addr.sun_path, path.c_str(), path.size());
+    int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return errno;
+    }
+    // non-blocking, so a live server with a full backlog cannot stall the start
+    if (::fcntl(fd, F_SETFL, O_NONBLOCK) != 0) {
+        int err = errno;
+        ::close(fd);
+        return err;
+    }
+    int result = ::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == 0 ? 0 : errno;
+    ::close(fd);
+    // a full backlog, or a live socket of another type, which refuses a stream connect with EPROTOTYPE
+    return (result == EAGAIN || result == EINPROGRESS || result == EPROTOTYPE) ? 0 : result;
+}
+}
+#endif
 
 DnstapInputStream::DnstapInputStream(const std::string &name)
     : visor::InputStream(name)
@@ -237,9 +277,9 @@ void DnstapInputStream::_create_frame_stream_tcp_socket()
 
         // client sent data
         client->on<uvw::data_event>([this](const uvw::data_event &data, uvw::tcp_handle &c_sock) {
-            assert(_tcp_sessions[c_sock.fd()]);
+            assert(_tcp_sessions[&c_sock]);
             try {
-                _tcp_sessions[c_sock.fd()]->receive_socket_data(reinterpret_cast<uint8_t *>(data.data.get()), data.length);
+                _tcp_sessions[&c_sock]->receive_socket_data(reinterpret_cast<uint8_t *>(data.data.get()), data.length);
             } catch (DnstapException &err) {
                 _logger->error("[{}] dnstap client read error: {}", _name, err.what());
                 c_sock.stop();
@@ -249,7 +289,8 @@ void DnstapInputStream::_create_frame_stream_tcp_socket()
         // client was closed
         client->on<uvw::close_event>([this](const uvw::close_event &, uvw::tcp_handle &c_sock) {
             _logger->info("[{}]: dnstap client disconnected", _name);
-            _tcp_sessions.erase(c_sock.fd());
+            _tcp_sessions.erase(&c_sock);
+            _clients = _tcp_sessions.size();
         });
         // client read EOF
         client->on<uvw::end_event>([this](const uvw::end_event &, uvw::tcp_handle &c_sock) {
@@ -264,7 +305,8 @@ void DnstapInputStream::_create_frame_stream_tcp_socket()
             return;
         }
         _logger->info("[{}]: dnstap client connected {}", _name, client->peer().ip);
-        _tcp_sessions[client->fd()] = std::make_unique<FrameSessionData<uvw::tcp_handle>>(client, CONTENT_TYPE, on_data_frame);
+        _tcp_sessions[client.get()] = std::make_unique<FrameSessionData<uvw::tcp_handle>>(client, CONTENT_TYPE, on_data_frame);
+        _clients = _tcp_sessions.size();
         if (auto rc = client->read(); rc < 0) {
             _logger->error("[{}]: unable to read from dnstap client: {}", _name, uv_strerror(rc));
             client->close();
@@ -396,9 +438,9 @@ void DnstapInputStream::_create_frame_stream_unix_socket()
 
         // client sent data
         client->on<uvw::data_event>([this](const uvw::data_event &data, uvw::pipe_handle &c_sock) {
-            assert(_unix_sessions[c_sock.fd()]);
+            assert(_unix_sessions[&c_sock]);
             try {
-                _unix_sessions[c_sock.fd()]->receive_socket_data(reinterpret_cast<uint8_t *>(data.data.get()), data.length);
+                _unix_sessions[&c_sock]->receive_socket_data(reinterpret_cast<uint8_t *>(data.data.get()), data.length);
             } catch (DnstapException &err) {
                 _logger->error("[{}] dnstap client read error: {}", _name, err.what());
                 c_sock.stop();
@@ -408,7 +450,8 @@ void DnstapInputStream::_create_frame_stream_unix_socket()
         // client was closed
         client->on<uvw::close_event>([this](const uvw::close_event &, uvw::pipe_handle &c_sock) {
             _logger->info("[{}]: dnstap client disconnected", _name);
-            _unix_sessions.erase(c_sock.fd());
+            _unix_sessions.erase(&c_sock);
+            _clients = _unix_sessions.size();
         });
         // client read EOF
         client->on<uvw::end_event>([this](const uvw::end_event &, uvw::pipe_handle &c_sock) {
@@ -423,15 +466,39 @@ void DnstapInputStream::_create_frame_stream_unix_socket()
             return;
         }
         _logger->info("[{}]: dnstap client connected {}", _name, client->sock());
-        _unix_sessions[client->fd()] = std::make_unique<FrameSessionData<uvw::pipe_handle>>(client, CONTENT_TYPE, on_data_frame);
+        _unix_sessions[client.get()] = std::make_unique<FrameSessionData<uvw::pipe_handle>>(client, CONTENT_TYPE, on_data_frame);
+        _clients = _unix_sessions.size();
         if (auto rc = client->read(); rc < 0) {
             _logger->error("[{}]: unable to read from dnstap client: {}", _name, uv_strerror(rc));
             client->close();
         }
     });
 
+#ifdef _WIN32
     // attempt to remove socket if it exists, ignore errors
     std::filesystem::remove(config_get<std::string>("socket"));
+#else
+    // a socket file is replaced only when nothing listens on it: removing a live server's socket would take its
+    // clients, and anything else at the path is not ours to delete. A live server's socket fails the bind below
+    const auto socket_path = config_get<std::string>("socket");
+    std::error_code ec;
+    if (auto status = std::filesystem::symlink_status(socket_path, ec); !ec && std::filesystem::exists(status)) {
+        if (!std::filesystem::is_socket(status)) {
+            _close_unstarted_loop();
+            throw DnstapException(fmt::format("unable to bind dnstap server on {}: the path exists and is not a socket", socket_path));
+        }
+        if (auto probe = probe_unix_socket(socket_path); probe == ECONNREFUSED) {
+            if (!std::filesystem::remove(socket_path, ec) && ec) {
+                _close_unstarted_loop();
+                throw DnstapException(fmt::format("unable to bind dnstap server on {}: unable to remove the stale socket there: {}", socket_path, ec.message()));
+            }
+        } else if (probe != 0 && probe != ENOENT) {
+            _close_unstarted_loop();
+            throw DnstapException(fmt::format("unable to bind dnstap server on {}: unable to tell whether a server listens on the socket there: {}",
+                socket_path, std::error_code(probe, std::generic_category()).message()));
+        }
+    }
+#endif
 
     _logger->info("[{}]: opening dnstap server on {}", _name, config_get<std::string>("socket"));
     // uvw returns these errors rather than emitting them: a socket that cannot be bound must fail the start
@@ -497,6 +564,7 @@ void DnstapInputStream::stop()
 void DnstapInputStream::info_json(json &j) const
 {
     common_info_json(j);
+    j[schema_key()]["clients"] = _clients.load();
 }
 
 std::unique_ptr<InputEventProxy> DnstapInputStream::create_event_proxy(const Configurable &filter)

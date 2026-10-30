@@ -32,7 +32,7 @@ private:
     std::string _content_type;
     using binary = std::basic_string<uint8_t>;
     binary _buffer;
-    bool _is_bidir;
+    bool _is_bidir{false};
 
     on_data_frame_cb_t _on_data_frame_cb;
 
@@ -172,8 +172,9 @@ bool FrameSessionData<C>::_try_yield_frame()
 
     std::uint32_t frame_len{0};
 
+    // a socket read can end anywhere in a frame, so a partial length or frame waits for more data
     if (_buffer.size() < sizeof(frame_len)) {
-        throw DnstapException("invalid data: header length");
+        return false;
     }
 
     std::memcpy(&frame_len, _buffer.data(), sizeof(frame_len));
@@ -199,19 +200,18 @@ bool FrameSessionData<C>::_try_yield_frame()
             return false;
         }
     } else {
-        // this is a control frame
+        // this is a control frame: escape code, length, then the frame. Nothing is consumed until all of it is here
         // note this happens infrequently
-
-        _buffer.erase(0, sizeof(frame_len)); // erase escape code
 
         // get control frame length
         std::uint32_t ctrl_len{0};
 
-        if (_buffer.size() < sizeof(ctrl_len)) {
-            throw DnstapException("invalid data: control frame length");
+        if (_buffer.size() < sizeof(frame_len) + sizeof(ctrl_len)) {
+            // need more data
+            return false;
         }
 
-        std::memcpy(&ctrl_len, _buffer.data(), sizeof(ctrl_len));
+        std::memcpy(&ctrl_len, _buffer.data() + sizeof(frame_len), sizeof(ctrl_len));
         ctrl_len = ntohl(ctrl_len);
 
         // ensure we never allocate more than max
@@ -219,11 +219,11 @@ bool FrameSessionData<C>::_try_yield_frame()
             throw DnstapException("control frame too large");
         }
 
-        if (_buffer.size() >= sizeof(ctrl_len) + ctrl_len) {
-            if (!_decode_control_frame(_buffer.data() + sizeof(ctrl_len), ctrl_len)) {
+        if (_buffer.size() >= sizeof(frame_len) + sizeof(ctrl_len) + ctrl_len) {
+            if (!_decode_control_frame(_buffer.data() + sizeof(frame_len) + sizeof(ctrl_len), ctrl_len)) {
                 throw DnstapException("unable to parse control frame");
             }
-            _buffer.erase(0, sizeof(ctrl_len) + ctrl_len);
+            _buffer.erase(0, sizeof(frame_len) + sizeof(ctrl_len) + ctrl_len);
         } else {
             // need more data
             return false;

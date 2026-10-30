@@ -25,6 +25,7 @@
 #ifdef __GNUC__
 #pragma GCC diagnostic pop
 #endif
+#include <atomic>
 #include <bitset>
 #include <spdlog/spdlog.h>
 #include <unordered_map>
@@ -54,11 +55,15 @@ class DnstapInputStream : public visor::InputStream
     std::shared_ptr<uvw::async_handle> _async_h;
     std::shared_ptr<uvw::timer_handle> _timer;
 
+    // sessions are keyed by their client handle, not its fd: a handle that is closing no longer has one
     std::shared_ptr<uvw::pipe_handle> _unix_server_h;
-    std::unordered_map<uv_os_fd_t, std::unique_ptr<FrameSessionData<uvw::pipe_handle>>> _unix_sessions;
+    std::unordered_map<const uvw::pipe_handle *, std::unique_ptr<FrameSessionData<uvw::pipe_handle>>> _unix_sessions;
 
     std::shared_ptr<uvw::tcp_handle> _tcp_server_h;
-    std::unordered_map<uv_os_fd_t, std::unique_ptr<FrameSessionData<uvw::tcp_handle>>> _tcp_sessions;
+    std::unordered_map<const uvw::tcp_handle *, std::unique_ptr<FrameSessionData<uvw::tcp_handle>>> _tcp_sessions;
+
+    // the sessions are only touched on the loop thread, so info_json reads their count from here
+    std::atomic<std::size_t> _clients{0};
 
     static const inline ConfigsDefType _config_defs = {
         "tcp",

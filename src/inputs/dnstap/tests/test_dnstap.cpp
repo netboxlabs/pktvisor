@@ -4,9 +4,76 @@
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/catch_test_visor.hpp>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <thread>
+#ifndef _WIN32
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <unistd.h>
+#endif
 
 using namespace visor::input::dnstap;
 using namespace std::chrono;
+
+#ifndef _WIN32
+namespace {
+int dnstap_clients(const DnstapInputStream &stream)
+{
+    nlohmann::json j;
+    stream.info_json(j);
+    return j["dnstap"].is_object() ? j["dnstap"].value("clients", -1) : -1;
+}
+
+// the server accepts and drops clients on its own loop thread, so give it up to 2 s to settle
+int wait_for_clients(const DnstapInputStream &stream, int want)
+{
+    int clients = dnstap_clients(stream);
+    for (int i = 0; i < 200 && clients != want; ++i) {
+        std::this_thread::sleep_for(10ms);
+        clients = dnstap_clients(stream);
+    }
+    return clients;
+}
+
+int connect_tcp(uint16_t port)
+{
+    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+    if (fd >= 0 && ::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
+        ::close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+sockaddr_un unix_address(const std::string &path)
+{
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
+    return addr;
+}
+
+int connect_unix(const std::string &path)
+{
+    int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    auto addr = unix_address(path);
+    if (fd >= 0 && ::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
+        ::close(fd);
+        return -1;
+    }
+    return fd;
+}
+}
+#endif
 
 // bidirectional: READY with dnstap content-type
 static uint8_t bi_frame_1_len42[] = {
@@ -99,6 +166,55 @@ TEST_CASE("bi-directional frame stream process", "[dnstap][frmstrm]")
     CHECK(df_count == 4);
 }
 
+TEST_CASE("bi-directional frame stream split across reads at every byte", "[dnstap][frmstrm]")
+{
+#ifdef _WIN32
+    return;
+#endif
+    // a socket read can end anywhere, including inside a frame's length or a control frame
+    std::basic_string<uint8_t> stream;
+    stream.append(bi_frame_1_len42, sizeof(bi_frame_1_len42));
+    stream.append(bi_frame_2_len12, sizeof(bi_frame_2_len12));
+    stream.append(bi_frame_3_len400, sizeof(bi_frame_3_len400));
+
+    int df_count{0};
+    auto client = std::make_shared<MockClient>();
+    FrameSessionData<MockClient> session(client, CONTENT_TYPE, [&df_count](const void *, std::size_t) { df_count++; });
+    for (auto byte : stream) {
+        REQUIRE_NOTHROW(session.receive_socket_data(&byte, 1));
+    }
+    CHECK(session.state() == FrameSessionData<MockClient>::FrameState::Running);
+    CHECK(std::memcmp(client->data.get(), bi_frame_2_ready_len12, 12) == 0);
+    CHECK(df_count == 4);
+}
+
+// unidirectional: START with dnstap content-type
+static uint8_t uni_frame_start_len42[] = {
+    0x00, 0x00, 0x00, 0x00, // escape: expect control frame
+    0x00, 0x00, 0x00, 0x22, // control frame length 0x22 == 34 bytes
+    // control frame 34 bytes. START and content type
+    0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x16, 0x70, 0x72, 0x6f, 0x74,
+    0x6f, 0x62, 0x75, 0x66, 0x3a, 0x64, 0x6e, 0x73, 0x74, 0x61, 0x70, 0x2e, 0x44, 0x6e, 0x73, 0x74,
+    0x61, 0x70};
+
+TEST_CASE("uni-directional frame stream starts in memory a bi-directional session used", "[dnstap][frmstrm]")
+{
+#ifdef _WIN32
+    return;
+#endif
+    // a freed session's memory is reused for the next client, so a new session must not inherit its fields
+    using Session = FrameSessionData<MockClient>;
+    alignas(Session) unsigned char storage[sizeof(Session)];
+    std::memset(storage, 0x01, sizeof(storage));
+    auto client = std::make_shared<MockClient>();
+    auto session = new (storage) Session(client, CONTENT_TYPE, [](const void *, std::size_t) {});
+
+    CHECK_NOTHROW(session->receive_socket_data(uni_frame_start_len42, 42));
+    CHECK(session->is_bidir() == false);
+    CHECK(session->state() == Session::FrameState::Running);
+    session->~Session();
+}
+
 TEST_CASE("dnstap file", "[dnstap][file]")
 {
     DnstapInputStream stream{"dnstap-test"};
@@ -143,6 +259,225 @@ TEST_CASE("dnstap tcp socket on a port in use fails to start", "[dnstap][tcp]")
     CHECK(first.running());
     CHECK_NOTHROW(first.stop());
 }
+
+#ifndef _WIN32
+TEST_CASE("dnstap tcp server reports its connected clients", "[dnstap][tcp]")
+{
+    DnstapInputStream stream{"dnstap-clients"};
+    stream.config_set("tcp", "127.0.0.1:15355");
+    REQUIRE_NOTHROW(stream.start());
+    CHECK(dnstap_clients(stream) == 0);
+
+    // CHECK rather than REQUIRE while the server runs, so a failure still reaches stop()
+    int fd = connect_tcp(15355);
+    CHECK(fd >= 0);
+    CHECK(wait_for_clients(stream, 1) == 1);
+
+    ::close(fd);
+    CHECK_NOTHROW(stream.stop());
+}
+
+TEST_CASE("dnstap tcp clients that disconnect are released", "[dnstap][tcp]")
+{
+    DnstapInputStream stream{"dnstap-disconnects"};
+    stream.config_set("tcp", "127.0.0.1:15356");
+    REQUIRE_NOTHROW(stream.start());
+
+    // CHECK rather than REQUIRE while the server runs, so a failure still reaches stop()
+    int staying = connect_tcp(15356);
+    CHECK(staying >= 0);
+    CHECK(wait_for_clients(stream, 1) == 1);
+    // each client is dropped by the server once it disconnects, while the one that stays is kept
+    for (int i = 0; i < 3; ++i) {
+        int fd = connect_tcp(15356);
+        CHECK(fd >= 0);
+        CHECK(wait_for_clients(stream, 2) == 2);
+        ::close(fd);
+        CHECK(wait_for_clients(stream, 1) == 1);
+    }
+
+    ::close(staying);
+    CHECK(wait_for_clients(stream, 0) == 0);
+    CHECK_NOTHROW(stream.stop());
+}
+
+TEST_CASE("dnstap unix socket another server listens on is refused", "[dnstap][unix]")
+{
+    const std::string path = "/tmp/dnstap-test-in-use.sock";
+    DnstapInputStream first{"dnstap-first"};
+    first.config_set("socket", path);
+    REQUIRE_NOTHROW(first.start());
+    struct stat before{};
+    CHECK(::stat(path.c_str(), &before) == 0);
+
+    // the second server must fail rather than remove the first one's socket and take its clients
+    DnstapInputStream second{"dnstap-second"};
+    second.config_set("socket", path);
+    CHECK_THROWS_WITH(second.start(), "unable to bind dnstap server on " + path + ": address already in use");
+    CHECK_FALSE(second.running());
+    CHECK_NOTHROW(second.stop());
+
+    // the path is still the first server's socket, and a client on it reaches that server
+    struct stat after{};
+    CHECK(::stat(path.c_str(), &after) == 0);
+    CHECK(after.st_ino == before.st_ino);
+    int fd = connect_unix(path);
+    CHECK(fd >= 0);
+    ::close(fd);
+    CHECK_NOTHROW(first.stop());
+}
+
+TEST_CASE("dnstap unix socket path that is not a socket is refused", "[dnstap][unix]")
+{
+    const std::string path = "/tmp/dnstap-test-not-a-socket.sock";
+    {
+        std::ofstream file(path, std::ios::trunc);
+        file << "not a socket";
+    }
+    DnstapInputStream stream{"dnstap-test"};
+    stream.config_set("socket", path);
+
+    CHECK_THROWS_WITH(stream.start(), "unable to bind dnstap server on " + path + ": the path exists and is not a socket");
+    CHECK_FALSE(stream.running());
+    CHECK_NOTHROW(stream.stop());
+    // the file is left alone
+    std::ifstream file(path);
+    std::string content;
+    std::getline(file, content);
+    CHECK(content == "not a socket");
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("dnstap unix socket left by a server that stopped is replaced", "[dnstap][unix]")
+{
+    const std::string path = "/tmp/dnstap-test-stale.sock";
+    std::filesystem::remove(path);
+    // a socket bound and closed without removing its file, as a server that crashed leaves it
+    int stale = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    auto addr = unix_address(path);
+    REQUIRE(::bind(stale, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == 0);
+    ::close(stale);
+    REQUIRE(std::filesystem::is_socket(path));
+
+    DnstapInputStream stream{"dnstap-test"};
+    stream.config_set("socket", path);
+    REQUIRE_NOTHROW(stream.start());
+    int fd = connect_unix(path);
+    CHECK(fd >= 0);
+    CHECK(wait_for_clients(stream, 1) == 1);
+    ::close(fd);
+    CHECK_NOTHROW(stream.stop());
+}
+
+TEST_CASE("dnstap unix socket path as long as a socket address holds is replaced when stale", "[dnstap][unix]")
+{
+    // libuv binds a name that fills sun_path without a terminating NUL
+    sockaddr_un addr{};
+    std::string path = "/tmp/";
+    path.append(sizeof(addr.sun_path) - path.size(), 'd');
+    std::filesystem::remove(path);
+    int stale = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    addr.sun_family = AF_UNIX;
+    std::memcpy(addr.sun_path, path.data(), path.size());
+    REQUIRE(::bind(stale, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == 0);
+    ::close(stale);
+    REQUIRE(std::filesystem::is_socket(path));
+
+    DnstapInputStream stream{"dnstap-test"};
+    stream.config_set("socket", path);
+    CHECK_NOTHROW(stream.start());
+    CHECK_NOTHROW(stream.stop());
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("dnstap unix socket a datagram server listens on is refused", "[dnstap][unix]")
+{
+    const std::string path = "/tmp/dnstap-test-datagram.sock";
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+    // a live socket of another type refuses a stream connect with EPROTOTYPE, and a stale one would refuse it outright
+    int live = ::socket(AF_UNIX, SOCK_DGRAM, 0);
+    auto addr = unix_address(path);
+    REQUIRE(::bind(live, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == 0);
+
+    DnstapInputStream stream{"dnstap-test"};
+    stream.config_set("socket", path);
+    CHECK_THROWS_WITH(stream.start(), "unable to bind dnstap server on " + path + ": address already in use");
+    CHECK_FALSE(stream.running());
+    CHECK_NOTHROW(stream.stop());
+    CHECK(std::filesystem::is_socket(path));
+    ::close(live);
+    std::filesystem::remove(path, ec);
+}
+
+TEST_CASE("dnstap unix socket left by a datagram server that stopped is replaced", "[dnstap][unix]")
+{
+    const std::string path = "/tmp/dnstap-test-stale-datagram.sock";
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+    int stale = ::socket(AF_UNIX, SOCK_DGRAM, 0);
+    auto addr = unix_address(path);
+    REQUIRE(::bind(stale, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == 0);
+    ::close(stale);
+
+    DnstapInputStream stream{"dnstap-test"};
+    stream.config_set("socket", path);
+    CHECK_NOTHROW(stream.start());
+    CHECK_NOTHROW(stream.stop());
+    std::filesystem::remove(path, ec);
+}
+
+TEST_CASE("dnstap unix socket that cannot be checked for a server is reported and kept", "[dnstap][unix]")
+{
+    if (::geteuid() == 0) {
+        SKIP("root can connect to the socket regardless of its permissions");
+    }
+    const std::string path = "/tmp/dnstap-test-no-access.sock";
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+    int stale = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    auto addr = unix_address(path);
+    REQUIRE(::bind(stale, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == 0);
+    ::close(stale);
+    // without write permission on the socket nobody but root can connect, so whether a server is there is unknown
+    std::filesystem::permissions(path, std::filesystem::perms::none);
+
+    DnstapInputStream stream{"dnstap-test"};
+    stream.config_set("socket", path);
+    CHECK_THROWS_WITH(stream.start(), Catch::Matchers::StartsWith("unable to bind dnstap server on " + path + ": unable to tell whether a server listens on the socket there: "));
+    CHECK_FALSE(stream.running());
+    CHECK_NOTHROW(stream.stop());
+    CHECK(std::filesystem::is_socket(path));
+    std::filesystem::remove(path, ec);
+}
+
+TEST_CASE("dnstap unix socket left behind that cannot be removed is reported", "[dnstap][unix]")
+{
+    if (::geteuid() == 0) {
+        SKIP("root can remove the socket regardless of the directory's permissions");
+    }
+    const std::string dir = "/tmp/dnstap-test-read-only";
+    const std::string path = dir + "/stale.sock";
+    std::error_code ec;
+    std::filesystem::permissions(dir, std::filesystem::perms::owner_all, ec);
+    std::filesystem::remove_all(dir, ec);
+    REQUIRE(std::filesystem::create_directory(dir));
+    int stale = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    auto addr = unix_address(path);
+    REQUIRE(::bind(stale, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == 0);
+    ::close(stale);
+    std::filesystem::permissions(dir, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec);
+
+    DnstapInputStream stream{"dnstap-test"};
+    stream.config_set("socket", path);
+    CHECK_THROWS_WITH(stream.start(), Catch::Matchers::StartsWith("unable to bind dnstap server on " + path + ": unable to remove the stale socket there: "));
+    CHECK_FALSE(stream.running());
+    CHECK_NOTHROW(stream.stop());
+
+    std::filesystem::permissions(dir, std::filesystem::perms::owner_all, ec);
+    std::filesystem::remove_all(dir, ec);
+}
+#endif
 
 TEST_CASE("dnstap unix socket that cannot be bound fails to start", "[dnstap][unix]")
 {
