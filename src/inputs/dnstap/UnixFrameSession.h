@@ -48,7 +48,8 @@ private:
     FrameState _state{FrameState::New};
 
     bool _decode_control_frame(const void *control_frame, size_t len_control_frame);
-    void _send_control_frame(fstrm_control_type type, const char *name);
+    void _check_content_type(const fstrm_control *c) const;
+    void _send_control_frame(fstrm_control_type type, const char *name, bool with_content_type = false);
     bool _try_yield_frame();
 
 public:
@@ -107,21 +108,22 @@ bool FrameSessionData<C>::_decode_control_frame(const void *control_frame, size_
     case FSTRM_CONTROL_START: {
         if ((!_is_bidir && _state != FrameState::New) || (_is_bidir && _state != FrameState::Ready)) {
             throw DnstapException("received START frame out of order, aborting");
-        } else {
-            _state = FrameState::Running;
         }
+        _check_content_type(c.get());
+        _state = FrameState::Running;
         break;
     }
         // bi-directional
     case FSTRM_CONTROL_READY: {
         if (_state != FrameState::New) {
             throw DnstapException("received READY frame but already started, aborting");
-        } else {
-            _state = FrameState::Ready;
-            _is_bidir = true;
-            // bi-directional: got READY, send ACCEPT
-            _send_control_frame(FSTRM_CONTROL_ACCEPT, "ACCEPT");
         }
+        // READY lists the content types the writer can send
+        _check_content_type(c.get());
+        _state = FrameState::Ready;
+        _is_bidir = true;
+        // some writers close the connection unless ACCEPT names their content type
+        _send_control_frame(FSTRM_CONTROL_ACCEPT, "ACCEPT", true);
         break;
     }
     case FSTRM_CONTROL_STOP: {
@@ -138,32 +140,27 @@ bool FrameSessionData<C>::_decode_control_frame(const void *control_frame, size_
         break;
     }
 
-    size_t n_content_type;
-    res = fstrm_control_get_num_field_content_type(c.get(), &n_content_type);
-    if (res != fstrm_res_success) {
-        return false;
-    }
-    const uint8_t *content_type;
-    size_t len_content_type;
-    for (size_t idx = 0; idx < n_content_type; idx++) {
-        res = fstrm_control_get_field_content_type(c.get(), idx,
-            &content_type, &len_content_type);
-        if (res != fstrm_res_success) {
-            throw DnstapException("unable to parse content type");
-        }
-        if (len_content_type != _content_type.size() || std::memcmp(content_type, _content_type.data(), len_content_type) != 0) {
-            throw DnstapException("content type mismatch");
-        }
-    }
     return true;
 }
 
 template <typename C>
-void FrameSessionData<C>::_send_control_frame(fstrm_control_type type, const char *name)
+void FrameSessionData<C>::_check_content_type(const fstrm_control *c) const
+{
+    // a frame without a content type matches any, as in libfstrm's reader
+    if (fstrm_control_match_field_content_type(c, reinterpret_cast<const uint8_t *>(_content_type.data()), _content_type.size()) != fstrm_res_success) {
+        throw DnstapException("content type mismatch");
+    }
+}
+
+template <typename C>
+void FrameSessionData<C>::_send_control_frame(fstrm_control_type type, const char *name, bool with_content_type)
 {
     control_ptr c{fstrm_control_init()};
     if (fstrm_control_set_type(c.get(), type) != fstrm_res_success) {
         throw DnstapException(std::string("unable to send ") + name + ": fstrm_control_set_type");
+    }
+    if (with_content_type && fstrm_control_add_field_content_type(c.get(), reinterpret_cast<const uint8_t *>(_content_type.data()), _content_type.size()) != fstrm_res_success) {
+        throw DnstapException(std::string("unable to send ") + name + ": fstrm_control_add_field_content_type");
     }
     auto control_frame_data = std::make_unique<char[]>(FSTRM_CONTROL_FRAME_LENGTH_MAX);
     size_t length_control_frame = FSTRM_CONTROL_FRAME_LENGTH_MAX;

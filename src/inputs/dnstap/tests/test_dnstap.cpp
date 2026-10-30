@@ -9,6 +9,7 @@
 #include <fstream>
 #include <future>
 #include <thread>
+#include <vector>
 #ifndef _WIN32
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -74,11 +75,13 @@ int connect_unix(const std::string &path)
     return fd;
 }
 
-std::basic_string<uint8_t> control_frame(fstrm_control_type type, const std::string &content_type)
+std::basic_string<uint8_t> control_frame(fstrm_control_type type, const std::vector<std::string> &content_types)
 {
     control_ptr c{fstrm_control_init()};
     REQUIRE(fstrm_control_set_type(c.get(), type) == fstrm_res_success);
-    REQUIRE(fstrm_control_add_field_content_type(c.get(), reinterpret_cast<const uint8_t *>(content_type.data()), content_type.size()) == fstrm_res_success);
+    for (const auto &content_type : content_types) {
+        REQUIRE(fstrm_control_add_field_content_type(c.get(), reinterpret_cast<const uint8_t *>(content_type.data()), content_type.size()) == fstrm_res_success);
+    }
     uint8_t frame[FSTRM_CONTROL_FRAME_LENGTH_MAX];
     size_t len = sizeof(frame);
     REQUIRE(fstrm_control_encode(c.get(), frame, &len, FSTRM_CONTROL_FLAG_WITH_HEADER) == fstrm_res_success);
@@ -101,6 +104,14 @@ static uint8_t bi_frame_2_len12[] = {
     0x00, 0x00, 0x00, 0x04, // length 4 bytes
     0x00, 0x00, 0x00, 0x02  // START
 };
+
+static uint8_t bi_frame_accept_len42[] = {
+    0x00, 0x00, 0x00, 0x00, // escape: expect control frame
+    0x00, 0x00, 0x00, 0x22, // control frame length 0x22 == 34 bytes
+    // control frame 34 bytes. ACCEPT and content type
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x16, 0x70, 0x72, 0x6f, 0x74,
+    0x6f, 0x62, 0x75, 0x66, 0x3a, 0x64, 0x6e, 0x73, 0x74, 0x61, 0x70, 0x2e, 0x44, 0x6e, 0x73, 0x74,
+    0x61, 0x70};
 
 static uint8_t bi_frame_2_ready_len12[] = {
     0x00, 0x00, 0x00, 0x00, // escape
@@ -172,7 +183,8 @@ TEST_CASE("bi-directional frame stream process", "[dnstap][frmstrm]")
     CHECK_NOTHROW(session.receive_socket_data(bi_frame_1_len42, 42));
     CHECK(session.state() == FrameSessionData<MockClient>::FrameState::Ready);
     CHECK(session.is_bidir() == true);
-    CHECK(std::memcmp(client->data.get(), bi_frame_2_ready_len12, 12) == 0);
+    REQUIRE(client->len == 42);
+    CHECK(std::memcmp(client->data.get(), bi_frame_accept_len42, 42) == 0);
 
     CHECK_NOTHROW(session.receive_socket_data(bi_frame_2_len12, 12));
     CHECK(session.state() == FrameSessionData<MockClient>::FrameState::Running);
@@ -200,7 +212,8 @@ TEST_CASE("bi-directional frame stream split across reads at every byte", "[dnst
         REQUIRE_NOTHROW(session.receive_socket_data(&byte, 1));
     }
     CHECK(session.state() == FrameSessionData<MockClient>::FrameState::Running);
-    CHECK(std::memcmp(client->data.get(), bi_frame_2_ready_len12, 12) == 0);
+    REQUIRE(client->len == 42);
+    CHECK(std::memcmp(client->data.get(), bi_frame_accept_len42, 42) == 0);
     CHECK(df_count == 4);
 }
 
@@ -243,6 +256,39 @@ static uint8_t frame_finish_len12[] = {
     0x00, 0x00, 0x00, 0x04, // length 4 bytes
     0x00, 0x00, 0x00, 0x05  // FINISH
 };
+
+TEST_CASE("bi-directional frame stream accepts the dnstap content type a READY offers", "[dnstap][frmstrm]")
+{
+    // some writers close the connection unless ACCEPT names their content type
+    auto client = std::make_shared<MockClient>();
+    FrameSessionData<MockClient> session(client, CONTENT_TYPE, [](const void *, std::size_t) {});
+    std::basic_string<uint8_t> ready;
+
+    SECTION("among other content types")
+    {
+        ready = control_frame(FSTRM_CONTROL_READY, {"protobuf:example.Other", CONTENT_TYPE});
+    }
+    SECTION("no content type at all")
+    {
+        ready = control_frame(FSTRM_CONTROL_READY, {});
+    }
+
+    CHECK_NOTHROW(session.receive_socket_data(ready.data(), ready.size()));
+    CHECK(session.state() == FrameSessionData<MockClient>::FrameState::Ready);
+    REQUIRE(client->writes == 1);
+    REQUIRE(client->len == 42);
+    CHECK(std::memcmp(client->data.get(), bi_frame_accept_len42, 42) == 0);
+}
+
+TEST_CASE("bi-directional frame stream refuses a READY without the dnstap content type", "[dnstap][frmstrm]")
+{
+    auto client = std::make_shared<MockClient>();
+    FrameSessionData<MockClient> session(client, CONTENT_TYPE, [](const void *, std::size_t) {});
+    auto ready = control_frame(FSTRM_CONTROL_READY, {"protobuf:example.Other"});
+
+    CHECK_THROWS_WITH(session.receive_socket_data(ready.data(), ready.size()), "content type mismatch");
+    CHECK(client->writes == 0);
+}
 
 TEST_CASE("bi-directional frame stream answers STOP with FINISH", "[dnstap][frmstrm]")
 {
@@ -334,7 +380,7 @@ TEST_CASE("frame stream refuses control frames out of order or of another conten
     }
     SECTION("another content type")
     {
-        auto start = control_frame(FSTRM_CONTROL_START, "protobuf:example.Other");
+        auto start = control_frame(FSTRM_CONTROL_START, {"protobuf:example.Other"});
         CHECK_THROWS_WITH(session.receive_socket_data(start.data(), start.size()), "content type mismatch");
     }
 }
