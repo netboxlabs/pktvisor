@@ -11,8 +11,17 @@
 #include <fstrm/fstrm.h>
 #include <functional>
 #include <memory>
+#include <uv.h>
 
 namespace visor::input::dnstap {
+
+struct ControlDeleter {
+    void operator()(fstrm_control *c) const
+    {
+        fstrm_control_destroy(&c);
+    }
+};
+using control_ptr = std::unique_ptr<fstrm_control, ControlDeleter>;
 
 template <typename C>
 class FrameSessionData
@@ -39,6 +48,7 @@ private:
     FrameState _state{FrameState::New};
 
     bool _decode_control_frame(const void *control_frame, size_t len_control_frame);
+    void _send_control_frame(fstrm_control_type type, const char *name);
     bool _try_yield_frame();
 
 public:
@@ -80,17 +90,15 @@ bool FrameSessionData<C>::_decode_control_frame(const void *control_frame, size_
 {
     fstrm_res res;
     fstrm_control_type c_type;
-    struct fstrm_control *c;
     uint32_t flags = 0;
-    c = fstrm_control_init();
-    res = fstrm_control_decode(c, control_frame, len_control_frame, flags);
+    // destroyed on every return and throw below
+    control_ptr c{fstrm_control_init()};
+    res = fstrm_control_decode(c.get(), control_frame, len_control_frame, flags);
     if (res != fstrm_res_success) {
-        fstrm_control_destroy(&c);
         return false;
     }
-    res = fstrm_control_get_type(c, &c_type);
+    res = fstrm_control_get_type(c.get(), &c_type);
     if (res != fstrm_res_success) {
-        fstrm_control_destroy(&c);
         return false;
     }
 
@@ -112,42 +120,33 @@ bool FrameSessionData<C>::_decode_control_frame(const void *control_frame, size_
             _state = FrameState::Ready;
             _is_bidir = true;
             // bi-directional: got READY, send ACCEPT
-            fstrm_res res;
-            struct fstrm_control *c;
-            auto control_frame_data = std::make_unique<char[]>(FSTRM_CONTROL_FRAME_LENGTH_MAX);
-            size_t length_control_frame = FSTRM_CONTROL_FRAME_LENGTH_MAX;
-            c = fstrm_control_init();
-            res = fstrm_control_set_type(c, FSTRM_CONTROL_ACCEPT);
-            if (res != fstrm_res_success) {
-                throw DnstapException("unable to send ACCEPT: fstrm_control_set_type");
-            }
-            // Serialize the control frame.
-            res = fstrm_control_encode(c, control_frame_data.get(), &length_control_frame, FSTRM_CONTROL_FLAG_WITH_HEADER);
-            if (res != fstrm_res_success) {
-                throw DnstapException("unable to send ACCEPT: fstrm_control_encode");
-            }
-            fstrm_control_destroy(&c);
-            // don't write to client in unit tests
-            _client_h->write(std::move(control_frame_data), length_control_frame);
+            _send_control_frame(FSTRM_CONTROL_ACCEPT, "ACCEPT");
+        }
+        break;
+    }
+    case FSTRM_CONTROL_STOP: {
+        // STOP ends the stream: _try_yield_frame refuses any frame after it
+        _state = FrameState::Finishing;
+        // bi-directional: the writer waits for FINISH before it closes the connection
+        if (_is_bidir) {
+            _send_control_frame(FSTRM_CONTROL_FINISH, "FINISH");
         }
         break;
     }
     case FSTRM_CONTROL_ACCEPT:
-    case FSTRM_CONTROL_STOP:
     case FSTRM_CONTROL_FINISH:
         break;
     }
 
     size_t n_content_type;
-    res = fstrm_control_get_num_field_content_type(c, &n_content_type);
+    res = fstrm_control_get_num_field_content_type(c.get(), &n_content_type);
     if (res != fstrm_res_success) {
-        fstrm_control_destroy(&c);
         return false;
     }
     const uint8_t *content_type;
     size_t len_content_type;
     for (size_t idx = 0; idx < n_content_type; idx++) {
-        res = fstrm_control_get_field_content_type(c, idx,
+        res = fstrm_control_get_field_content_type(c.get(), idx,
             &content_type, &len_content_type);
         if (res != fstrm_res_success) {
             throw DnstapException("unable to parse content type");
@@ -156,8 +155,24 @@ bool FrameSessionData<C>::_decode_control_frame(const void *control_frame, size_
             throw DnstapException("content type mismatch");
         }
     }
-    fstrm_control_destroy(&c);
     return true;
+}
+
+template <typename C>
+void FrameSessionData<C>::_send_control_frame(fstrm_control_type type, const char *name)
+{
+    control_ptr c{fstrm_control_init()};
+    if (fstrm_control_set_type(c.get(), type) != fstrm_res_success) {
+        throw DnstapException(std::string("unable to send ") + name + ": fstrm_control_set_type");
+    }
+    auto control_frame_data = std::make_unique<char[]>(FSTRM_CONTROL_FRAME_LENGTH_MAX);
+    size_t length_control_frame = FSTRM_CONTROL_FRAME_LENGTH_MAX;
+    if (fstrm_control_encode(c.get(), control_frame_data.get(), &length_control_frame, FSTRM_CONTROL_FLAG_WITH_HEADER) != fstrm_res_success) {
+        throw DnstapException(std::string("unable to send ") + name + ": fstrm_control_encode");
+    }
+    if (auto rc = _client_h->write(std::move(control_frame_data), length_control_frame); rc < 0) {
+        throw DnstapException(std::string("unable to send ") + name + ": " + uv_strerror(rc));
+    }
 }
 
 template <typename C>
@@ -175,6 +190,10 @@ bool FrameSessionData<C>::_try_yield_frame()
     // a socket read can end anywhere in a frame, so a partial length or frame waits for more data
     if (_buffer.size() < sizeof(frame_len)) {
         return false;
+    }
+
+    if (_state == FrameState::Finishing) {
+        throw DnstapException("received a frame after STOP, aborting");
     }
 
     std::memcpy(&frame_len, _buffer.data(), sizeof(frame_len));
