@@ -4,7 +4,11 @@
 
 #include <catch2/otel_helpers.hpp>
 #include <opentelemetry/proto/metrics/v1/metrics.pb.h>
+#include <pcapplusplus/Packet.h>
+#include <pcapplusplus/PcapFileDevice.h>
+#include <pcapplusplus/UdpLayer.h>
 #include <sstream>
+#include <uv.h>
 
 #include "FlowInputStream.h"
 #include "FlowStreamHandler.h"
@@ -448,6 +452,146 @@ TEST_CASE("Parse netflow v5 stream", "[netflow][flow]")
     CHECK(j["devices"]["10.0.0.2"]["interfaces"]["0"]["top_in_ecn_packets"][0]["name"] == "Not-ECT");
     CHECK(j["devices"]["10.0.0.2"]["interfaces"]["0"]["top_in_dst_ports_bytes"][0]["estimate"] == 1128);
     CHECK(j["devices"]["10.0.0.2"]["interfaces"]["0"]["top_in_dst_ports_bytes"][0]["name"] == "telnet");
+}
+
+TEST_CASE("Flow device keys in IPv4-mapped form match IPv4 devices", "[netflow][flow]")
+{
+    FlowInputStream stream{"netflow-test"};
+    stream.config_set("flow_type", "netflow");
+    stream.config_set("pcap_file", "tests/fixtures/nf5.pcap");
+    visor::network::IpPort::set_csv_iana_ports("tests/fixtures/pktvisor-port-service-names.csv");
+
+    visor::Config c;
+    auto stream_proxy = stream.add_event_proxy(c);
+    c.config_set<uint64_t>("num_periods", 1);
+    FlowStreamHandler flow_handler{"flow-test", stream_proxy, &c};
+
+    // keys written for a :: listener, which used to name IPv4 exporters by their IPv4-mapped address
+    auto interface = std::make_shared<visor::Configurable>();
+    interface->config_set("name", "uplink");
+    auto interfaces_map = std::make_shared<visor::Configurable>();
+    interfaces_map->config_set<std::shared_ptr<visor::Configurable>>("0", interface);
+    auto device = std::make_shared<visor::Configurable>();
+    device->config_set("name", "router-a");
+    device->config_set<std::shared_ptr<visor::Configurable>>("interfaces", interfaces_map);
+    auto device_map = std::make_shared<visor::Configurable>();
+    device_map->config_set<std::shared_ptr<visor::Configurable>>("::ffff:10.0.0.2", device);
+    flow_handler.config_set<std::shared_ptr<visor::Configurable>>("device_map", device_map);
+
+    auto devices = std::make_shared<visor::Configurable>();
+    devices->config_set<visor::Configurable::StringList>("::ffff:10.0.0.2", {"*"});
+    flow_handler.config_set<std::shared_ptr<visor::Configurable>>("only_device_interfaces", devices);
+
+    flow_handler.start();
+    stream.start();
+    stream.stop();
+    flow_handler.stop();
+
+    nlohmann::json j;
+    flow_handler.metrics()->bucket(0)->to_json(j);
+    CHECK(j["devices"]["router-a"]["records_flows"] == 3);
+    CHECK_FALSE(j["devices"].contains("10.0.0.2"));
+}
+
+TEST_CASE("Flow device keys in IPv4 form take precedence over the same device in IPv4-mapped form", "[netflow][flow]")
+{
+    FlowInputStream stream{"netflow-test"};
+    stream.config_set("flow_type", "netflow");
+    stream.config_set("pcap_file", "tests/fixtures/nf5.pcap");
+    visor::network::IpPort::set_csv_iana_ports("tests/fixtures/pktvisor-port-service-names.csv");
+
+    visor::Config c;
+    auto stream_proxy = stream.add_event_proxy(c);
+    c.config_set<uint64_t>("num_periods", 1);
+    FlowStreamHandler flow_handler{"flow-test", stream_proxy, &c};
+
+    // any spelling of the IPv4-mapped address names the same device
+    std::string mapped;
+    SECTION("dotted")
+    {
+        mapped = "::ffff:10.0.0.2";
+    }
+    SECTION("uppercase")
+    {
+        mapped = "::FFFF:10.0.0.2";
+    }
+    SECTION("hex")
+    {
+        mapped = "::ffff:a00:2";
+    }
+    SECTION("expanded")
+    {
+        mapped = "0:0:0:0:0:ffff:10.0.0.2";
+    }
+
+    // the mapped key is set first, so it is the one read last here
+    auto device_map = std::make_shared<visor::Configurable>();
+    for (const auto &[key, name] : {std::pair{mapped, "router-mapped"}, std::pair{std::string{"10.0.0.2"}, "router-ipv4"}}) {
+        auto device = std::make_shared<visor::Configurable>();
+        device->config_set("name", name);
+        device->config_set<std::shared_ptr<visor::Configurable>>("interfaces", std::make_shared<visor::Configurable>());
+        device_map->config_set<std::shared_ptr<visor::Configurable>>(key, device);
+    }
+    flow_handler.config_set<std::shared_ptr<visor::Configurable>>("device_map", device_map);
+
+    // the exporter's flows are on interface 0: only the IPv4 key keeps them
+    auto devices = std::make_shared<visor::Configurable>();
+    devices->config_set<visor::Configurable::StringList>(mapped, {"99"});
+    devices->config_set<visor::Configurable::StringList>("10.0.0.2", {"*"});
+    flow_handler.config_set<std::shared_ptr<visor::Configurable>>("only_device_interfaces", devices);
+
+    flow_handler.start();
+    stream.start();
+    stream.stop();
+    flow_handler.stop();
+
+    nlohmann::json j;
+    flow_handler.metrics()->bucket(0)->to_json(j);
+    CHECK(j["devices"]["router-ipv4"]["records_flows"] == 3);
+    CHECK_FALSE(j["devices"].contains("router-mapped"));
+}
+
+TEST_CASE("Flow sFlow agent with an IPv4-mapped address matches its IPv4 device key", "[sflow][flow]")
+{
+    FlowInputStream stream{"sflow-test"};
+    stream.config_set("flow_type", "sflow");
+
+    visor::Config c;
+    auto stream_proxy = stream.add_event_proxy(c);
+    c.config_set<uint64_t>("num_periods", 1);
+    FlowStreamHandler flow_handler{"flow-test", stream_proxy, &c};
+
+    auto device = std::make_shared<visor::Configurable>();
+    device->config_set("name", "switch-a");
+    device->config_set<std::shared_ptr<visor::Configurable>>("interfaces", std::make_shared<visor::Configurable>());
+    auto device_map = std::make_shared<visor::Configurable>();
+    device_map->config_set<std::shared_ptr<visor::Configurable>>("192.0.2.7", device);
+    flow_handler.config_set<std::shared_ptr<visor::Configurable>>("device_map", device_map);
+    flow_handler.start();
+
+    // a valid sFlow datagram whose agent reports its IPv4 address as IPv6, in IPv4-mapped form
+    auto reader = std::unique_ptr<pcpp::IFileReaderDevice>(pcpp::IFileReaderDevice::getReader("tests/fixtures/sflow_keyed.pcap"));
+    REQUIRE(reader->open());
+    pcpp::RawPacket raw;
+    REQUIRE(reader->getNextPacket(raw));
+    pcpp::Packet packet(&raw);
+    auto udp = packet.getLayerOfType<pcpp::UdpLayer>();
+    REQUIRE(udp);
+    SFSample sample{};
+    sample.rawSample = udp->getLayerPayload();
+    sample.rawSampleLen = static_cast<uint32_t>(udp->getLayerPayloadSize());
+    REQUIRE_NOTHROW(read_sflow_datagram(&sample));
+    REQUIRE(sample.elements.size() > 0);
+    sample.agent_addr = SFLAddress{};
+    sample.agent_addr.type = SFLADDRESSTYPE_IP_V6;
+    REQUIRE(uv_inet_pton(AF_INET6, "::ffff:192.0.2.7", &sample.agent_addr.address.ip_v6.addr) == 0);
+    static_cast<FlowInputEventProxy *>(stream_proxy)->sflow_cb(sample, sample.rawSampleLen);
+    flow_handler.stop();
+
+    nlohmann::json j;
+    flow_handler.metrics()->bucket(0)->to_json(j);
+    CHECK(j["devices"].contains("switch-a"));
+    CHECK_FALSE(j["devices"].contains("::ffff:192.0.2.7"));
 }
 
 TEST_CASE("Parse netflow v9 stream", "[netflow][flow]")

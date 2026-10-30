@@ -14,14 +14,73 @@
 #ifdef __GNUC__
 #pragma GCC diagnostic pop
 #endif
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <mutex>
 #include <pcapplusplus/Packet.h>
 #include <pcapplusplus/PcapFileDevice.h>
 #include <pcapplusplus/UdpLayer.h>
 #include <vector>
+#ifndef _WIN32
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 
 using namespace visor::input::flow;
+
+namespace {
+// the UDP payload of a capture's first packet, a datagram the listener can parse. Read it before the listener starts:
+// a REQUIRE failing while the listener runs would destroy the stream with its thread still joinable
+std::vector<char> first_udp_payload(const std::string &pcap)
+{
+    auto reader = std::unique_ptr<pcpp::IFileReaderDevice>(pcpp::IFileReaderDevice::getReader(pcap));
+    REQUIRE(reader->open());
+    pcpp::RawPacket raw;
+    REQUIRE(reader->getNextPacket(raw));
+    pcpp::Packet packet(&raw);
+    auto udp = packet.getLayerOfType<pcpp::UdpLayer>();
+    REQUIRE(udp);
+    auto payload = reinterpret_cast<const char *>(udp->getLayerPayload());
+    return {payload, payload + udp->getLayerPayloadSize()};
+}
+
+void send_datagram(std::vector<char> &datagram, const sockaddr &to)
+{
+    auto client = uvw::loop::get_default()->resource<uvw::udp_handle>();
+    auto len = static_cast<unsigned int>(datagram.size());
+    CHECK(client->try_send(to, datagram.data(), len) == static_cast<int>(len));
+    client->close();
+}
+
+// the listener delivers samples on its own thread, so give it up to 2 s
+template <typename T>
+bool wait_for_sample(std::mutex &mutex, std::condition_variable &arrived, const std::vector<T> &samples)
+{
+    std::unique_lock lock(mutex);
+    return arrived.wait_for(lock, std::chrono::seconds(2), [&samples] { return !samples.empty(); });
+}
+
+// why a socket bound to :: would not receive from IPv4 peers here, or nullptr if it would. On POSIX, libuv keeps the
+// system default, so ask a socket of our own rather than the listener under test. Windows is not checked
+const char *not_dual_stack()
+{
+#ifdef _WIN32
+    return "dual-stack sockets are not checked on Windows";
+#else
+    int fd = ::socket(AF_INET6, SOCK_DGRAM, 0);
+    if (fd < 0) {
+        return "no IPv6 sockets here";
+    }
+    int v6only{1};
+    socklen_t len = sizeof(v6only);
+    bool dual = ::getsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, &len) == 0 && v6only == 0;
+    ::close(fd);
+    return dual ? nullptr : "a socket bound to :: receives only from IPv6 peers here";
+#endif
+}
+}
 
 TEST_CASE("sflow pcap file", "[flow][sflow][file]")
 {
@@ -164,30 +223,25 @@ TEST_CASE("flow udp socket on an IPv6 address", "[flow][udp][ipv6]")
     stream.config_set("port", port);
 
     std::mutex samples_mutex;
+    std::condition_variable arrived;
     std::vector<SFLAddress> sources;
     auto proxy = static_cast<FlowInputEventProxy *>(stream.add_event_proxy(visor::Configurable()));
     proxy->sflow_signal.connect([&](const SFSample &sample, std::size_t) {
-        std::lock_guard lock(samples_mutex);
-        sources.push_back(sample.sourceIP);
+        {
+            std::lock_guard lock(samples_mutex);
+            sources.push_back(sample.sourceIP);
+        }
+        arrived.notify_all();
     });
-    REQUIRE_NOTHROW(stream.start());
 
     // a valid sFlow datagram, from ::1 to [::1]:6347: the listener only gets it if it is bound there
-    auto reader = std::unique_ptr<pcpp::IFileReaderDevice>(pcpp::IFileReaderDevice::getReader("tests/fixtures/sflow_keyed.pcap"));
-    REQUIRE(reader->open());
-    pcpp::RawPacket raw;
-    REQUIRE(reader->getNextPacket(raw));
-    pcpp::Packet packet(&raw);
-    auto udp = packet.getLayerOfType<pcpp::UdpLayer>();
-    REQUIRE(udp);
+    auto datagram = first_udp_payload("tests/fixtures/sflow_keyed.pcap");
     sockaddr_in6 to{};
     REQUIRE(uv_ip6_addr("::1", static_cast<int>(port), &to) == 0);
-    auto client = uvw::loop::get_default()->resource<uvw::udp_handle>();
-    auto len = static_cast<unsigned int>(udp->getLayerPayloadSize());
-    CHECK(client->try_send(reinterpret_cast<const sockaddr &>(to), reinterpret_cast<char *>(udp->getLayerPayload()), len) == static_cast<int>(len));
-    client->close();
+    REQUIRE_NOTHROW(stream.start());
+    send_datagram(datagram, reinterpret_cast<const sockaddr &>(to));
 
-    uv_sleep(100);
+    CHECK(wait_for_sample(samples_mutex, arrived, sources));
     CHECK_NOTHROW(stream.stop());
 
     nlohmann::json j;
@@ -201,6 +255,98 @@ TEST_CASE("flow udp socket on an IPv6 address", "[flow][udp][ipv6]")
     in6_addr loopback{};
     REQUIRE(uv_inet_pton(AF_INET6, "::1", &loopback) == 0);
     CHECK(std::memcmp(&sources[0].address.ip_v6.addr, &loopback, 16) == 0);
+}
+
+TEST_CASE("netflow udp socket on :: names an IPv4 exporter by its IPv4 address", "[flow][netflow][udp][ipv6]")
+{
+    if (auto reason = not_dual_stack()) {
+        SKIP(reason);
+    }
+    uint64_t port = 6349;
+
+    FlowInputStream stream{"netflow-dual-stack"};
+    stream.config_set("flow_type", "netflow");
+    stream.config_set("bind", "::");
+    stream.config_set("port", port);
+
+    std::mutex samples_mutex;
+    std::condition_variable arrived;
+    std::vector<std::string> senders;
+    std::vector<std::string> exporters;
+    auto proxy = static_cast<FlowInputEventProxy *>(stream.add_event_proxy(visor::Configurable()));
+    proxy->netflow_signal.connect([&](const std::string &sender, const NFSample &sample, std::size_t) {
+        {
+            std::lock_guard lock(samples_mutex);
+            senders.push_back(sender);
+            exporters.push_back(sample.exporter_ip);
+        }
+        arrived.notify_all();
+    });
+
+    // a valid NetFlow v5 datagram from 127.0.0.1, which a dual-stack socket receives from ::ffff:127.0.0.1
+    auto datagram = first_udp_payload("tests/fixtures/nf5.pcap");
+    sockaddr_in to{};
+    REQUIRE(uv_ip4_addr("127.0.0.1", static_cast<int>(port), &to) == 0);
+    REQUIRE_NOTHROW(stream.start());
+    send_datagram(datagram, reinterpret_cast<const sockaddr &>(to));
+
+    CHECK(wait_for_sample(samples_mutex, arrived, senders));
+    CHECK_NOTHROW(stream.stop());
+
+    nlohmann::json j;
+    stream.info_json(j);
+    CHECK(j["flow"]["packet_errors"] == 0);
+
+    // device_map and only_device_interfaces name IPv4 exporters by their IPv4 address
+    std::lock_guard lock(samples_mutex);
+    REQUIRE(senders.size() == 1);
+    CHECK(senders[0] == "127.0.0.1");
+    CHECK(exporters[0] == "127.0.0.1");
+}
+
+TEST_CASE("sflow udp socket on :: keeps an IPv4 sender as IPv4", "[flow][sflow][udp][ipv6]")
+{
+    if (auto reason = not_dual_stack()) {
+        SKIP(reason);
+    }
+    uint64_t port = 6350;
+
+    FlowInputStream stream{"sflow-dual-stack"};
+    stream.config_set("flow_type", "sflow");
+    stream.config_set("bind", "::");
+    stream.config_set("port", port);
+
+    std::mutex samples_mutex;
+    std::condition_variable arrived;
+    std::vector<SFLAddress> sources;
+    auto proxy = static_cast<FlowInputEventProxy *>(stream.add_event_proxy(visor::Configurable()));
+    proxy->sflow_signal.connect([&](const SFSample &sample, std::size_t) {
+        {
+            std::lock_guard lock(samples_mutex);
+            sources.push_back(sample.sourceIP);
+        }
+        arrived.notify_all();
+    });
+
+    auto datagram = first_udp_payload("tests/fixtures/sflow_keyed.pcap");
+    sockaddr_in to{};
+    REQUIRE(uv_ip4_addr("127.0.0.1", static_cast<int>(port), &to) == 0);
+    REQUIRE_NOTHROW(stream.start());
+    send_datagram(datagram, reinterpret_cast<const sockaddr &>(to));
+
+    CHECK(wait_for_sample(samples_mutex, arrived, sources));
+    CHECK_NOTHROW(stream.stop());
+
+    nlohmann::json j;
+    stream.info_json(j);
+    CHECK(j["flow"]["packet_errors"] == 0);
+
+    std::lock_guard lock(samples_mutex);
+    REQUIRE(sources.size() == 1);
+    CHECK(sources[0].type == SFLADDRESSTYPE_IP_V4);
+    in_addr loopback{};
+    REQUIRE(uv_inet_pton(AF_INET, "127.0.0.1", &loopback) == 0);
+    CHECK(std::memcmp(&sources[0].address.ip_v4.addr, &loopback, 4) == 0);
 }
 
 TEST_CASE("flow udp socket bind must be an address", "[flow][udp]")

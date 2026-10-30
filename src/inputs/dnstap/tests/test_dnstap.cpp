@@ -7,7 +7,9 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <thread>
+#include <vector>
 #ifndef _WIN32
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -72,6 +74,19 @@ int connect_unix(const std::string &path)
     }
     return fd;
 }
+
+std::basic_string<uint8_t> control_frame(fstrm_control_type type, const std::vector<std::string> &content_types)
+{
+    control_ptr c{fstrm_control_init()};
+    REQUIRE(fstrm_control_set_type(c.get(), type) == fstrm_res_success);
+    for (const auto &content_type : content_types) {
+        REQUIRE(fstrm_control_add_field_content_type(c.get(), reinterpret_cast<const uint8_t *>(content_type.data()), content_type.size()) == fstrm_res_success);
+    }
+    uint8_t frame[FSTRM_CONTROL_FRAME_LENGTH_MAX];
+    size_t len = sizeof(frame);
+    REQUIRE(fstrm_control_encode(c.get(), frame, &len, FSTRM_CONTROL_FLAG_WITH_HEADER) == fstrm_res_success);
+    return {frame, len};
+}
 }
 #endif
 
@@ -89,6 +104,14 @@ static uint8_t bi_frame_2_len12[] = {
     0x00, 0x00, 0x00, 0x04, // length 4 bytes
     0x00, 0x00, 0x00, 0x02  // START
 };
+
+static uint8_t bi_frame_accept_len42[] = {
+    0x00, 0x00, 0x00, 0x00, // escape: expect control frame
+    0x00, 0x00, 0x00, 0x22, // control frame length 0x22 == 34 bytes
+    // control frame 34 bytes. ACCEPT and content type
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x16, 0x70, 0x72, 0x6f, 0x74,
+    0x6f, 0x62, 0x75, 0x66, 0x3a, 0x64, 0x6e, 0x73, 0x74, 0x61, 0x70, 0x2e, 0x44, 0x6e, 0x73, 0x74,
+    0x61, 0x70};
 
 static uint8_t bi_frame_2_ready_len12[] = {
     0x00, 0x00, 0x00, 0x00, // escape
@@ -126,10 +149,14 @@ static uint8_t bi_frame_3_len400[] = {
 struct MockClient {
     std::unique_ptr<char[]> data;
     unsigned int len;
-    void write(std::unique_ptr<char[]> d, unsigned int l)
+    int writes{0};
+    int write_rc{0};
+    int write(std::unique_ptr<char[]> d, unsigned int l)
     {
         data = std::move(d);
         len = l;
+        writes++;
+        return write_rc;
     }
 };
 
@@ -156,7 +183,8 @@ TEST_CASE("bi-directional frame stream process", "[dnstap][frmstrm]")
     CHECK_NOTHROW(session.receive_socket_data(bi_frame_1_len42, 42));
     CHECK(session.state() == FrameSessionData<MockClient>::FrameState::Ready);
     CHECK(session.is_bidir() == true);
-    CHECK(std::memcmp(client->data.get(), bi_frame_2_ready_len12, 12) == 0);
+    REQUIRE(client->len == 42);
+    CHECK(std::memcmp(client->data.get(), bi_frame_accept_len42, 42) == 0);
 
     CHECK_NOTHROW(session.receive_socket_data(bi_frame_2_len12, 12));
     CHECK(session.state() == FrameSessionData<MockClient>::FrameState::Running);
@@ -184,8 +212,43 @@ TEST_CASE("bi-directional frame stream split across reads at every byte", "[dnst
         REQUIRE_NOTHROW(session.receive_socket_data(&byte, 1));
     }
     CHECK(session.state() == FrameSessionData<MockClient>::FrameState::Running);
-    CHECK(std::memcmp(client->data.get(), bi_frame_2_ready_len12, 12) == 0);
+    REQUIRE(client->len == 42);
+    CHECK(std::memcmp(client->data.get(), bi_frame_accept_len42, 42) == 0);
     CHECK(df_count == 4);
+}
+
+TEST_CASE("bi-directional frame stream split into two reads anywhere", "[dnstap][frmstrm]")
+{
+#ifdef _WIN32
+    return;
+#endif
+    // whole frames and part of the next in one read: the part waits for the rest in the next read
+    std::basic_string<uint8_t> stream;
+    stream.append(bi_frame_1_len42, sizeof(bi_frame_1_len42));
+    stream.append(bi_frame_2_len12, sizeof(bi_frame_2_len12));
+    stream.append(bi_frame_3_len400, sizeof(bi_frame_3_len400));
+
+    for (std::size_t split = 0; split <= stream.size(); ++split) {
+        CAPTURE(split);
+        std::vector<std::basic_string<uint8_t>> frames;
+        auto client = std::make_shared<MockClient>();
+        FrameSessionData<MockClient> session(client, CONTENT_TYPE, [&frames](const void *data, std::size_t len) {
+            frames.emplace_back(static_cast<const uint8_t *>(data), len);
+        });
+        REQUIRE_NOTHROW(session.receive_socket_data(stream.data(), split));
+        REQUIRE_NOTHROW(session.receive_socket_data(stream.data() + split, stream.size() - split));
+        CHECK(session.state() == FrameSessionData<MockClient>::FrameState::Running);
+        CHECK(client->writes == 1);
+        // the four data frames of bi_frame_3_len400, each as it was sent
+        REQUIRE(frames.size() == 4);
+        std::size_t offset = sizeof(bi_frame_1_len42) + sizeof(bi_frame_2_len12);
+        for (const auto &frame : frames) {
+            REQUIRE(frame.size() + 4 <= stream.size() - offset);
+            CHECK(frame == stream.substr(offset + 4, frame.size()));
+            offset += 4 + frame.size();
+        }
+        CHECK(offset == stream.size());
+    }
 }
 
 // unidirectional: START with dnstap content-type
@@ -214,6 +277,148 @@ TEST_CASE("uni-directional frame stream starts in memory a bi-directional sessio
     CHECK(session->state() == Session::FrameState::Running);
     session->~Session();
 }
+
+#ifndef _WIN32
+static uint8_t frame_stop_len12[] = {
+    0x00, 0x00, 0x00, 0x00, // escape
+    0x00, 0x00, 0x00, 0x04, // length 4 bytes
+    0x00, 0x00, 0x00, 0x03  // STOP
+};
+
+static uint8_t frame_finish_len12[] = {
+    0x00, 0x00, 0x00, 0x00, // escape
+    0x00, 0x00, 0x00, 0x04, // length 4 bytes
+    0x00, 0x00, 0x00, 0x05  // FINISH
+};
+
+TEST_CASE("bi-directional frame stream accepts the dnstap content type a READY offers", "[dnstap][frmstrm]")
+{
+    // some writers close the connection unless ACCEPT names their content type
+    auto client = std::make_shared<MockClient>();
+    FrameSessionData<MockClient> session(client, CONTENT_TYPE, [](const void *, std::size_t) {});
+    std::basic_string<uint8_t> ready;
+
+    SECTION("among other content types")
+    {
+        ready = control_frame(FSTRM_CONTROL_READY, {"protobuf:example.Other", CONTENT_TYPE});
+    }
+    SECTION("no content type at all")
+    {
+        ready = control_frame(FSTRM_CONTROL_READY, {});
+    }
+
+    CHECK_NOTHROW(session.receive_socket_data(ready.data(), ready.size()));
+    CHECK(session.state() == FrameSessionData<MockClient>::FrameState::Ready);
+    REQUIRE(client->writes == 1);
+    REQUIRE(client->len == 42);
+    CHECK(std::memcmp(client->data.get(), bi_frame_accept_len42, 42) == 0);
+}
+
+TEST_CASE("bi-directional frame stream refuses a READY without the dnstap content type", "[dnstap][frmstrm]")
+{
+    auto client = std::make_shared<MockClient>();
+    FrameSessionData<MockClient> session(client, CONTENT_TYPE, [](const void *, std::size_t) {});
+    auto ready = control_frame(FSTRM_CONTROL_READY, {"protobuf:example.Other"});
+
+    CHECK_THROWS_WITH(session.receive_socket_data(ready.data(), ready.size()), "content type mismatch");
+    CHECK(client->writes == 0);
+}
+
+TEST_CASE("bi-directional frame stream answers STOP with FINISH", "[dnstap][frmstrm]")
+{
+    // the writer sends STOP and waits for FINISH before it closes the connection
+    auto client = std::make_shared<MockClient>();
+    FrameSessionData<MockClient> session(client, CONTENT_TYPE, [](const void *, std::size_t) {});
+    REQUIRE_NOTHROW(session.receive_socket_data(bi_frame_1_len42, 42));
+    REQUIRE_NOTHROW(session.receive_socket_data(bi_frame_2_len12, 12));
+    REQUIRE_NOTHROW(session.receive_socket_data(bi_frame_3_len400, 400));
+    REQUIRE(client->writes == 1);
+
+    CHECK_NOTHROW(session.receive_socket_data(frame_stop_len12, 12));
+    CHECK(session.state() == FrameSessionData<MockClient>::FrameState::Finishing);
+    CHECK(client->writes == 2);
+    CHECK(client->len == 12);
+    CHECK(std::memcmp(client->data.get(), frame_finish_len12, 12) == 0);
+}
+
+TEST_CASE("uni-directional frame stream ends on STOP without a reply", "[dnstap][frmstrm]")
+{
+    auto client = std::make_shared<MockClient>();
+    FrameSessionData<MockClient> session(client, CONTENT_TYPE, [](const void *, std::size_t) {});
+    REQUIRE_NOTHROW(session.receive_socket_data(uni_frame_start_len42, 42));
+
+    CHECK_NOTHROW(session.receive_socket_data(frame_stop_len12, 12));
+    CHECK(session.state() == FrameSessionData<MockClient>::FrameState::Finishing);
+    CHECK(client->writes == 0);
+}
+
+TEST_CASE("frame stream refuses frames after STOP", "[dnstap][frmstrm]")
+{
+    auto client = std::make_shared<MockClient>();
+    FrameSessionData<MockClient> session(client, CONTENT_TYPE, [](const void *, std::size_t) {});
+    REQUIRE_NOTHROW(session.receive_socket_data(bi_frame_1_len42, 42));
+    REQUIRE_NOTHROW(session.receive_socket_data(bi_frame_2_len12, 12));
+    REQUIRE_NOTHROW(session.receive_socket_data(frame_stop_len12, 12));
+
+    SECTION("a data frame")
+    {
+        CHECK_THROWS_WITH(session.receive_socket_data(bi_frame_3_len400, 400), "received a frame after STOP, aborting");
+    }
+    SECTION("a second STOP")
+    {
+        CHECK_THROWS_WITH(session.receive_socket_data(frame_stop_len12, 12), "received a frame after STOP, aborting");
+    }
+    SECTION("an ACCEPT")
+    {
+        CHECK_THROWS_WITH(session.receive_socket_data(bi_frame_2_ready_len12, 12), "received a frame after STOP, aborting");
+    }
+    SECTION("a FINISH")
+    {
+        CHECK_THROWS_WITH(session.receive_socket_data(frame_finish_len12, 12), "received a frame after STOP, aborting");
+    }
+}
+
+TEST_CASE("frame stream reports control frames it cannot send", "[dnstap][frmstrm]")
+{
+    auto client = std::make_shared<MockClient>();
+    FrameSessionData<MockClient> session(client, CONTENT_TYPE, [](const void *, std::size_t) {});
+
+    SECTION("ACCEPT")
+    {
+        client->write_rc = UV_EPIPE;
+        CHECK_THROWS_WITH(session.receive_socket_data(bi_frame_1_len42, 42), std::string("unable to send ACCEPT: ") + uv_strerror(UV_EPIPE));
+    }
+    SECTION("FINISH")
+    {
+        REQUIRE_NOTHROW(session.receive_socket_data(bi_frame_1_len42, 42));
+        REQUIRE_NOTHROW(session.receive_socket_data(bi_frame_2_len12, 12));
+        client->write_rc = UV_EPIPE;
+        CHECK_THROWS_WITH(session.receive_socket_data(frame_stop_len12, 12), std::string("unable to send FINISH: ") + uv_strerror(UV_EPIPE));
+    }
+}
+
+TEST_CASE("frame stream refuses control frames out of order or of another content type", "[dnstap][frmstrm]")
+{
+    auto client = std::make_shared<MockClient>();
+    FrameSessionData<MockClient> session(client, CONTENT_TYPE, [](const void *, std::size_t) {});
+
+    SECTION("START twice")
+    {
+        REQUIRE_NOTHROW(session.receive_socket_data(uni_frame_start_len42, 42));
+        CHECK_THROWS_WITH(session.receive_socket_data(uni_frame_start_len42, 42), "received START frame out of order, aborting");
+    }
+    SECTION("READY after START")
+    {
+        REQUIRE_NOTHROW(session.receive_socket_data(uni_frame_start_len42, 42));
+        CHECK_THROWS_WITH(session.receive_socket_data(bi_frame_1_len42, 42), "received READY frame but already started, aborting");
+    }
+    SECTION("another content type")
+    {
+        auto start = control_frame(FSTRM_CONTROL_START, {"protobuf:example.Other"});
+        CHECK_THROWS_WITH(session.receive_socket_data(start.data(), start.size()), "content type mismatch");
+    }
+}
+#endif
 
 TEST_CASE("dnstap file", "[dnstap][file]")
 {
@@ -299,6 +504,77 @@ TEST_CASE("dnstap tcp clients that disconnect are released", "[dnstap][tcp]")
     ::close(staying);
     CHECK(wait_for_clients(stream, 0) == 0);
     CHECK_NOTHROW(stream.stop());
+}
+
+TEST_CASE("dnstap tcp server lets a bi-directional fstrm writer close", "[dnstap][tcp]")
+{
+    DnstapInputStream stream{"dnstap-stop"};
+    stream.config_set("tcp", "127.0.0.1:15357");
+    REQUIRE_NOTHROW(stream.start());
+
+    // libfstrm's socket writers are bi-directional: closing sends STOP, then blocks reading until FINISH arrives or the connection closes
+    auto writer_session = std::async(std::launch::async, [] {
+        auto wopt = fstrm_writer_options_init();
+        fstrm_writer_options_add_content_type(wopt, CONTENT_TYPE.data(), CONTENT_TYPE.size());
+        auto topt = fstrm_tcp_writer_options_init();
+        fstrm_tcp_writer_options_set_socket_address(topt, "127.0.0.1");
+        fstrm_tcp_writer_options_set_socket_port(topt, "15357");
+        auto writer = fstrm_tcp_writer_init(topt, wopt);
+        fstrm_tcp_writer_options_destroy(&topt);
+        fstrm_writer_options_destroy(&wopt);
+
+        auto res = fstrm_writer_open(writer);
+        if (res == fstrm_res_success) {
+            // the first data frame of bi_frame_3_len400: a 0x45 byte dnstap message after its length
+            res = fstrm_writer_write(writer, bi_frame_3_len400 + 4, 0x45);
+        }
+        if (res == fstrm_res_success) {
+            res = fstrm_writer_close(writer);
+        }
+        fstrm_writer_destroy(&writer);
+        return res;
+    });
+
+    // CHECK rather than REQUIRE while the server runs: stopping it closes the connection, which releases a writer still waiting
+    CHECK(writer_session.wait_for(2s) == std::future_status::ready);
+    // the writer closes the connection once FINISH arrives, and the server then releases the client
+    CHECK(wait_for_clients(stream, 0) == 0);
+    CHECK_NOTHROW(stream.stop());
+    CHECK(writer_session.get() == fstrm_res_success);
+}
+
+TEST_CASE("dnstap unix server lets libfstrm's I/O thread shut down", "[dnstap][unix]")
+{
+    const std::string path = "/tmp/dnstap-test-stop.sock";
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+    DnstapInputStream stream{"dnstap-stop-unix"};
+    stream.config_set("socket", path);
+    REQUIRE_NOTHROW(stream.start());
+
+    auto wopt = fstrm_writer_options_init();
+    fstrm_writer_options_add_content_type(wopt, CONTENT_TYPE.data(), CONTENT_TYPE.size());
+    auto uwopt = fstrm_unix_writer_options_init();
+    fstrm_unix_writer_options_set_socket_path(uwopt, path.c_str());
+    auto writer = fstrm_unix_writer_init(uwopt, wopt);
+    fstrm_unix_writer_options_destroy(&uwopt);
+    fstrm_writer_options_destroy(&wopt);
+
+    // CHECK rather than REQUIRE while the server runs: stopping it closes the connection, which releases a thread still waiting
+    // the I/O thread opens the writer as it starts
+    auto iothr = fstrm_iothr_init(nullptr, &writer);
+    // static data, so there is nothing to free
+    CHECK(fstrm_iothr_submit(iothr, fstrm_iothr_get_input_queue(iothr), bi_frame_3_len400 + 4, 0x45, nullptr, nullptr) == fstrm_res_success);
+    CHECK(wait_for_clients(stream, 1) == 1);
+
+    // fstrm_iothr_destroy() joins the thread once it has closed the writer, which waits for FINISH. The thread can miss
+    // the shutdown signal and sleep out its 1 s flush timeout first, hence the longer wait
+    auto destroyed = std::async(std::launch::async, [&iothr] { fstrm_iothr_destroy(&iothr); });
+    CHECK(destroyed.wait_for(5s) == std::future_status::ready);
+    CHECK(wait_for_clients(stream, 0) == 0);
+    CHECK_NOTHROW(stream.stop());
+    destroyed.get();
+    std::filesystem::remove(path, ec);
 }
 
 TEST_CASE("dnstap unix socket another server listens on is refused", "[dnstap][unix]")
