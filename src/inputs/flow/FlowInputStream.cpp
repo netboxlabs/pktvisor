@@ -27,6 +27,19 @@
 
 namespace visor::input::flow {
 
+std::string unmapped_ip(const std::string &ip)
+{
+    static const uint8_t v4_mapped_prefix[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
+    uint8_t addr6[16];
+    char addr4[INET_ADDRSTRLEN];
+    if (uv_inet_pton(AF_INET6, ip.c_str(), addr6) == 0
+        && std::memcmp(addr6, v4_mapped_prefix, sizeof(v4_mapped_prefix)) == 0
+        && uv_inet_ntop(AF_INET, addr6 + sizeof(v4_mapped_prefix), addr4, sizeof(addr4)) == 0) {
+        return addr4;
+    }
+    return ip;
+}
+
 FlowInputStream::FlowInputStream(const std::string &name)
     : visor::InputStream(name)
     , _flow_type(Type::SFLOW)
@@ -211,24 +224,17 @@ void FlowInputStream::_create_frame_stream_udp_socket()
             SFSample sample;
             sample.rawSample = reinterpret_cast<uint8_t *>(event.data.get());
             sample.rawSampleLen = event.length;
-            // the sender by its own family: an IPv6 bind receives from IPv6 peers, and a dual-stack one sees
-            // IPv4 peers as IPv4-mapped addresses, which are kept as IPv4
+            // the sender by its own family: an IPv6 bind receives from IPv6 peers
             sample.sourceIP = SFLAddress{};
+            auto sender = unmapped_ip(event.sender.ip);
             in_addr peer4{};
             in6_addr peer6{};
-            static const uint8_t v4_mapped_prefix[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
-            if (inet_pton(AF_INET, event.sender.ip.c_str(), &peer4) == 1) {
+            if (inet_pton(AF_INET, sender.c_str(), &peer4) == 1) {
                 sample.sourceIP.type = SFLADDRESSTYPE_IP_V4;
                 std::memcpy(&sample.sourceIP.address.ip_v4.addr, &peer4, 4);
-            } else if (inet_pton(AF_INET6, event.sender.ip.c_str(), &peer6) == 1) {
-                auto bytes = reinterpret_cast<const uint8_t *>(&peer6);
-                if (std::memcmp(bytes, v4_mapped_prefix, sizeof(v4_mapped_prefix)) == 0) {
-                    sample.sourceIP.type = SFLADDRESSTYPE_IP_V4;
-                    std::memcpy(&sample.sourceIP.address.ip_v4.addr, bytes + 12, 4);
-                } else {
-                    sample.sourceIP.type = SFLADDRESSTYPE_IP_V6;
-                    std::memcpy(&sample.sourceIP.address.ip_v6.addr, bytes, 16);
-                }
+            } else if (inet_pton(AF_INET6, sender.c_str(), &peer6) == 1) {
+                sample.sourceIP.type = SFLADDRESSTYPE_IP_V6;
+                std::memcpy(&sample.sourceIP.address.ip_v6.addr, &peer6, 16);
             }
             try {
                 read_sflow_datagram(&sample);
@@ -251,13 +257,14 @@ void FlowInputStream::_create_frame_stream_udp_socket()
             // taps in the same process (or two exporters behind the same
             // NAT'd address) can't collide in the process-global template
             // maps.
-            sample.exporter_ip = event.sender.ip;
+            auto sender = unmapped_ip(event.sender.ip);
+            sample.exporter_ip = sender;
             sample.listener_id = _name;
             sample.exporter_port = static_cast<uint16_t>(event.sender.port);
             if (process_netflow_packet(&sample)) {
                 std::shared_lock lock(_input_mutex);
                 for (auto &proxy : _event_proxies) {
-                    static_cast<FlowInputEventProxy *>(proxy.get())->netflow_cb(event.sender.ip, sample, event.length);
+                    static_cast<FlowInputEventProxy *>(proxy.get())->netflow_cb(sender, sample, event.length);
                 }
             } else {
                 ++_error_count;

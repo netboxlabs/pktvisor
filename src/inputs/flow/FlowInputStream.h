@@ -29,6 +29,10 @@ class timer_handle;
 
 namespace visor::input::flow {
 
+// a socket bound to :: can also receive from IPv4 peers, as IPv4-mapped addresses (::ffff:192.0.2.1). Gives such an
+// address as IPv4 (192.0.2.1) and any other unchanged, so a device has one name however it reached the listener
+std::string unmapped_ip(const std::string &ip);
+
 enum class Type {
     SFLOW,
     NETFLOW,

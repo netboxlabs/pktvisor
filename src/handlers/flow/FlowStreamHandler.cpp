@@ -139,7 +139,11 @@ void FlowStreamHandler::start()
                     enrich_device.interfaces[if_index] = {interface_map->config_get<std::string>("name"), std::string()};
                 }
             }
-            enrich_data[device] = enrich_device;
+            // keyed as devices are named, so a key written in IPv4-mapped form still matches its IPv4 device. A key
+            // in IPv4 form for the same device takes precedence
+            if (auto key = visor::input::flow::unmapped_ip(device); key == device || !devices->config_exists(key)) {
+                enrich_data[key] = enrich_device;
+            }
         }
     }
 
@@ -220,7 +224,12 @@ void FlowStreamHandler::start()
             if (pcpp::IPv4Address::isValidIPv4Address(device)) {
                 _device_interfaces_list[device] = _parse_interfaces(devices->config_get<StringList>(device));
             } else if (pcpp::IPv6Address::isValidIPv6Address(device)) {
-                _device_interfaces_list[device] = _parse_interfaces(devices->config_get<StringList>(device));
+                // keyed as devices are named, so a key written in IPv4-mapped form still matches its IPv4 device. A
+                // key in IPv4 form for the same device takes precedence
+                auto interfaces = _parse_interfaces(devices->config_get<StringList>(device));
+                if (auto key = visor::input::flow::unmapped_ip(device); key == device || !devices->config_exists(key)) {
+                    _device_interfaces_list[key] = std::move(interfaces);
+                }
             } else {
                 throw StreamHandlerException(fmt::format("FlowHandler: 'only_device_interfaces' filter has an invalid device IP: {}", device));
             }
@@ -308,7 +317,7 @@ void FlowStreamHandler::process_sflow_cb(const SFSample &payload, [[maybe_unused
     if (payload.agent_addr.type == SFLADDRESSTYPE_IP_V4) {
         agentId = pcpp::IPv4Address(payload.agent_addr.address.ip_v4.addr).toString();
     } else if (payload.agent_addr.type == SFLADDRESSTYPE_IP_V6) {
-        agentId = pcpp::IPv6Address(payload.agent_addr.address.ip_v6.addr).toString();
+        agentId = visor::input::flow::unmapped_ip(pcpp::IPv6Address(payload.agent_addr.address.ip_v6.addr).toString());
     }
 
     FlowPacket packet(agentId, stamp);
