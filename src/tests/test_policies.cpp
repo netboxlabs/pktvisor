@@ -1929,6 +1929,20 @@ TEST_CASE("Multi-policy Prometheus shared serializer", "[policies][prometheus][m
     }
 }
 
+// the concurrency tests log several lines per iteration; keeps their output to warnings
+struct QuietLogger {
+    std::shared_ptr<spdlog::logger> logger = spdlog::get("visor");
+    spdlog::level::level_enum level = logger->level();
+    QuietLogger()
+    {
+        logger->set_level(spdlog::level::warn);
+    }
+    ~QuietLogger()
+    {
+        logger->set_level(level);
+    }
+};
+
 TEST_CASE("Loading and removing policies concurrently does not deadlock", "[policies][concurrency]")
 {
     CoreRegistry registry;
@@ -1943,19 +1957,7 @@ visor:
         iface: eth0
 )"));
 
-    // every iteration logs several lines; keep this test's output to warnings
-    struct QuietLogger {
-        std::shared_ptr<spdlog::logger> logger = spdlog::get("visor");
-        spdlog::level::level_enum level = logger->level();
-        QuietLogger()
-        {
-            logger->set_level(spdlog::level::warn);
-        }
-        ~QuietLogger()
-        {
-            logger->set_level(level);
-        }
-    } quiet;
+    QuietLogger quiet;
 
     // every policy gets an input of its own, so each load creates an input and its resources policy and each
     // removal tears both down: load and remove_policy then take the input and policy maps on every iteration,
@@ -2006,4 +2008,158 @@ visor:
     }
     auto [inputs, lock] = registry.input_manager()->module_get_all_locked();
     CHECK(inputs.empty());
+}
+
+TEST_CASE("Removing a tap detaches it from every policy", "[policies][taps]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(R"(
+visor:
+  taps:
+    anycast:
+      input_type: mock
+      config:
+        iface: eth0
+)"));
+    for (auto name : {"view_a", "view_b"}) {
+        REQUIRE_NOTHROW(registry.policy_manager()->load_from_str(fmt::format(R"(
+visor:
+  policies:
+    {0}:
+      kind: collection
+      input:
+        tap: anycast
+        input_type: mock
+      handlers:
+        modules:
+          {0}_net:
+            type: net
+)",
+            name)));
+    }
+
+    registry.policy_manager()->remove_tap("anycast");
+
+    CHECK_FALSE(registry.tap_manager()->module_exists("anycast"));
+    {
+        auto [policies, lock] = registry.policy_manager()->module_get_all_locked();
+        for (auto &[name, policy] : policies) {
+            CHECK(policy->taps().empty());
+        }
+    }
+    REQUIRE_THROWS_WITH(registry.policy_manager()->remove_tap("anycast"), "module name 'anycast' does not exist");
+}
+
+TEST_CASE("Removing taps concurrently does not deadlock", "[policies][taps][concurrency]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+
+    QuietLogger quiet;
+
+    // each removal takes the policy and tap maps while the other thread loads or removes its own taps
+    auto stop_at = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    auto churn = [&registry, stop_at](const std::string &prefix) {
+        for (int i = 0; i < 5000 && std::chrono::steady_clock::now() < stop_at; ++i) {
+            auto name = fmt::format("{}_{}", prefix, i);
+            registry.tap_manager()->load_from_str(fmt::format(R"(
+visor:
+  taps:
+    {}:
+      input_type: mock
+)",
+                name));
+            registry.policy_manager()->remove_tap(name);
+        }
+    };
+
+    auto a = std::async(std::launch::async, churn, std::string("a"));
+    auto b = std::async(std::launch::async, churn, std::string("b"));
+    // well past the time box, so it only fires on a hang
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
+    if (a.wait_until(deadline) == std::future_status::timeout || b.wait_until(deadline) == std::future_status::timeout) {
+        // the stuck threads can never be joined, so fail loudly instead of hanging the suite
+        std::fprintf(stderr, "concurrent tap removals did not finish within 180 s, most likely a deadlock\n");
+        std::abort();
+    }
+    REQUIRE_NOTHROW(a.get());
+    REQUIRE_NOTHROW(b.get());
+    auto [taps, lock] = registry.tap_manager()->module_get_all_locked();
+    CHECK(taps.empty());
+}
+
+// once armed, holds the next policy load at its first registration, after it has added its taps to the policy
+class GatedPolicyManager : public PolicyManager
+{
+public:
+    using PolicyManager::PolicyManager;
+
+    bool armed{false};
+    std::promise<void> reached;
+    std::shared_future<void> release;
+
+    void module_add(std::unique_ptr<Policy> &&m) override
+    {
+        if (armed) {
+            armed = false;
+            reached.set_value();
+            release.wait();
+        }
+        PolicyManager::module_add(std::move(m));
+    }
+};
+
+TEST_CASE("Removing a tap waits for a policy load that holds it", "[policies][taps][concurrency]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(R"(
+visor:
+  taps:
+    anycast:
+      input_type: mock
+      config:
+        iface: eth0
+)"));
+
+    GatedPolicyManager policies(&registry);
+    std::promise<void> release;
+    policies.release = release.get_future().share();
+    policies.armed = true;
+    auto reached = policies.reached.get_future();
+
+    auto load = std::async(std::launch::async, [&policies] {
+        policies.load_from_str(R"(
+visor:
+  policies:
+    default_view:
+      kind: collection
+      input:
+        tap: anycast
+        input_type: mock
+      handlers:
+        modules:
+          default_net:
+            type: net
+)");
+    });
+    REQUIRE(reached.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+
+    // the policy holds the tap but is not registered yet, so a removal now would leave it holding a freed tap
+    auto remove = std::async(std::launch::async, [&policies] { policies.remove_tap("anycast"); });
+    CHECK(remove.wait_for(std::chrono::milliseconds(200)) == std::future_status::timeout);
+    release.set_value();
+    REQUIRE_NOTHROW(load.get());
+    REQUIRE_NOTHROW(remove.get());
+
+    CHECK_FALSE(registry.tap_manager()->module_exists("anycast"));
+    {
+        auto [policy, lock] = policies.module_get_locked("default_view");
+        CHECK(policy->taps().empty());
+    }
+    policies.remove_policy("default_view");
 }

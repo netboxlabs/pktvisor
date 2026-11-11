@@ -267,16 +267,7 @@ void CoreServer::_setup_routes(const PrometheusConfig &prom_config)
             return;
         }
         try {
-            auto [tap, lock] = _registry->tap_manager()->module_get_locked(name);
-            auto [policy_modules, hm_lock] = _registry->policy_manager()->module_get_all_locked();
-            for (auto &[name, mod] : policy_modules) {
-                auto tmod = dynamic_cast<Policy *>(mod.get());
-                if (tmod) {
-                    tmod->remove_tap(tap);
-                }
-            }
-            lock.unlock();
-            _registry->tap_manager()->module_remove(name);
+            _registry->policy_manager()->remove_tap(name);
             res.status = 200;
             res.set_content(j.dump(), "text/json");
         } catch (const std::exception &e) {

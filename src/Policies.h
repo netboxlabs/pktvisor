@@ -91,6 +91,11 @@ public:
         _taps.erase(std::remove(_taps.begin(), _taps.end(), tap), _taps.end());
     }
 
+    const std::vector<Tap *> &taps() const
+    {
+        return _taps;
+    }
+
     void add_input_stream(InputStream *input_stream)
     {
         _input_streams.push_back(input_stream);
@@ -156,6 +161,8 @@ public:
     std::vector<Policy *> load(const YAML::Node &tap_yaml, bool single = false);
     std::pair<std::unique_ptr<Policy>, std::string> create_resources_policy(InputStream *input, const Config &window_config);
     void remove_policy(const std::string &name);
+    // detaches the tap from every policy and removes it, after any policy load in progress
+    void remove_tap(const std::string &name);
     // Adds one scope per policy with a window to push, and returns whether any
     // policy had one, so the exporter sends nothing when none has.
     bool opentelemetry_metrics(metrics::v1::ResourceMetrics &resource);

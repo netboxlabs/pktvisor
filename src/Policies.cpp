@@ -331,6 +331,24 @@ void PolicyManager::remove_policy(const std::string &name)
     _map.erase(name);
 }
 
+void PolicyManager::remove_tap(const std::string &name)
+{
+    // a load adds its taps to a policy it registers only at the end, out of reach of the detach below
+    std::unique_lock load_lock(_load_mutex);
+    // the policy map, then the tap map, held until the tap is gone: two removals cannot deadlock, and no reader of
+    // either map sees a policy holding a removed tap
+    std::unique_lock policies_lock(_map_mutex);
+    auto [taps, taps_lock] = _registry->tap_manager()->module_get_all_locked();
+    auto tap = taps.find(name);
+    if (tap == taps.end()) {
+        throw ModuleException(name, fmt::format("module name '{}' does not exist", name));
+    }
+    for (auto &[policy_name, policy] : _map) {
+        policy->remove_tap(tap->second.get());
+    }
+    taps.erase(tap);
+}
+
 void PolicyManager::_remove_input_if_unused(const std::string &input_name, InputStream *input, const std::string &leaving_policy)
 {
     if (input->policies_count() == 1) {
