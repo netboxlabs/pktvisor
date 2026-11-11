@@ -270,6 +270,11 @@ void CoreServer::_setup_routes(const PrometheusConfig &prom_config)
             _registry->policy_manager()->remove_tap(name);
             res.status = 200;
             res.set_content(j.dump(), "text/json");
+        } catch (const ModuleException &) {
+            // removed by a concurrent request since the check above
+            res.status = 404;
+            j["error"] = "tap does not exists";
+            res.set_content(j.dump(), "text/json");
         } catch (const std::exception &e) {
             res.status = 500;
             j["error"] = e.what();

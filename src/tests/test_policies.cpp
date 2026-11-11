@@ -10,6 +10,7 @@
 #include "handlers/input_resources/InputResourcesStreamHandler.h"
 #include "handlers/net/v1/NetStreamHandler.h"
 
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
@@ -1929,7 +1930,7 @@ TEST_CASE("Multi-policy Prometheus shared serializer", "[policies][prometheus][m
     }
 }
 
-// the concurrency tests log several lines per iteration; keeps their output to warnings
+// keeps the visor logger to warnings while in scope, for tests that log several lines per iteration
 struct QuietLogger {
     std::shared_ptr<spdlog::logger> logger = spdlog::get("visor");
     spdlog::level::level_enum level = logger->level();
@@ -2043,11 +2044,9 @@ visor:
     registry.policy_manager()->remove_tap("anycast");
 
     CHECK_FALSE(registry.tap_manager()->module_exists("anycast"));
-    {
-        auto [policies, lock] = registry.policy_manager()->module_get_all_locked();
-        for (auto &[name, policy] : policies) {
-            CHECK(policy->taps().empty());
-        }
+    for (auto name : {"view_a", "view_b"}) {
+        auto [policy, lock] = registry.policy_manager()->module_get_locked(name);
+        CHECK(policy->taps().empty());
     }
     REQUIRE_THROWS_WITH(registry.policy_manager()->remove_tap("anycast"), "module name 'anycast' does not exist");
 }
@@ -2057,11 +2056,43 @@ TEST_CASE("Removing taps concurrently does not deadlock", "[policies][taps][conc
     CoreRegistry registry;
     visor::load_builtin_plugins(registry);
     registry.start(nullptr);
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(R"(
+visor:
+  taps:
+    anycast:
+      input_type: mock
+      config:
+        iface: eth0
+)"));
 
     QuietLogger quiet;
 
-    // each removal takes the policy and tap maps while the other thread loads or removes its own taps
+    // two threads load and remove taps of their own while a third loads and removes policies, each with its own
+    // input, so every lock a tap removal takes is also taken in the other orders the managers use
     auto stop_at = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    std::atomic<bool> taps_done{false};
+    auto policies = std::async(std::launch::async, [&registry, &taps_done, stop_at] {
+        for (int i = 0; !taps_done && std::chrono::steady_clock::now() < stop_at; ++i) {
+            auto name = fmt::format("view_{}", i);
+            registry.policy_manager()->load_from_str(fmt::format(R"(
+visor:
+  policies:
+    {0}:
+      kind: collection
+      input:
+        tap: anycast
+        input_type: mock
+        config:
+          sample: {0}
+      handlers:
+        modules:
+          {0}_net:
+            type: net
+)",
+                name));
+            registry.policy_manager()->remove_policy(name);
+        }
+    });
     auto churn = [&registry, stop_at](const std::string &prefix) {
         for (int i = 0; i < 5000 && std::chrono::steady_clock::now() < stop_at; ++i) {
             auto name = fmt::format("{}_{}", prefix, i);
@@ -2080,15 +2111,22 @@ visor:
     auto b = std::async(std::launch::async, churn, std::string("b"));
     // well past the time box, so it only fires on a hang
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
-    if (a.wait_until(deadline) == std::future_status::timeout || b.wait_until(deadline) == std::future_status::timeout) {
+    auto hung = a.wait_until(deadline) == std::future_status::timeout || b.wait_until(deadline) == std::future_status::timeout;
+    taps_done = true;
+    if (hung || policies.wait_until(deadline) == std::future_status::timeout) {
         // the stuck threads can never be joined, so fail loudly instead of hanging the suite
         std::fprintf(stderr, "concurrent tap removals did not finish within 180 s, most likely a deadlock\n");
         std::abort();
     }
     REQUIRE_NOTHROW(a.get());
     REQUIRE_NOTHROW(b.get());
+    REQUIRE_NOTHROW(policies.get());
+    {
+        auto [policy_modules, lock] = registry.policy_manager()->module_get_all_locked();
+        CHECK(policy_modules.empty());
+    }
     auto [taps, lock] = registry.tap_manager()->module_get_all_locked();
-    CHECK(taps.empty());
+    CHECK(taps.size() == 1);
 }
 
 // once armed, holds the next policy load at its first registration, after it has added its taps to the policy
@@ -2127,12 +2165,30 @@ visor:
 )"));
 
     GatedPolicyManager policies(&registry);
-    std::promise<void> release;
-    policies.release = release.get_future().share();
+    std::future<void> load;
+    std::future<void> remove;
+    // declared after the futures so it is destroyed first: a failed REQUIRE releases the load before the futures
+    // wait for their threads
+    struct Gate {
+        std::promise<void> promise;
+        bool open{false};
+        void release()
+        {
+            if (!open) {
+                open = true;
+                promise.set_value();
+            }
+        }
+        ~Gate()
+        {
+            release();
+        }
+    } gate;
+    policies.release = gate.promise.get_future().share();
     policies.armed = true;
     auto reached = policies.reached.get_future();
 
-    auto load = std::async(std::launch::async, [&policies] {
+    load = std::async(std::launch::async, [&policies] {
         policies.load_from_str(R"(
 visor:
   policies:
@@ -2147,12 +2203,29 @@ visor:
             type: net
 )");
     });
-    REQUIRE(reached.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    // a load that fails before its first registration finishes without reaching the gate
+    auto reach_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
+    while (reached.wait_for(std::chrono::milliseconds(10)) == std::future_status::timeout) {
+        if (load.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            REQUIRE_NOTHROW(load.get());
+            FAIL("the policy load finished without registering anything");
+        }
+        if (std::chrono::steady_clock::now() > reach_deadline) {
+            std::fprintf(stderr, "the policy load neither reached its first registration nor finished within 180 s\n");
+            std::abort();
+        }
+    }
 
     // the policy holds the tap but is not registered yet, so a removal now would leave it holding a freed tap
-    auto remove = std::async(std::launch::async, [&policies] { policies.remove_tap("anycast"); });
+    remove = std::async(std::launch::async, [&policies] { policies.remove_tap("anycast"); });
     CHECK(remove.wait_for(std::chrono::milliseconds(200)) == std::future_status::timeout);
-    release.set_value();
+    gate.release();
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
+    if (load.wait_until(deadline) == std::future_status::timeout || remove.wait_until(deadline) == std::future_status::timeout) {
+        // the stuck threads can never be joined, so fail loudly instead of hanging the suite
+        std::fprintf(stderr, "the policy load and the tap removal did not finish within 180 s, most likely a deadlock\n");
+        std::abort();
+    }
     REQUIRE_NOTHROW(load.get());
     REQUIRE_NOTHROW(remove.get());
 
