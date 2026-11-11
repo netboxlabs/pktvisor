@@ -33,7 +33,7 @@ class Pktvisor(ConanFile):
             "libc" not in self.settings.compiler.fields
             or self.settings.compiler.libc != "musl"
         ):
-            self.requires("sentry-crashpad/0.6.5")
+            self.requires("sentry-crashpad/0.17.6")
 
     def configure(self):
         self.options["libcurl"].with_nghttp2 = True
