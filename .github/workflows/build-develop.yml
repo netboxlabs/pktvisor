@@ -68,7 +68,7 @@ jobs:
         run: ctest -C $BUILD_TYPE --output-on-failure
         
   unit-tests-linux:
-    runs-on: ubuntu-24.04 # GCC 15 on ubuntu-26.04 can't build sentry-crashpad/0.6.5
+    runs-on: ubuntu-latest
     outputs:
       version_number: ${{ env.VERSION }}
       commit_hash: ${{ env.COMMIT }}
@@ -325,7 +325,7 @@ jobs:
 
   build-app-image-x64:
     needs: [ merge-packages ]
-    runs-on: ubuntu-24.04 # GCC 15 on ubuntu-26.04 can't build sentry-crashpad/0.6.5
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       
