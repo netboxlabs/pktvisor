@@ -92,7 +92,8 @@ if(CODE_COVERAGE)
     setup_target_for_coverage_lcov(
             NAME coverage
             EXECUTABLE ctest
-            LCOV_ARGS --ignore-errors unused
+            # lcov 2 rejects some of GCC 15's gcov records for libstdc++ headers, which the report excludes anyway
+            LCOV_ARGS --ignore-errors unused,inconsistent
             EXCLUDE
                 "3rd/*"
                 "cmd/*"
