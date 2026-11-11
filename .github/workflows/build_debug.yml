@@ -13,7 +13,7 @@ env:
 
 jobs:
   code-coverage:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # GCC 15 on ubuntu-26.04 can't build sentry-crashpad/0.6.5
     permissions:
       contents: read
       pull-requests: write
