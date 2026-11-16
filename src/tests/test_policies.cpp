@@ -1937,6 +1937,51 @@ TEST_CASE("Multi-policy Prometheus shared serializer", "[policies][prometheus][m
     }
 }
 
+TEST_CASE("OpenTelemetry push tags each policy's scope with orb.policy.name", "[policies][metrics][multi-policy]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+
+    YAML::Node config_file = YAML::Load(policies_config_two_policies);
+    REQUIRE_NOTHROW(registry.tap_manager()->load(config_file["visor"]["taps"]));
+    REQUIRE_NOTHROW(registry.policy_manager()->load(config_file["visor"]["policies"]));
+    const std::vector<std::string> names{"policy_alpha", "policy_beta"};
+
+    // Closes a window on every handler so each policy has a scope to push.
+    timespec stamp;
+    timespec_get(&stamp, TIME_UTC);
+    stamp.tv_sec += 61;
+    for (const auto &name : names) {
+        auto [policy, lock] = registry.policy_manager()->module_get_locked(name);
+        for (auto mod : policy->modules()) {
+            auto net = dynamic_cast<handler::net::NetStreamHandler *>(mod);
+            REQUIRE(net);
+            net->check_period_shift(stamp);
+        }
+    }
+
+    metrics::v1::ResourceMetrics resource;
+    REQUIRE(registry.policy_manager()->opentelemetry_metrics(resource));
+
+    std::map<std::string, const metrics::v1::ScopeMetrics *> by_scope_name;
+    for (const auto &scope : resource.scope_metrics()) {
+        by_scope_name[scope.scope().name()] = &scope;
+    }
+    for (const auto &name : names) {
+        CAPTURE(name);
+        auto it = by_scope_name.find("pktvisor/" + name);
+        REQUIRE(it != by_scope_name.end());
+        const auto &attributes = it->second->scope().attributes();
+        REQUIRE(attributes.size() == 1);
+        CHECK(attributes[0].key() == "orb.policy.name");
+        CHECK(attributes[0].value().string_value() == name);
+        for (const auto &attribute : attributes) {
+            CHECK(attribute.key() != "policy_name");
+        }
+    }
+}
+
 // keeps the visor logger to warnings while in scope, for tests that log several lines per iteration
 struct QuietLogger {
     std::shared_ptr<spdlog::logger> logger = spdlog::get("visor");
