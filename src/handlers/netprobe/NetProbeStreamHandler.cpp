@@ -95,10 +95,18 @@ void NetProbeStreamHandler::probe_signal_send(pcpp::Packet &payload, TestType ty
 void NetProbeStreamHandler::probe_signal_recv(pcpp::Packet &payload, TestType type, const std::string &name, timespec stamp)
 {
     if (type == TestType::Ping) {
+        // The shared ping receiver passes on every ICMPv4 packet the host receives, echo requests
+        // included: a local target's own request looped back, or another host pinging this one.
+        // Attempts are counted on send, so a received request is skipped. The ICMPv6 receiver
+        // already passes only echo replies; its check here is defensive.
         if (auto icmp = payload.getLayerOfType<pcpp::IcmpLayer>(); icmp != nullptr) {
-            _metrics->process_netprobe_icmp(icmp, name, stamp);
+            if (icmp->getMessageType() != pcpp::ICMP_ECHO_REQUEST) {
+                _metrics->process_netprobe_icmp(icmp, name, stamp);
+            }
         } else if (auto icmp6 = payload.getLayerOfType<pcpp::ICMPv6EchoLayer>(); icmp6 != nullptr) {
-            _metrics->process_netprobe_icmpv6(icmp6, name, stamp);
+            if (icmp6->getMessageType() != pcpp::ICMPv6MessageType::ICMPv6_ECHO_REQUEST) {
+                _metrics->process_netprobe_icmpv6(icmp6, name, stamp);
+            }
         }
     } else if (type == TestType::TCP) {
         if (auto tcp = payload.getLayerOfType<pcpp::TcpLayer>(); tcp != nullptr) {

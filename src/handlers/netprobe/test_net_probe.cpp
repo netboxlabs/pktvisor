@@ -78,6 +78,29 @@ struct QuantilesFixture {
     NetProbeMetricsManager *manager() { return const_cast<NetProbeMetricsManager *>(handler->metrics()); }
 };
 
+enum class Path {
+    Send,
+    Recv
+};
+
+// Pass an ICMP layer through the input's event proxy wrapped in a Packet, as PingProbe does: Send
+// carries a probe's own request, Recv whatever the shared ping receiver read. The receiver hands
+// each packet to every probe in turn, under that probe's target name.
+void emit_ping(visor::InputEventProxy *proxy, Path path, pcpp::Layer &layer, timespec stamp,
+    const std::vector<std::string> &targets = {"lo"})
+{
+    auto *netprobe_proxy = static_cast<NetProbeInputEventProxy *>(proxy);
+    pcpp::Packet packet;
+    packet.addLayer(&layer);
+    for (const auto &target : targets) {
+        if (path == Path::Send) {
+            netprobe_proxy->probe_send_cb(packet, TestType::Ping, target, stamp);
+        } else {
+            netprobe_proxy->probe_recv_cb(packet, TestType::Ping, target, stamp);
+        }
+    }
+}
+
 }
 
 TEST_CASE("Net Probe ping tests", "[netprobe][ping]")
@@ -364,6 +387,93 @@ TEST_CASE("NetProbe ICMPv6 matching: two targets with distinct ids do not cross-
     CHECK(j["targets"]["v6-tgt-a"]["successes"] == 1);
     CHECK(j["targets"]["v6-tgt-b"]["attempts"] == 1);
     CHECK(j["targets"]["v6-tgt-b"]["successes"] == 1);
+}
+
+TEST_CASE("NetProbe ping: a local target's looped-back request is not a second attempt", "[netprobe][unit]")
+{
+    // A ping to a local address comes back through the shared receiver twice: once as the
+    // request itself, then as the reply.
+    UnitFixture fx;
+    const uint8_t payload[] = {0x01, 0x02};
+
+    pcpp::IcmpLayer sent;
+    sent.setEchoRequestData(0x2a, 1, 0, payload, sizeof(payload));
+    emit_ping(fx.proxy, Path::Send, sent, {100, 0});
+
+    pcpp::IcmpLayer looped;
+    looped.setEchoRequestData(0x2a, 1, 0, payload, sizeof(payload));
+    emit_ping(fx.proxy, Path::Recv, looped, {100, 1'000'000});
+
+    pcpp::IcmpLayer reply;
+    reply.setEchoReplyData(0x2a, 1, 0, payload, sizeof(payload));
+    emit_ping(fx.proxy, Path::Recv, reply, {100, 12'000'000});
+
+    json j;
+    fx.manager()->bucket(0)->to_json(j);
+    CHECK(j["targets"]["lo"]["attempts"] == 1);
+    CHECK(j["targets"]["lo"]["successes"] == 1);
+    // the round trip is timed from the send, not from the looped-back request
+    CHECK(j["targets"]["lo"]["response_max_us"] == 12000);
+}
+
+TEST_CASE("NetProbe ping: echo requests from another host are not attempts", "[netprobe][unit]")
+{
+    // The shared IPv4 receiver also hands every ping probe the requests of a host pinging this one.
+    UnitFixture fx;
+    const uint8_t payload[] = {0x01, 0x02};
+
+    pcpp::IcmpLayer sent;
+    sent.setEchoRequestData(0x2a, 1, 0, payload, sizeof(payload));
+    emit_ping(fx.proxy, Path::Send, sent, {100, 0});
+
+    // the same id and sequence as the probe's request, so it would restart the probe's transaction
+    pcpp::IcmpLayer foreign;
+    foreign.setEchoRequestData(0x2a, 1, 0, payload, sizeof(payload));
+    emit_ping(fx.proxy, Path::Recv, foreign, {100, 5'000'000});
+
+    // the ICMPv6 receiver passes only replies; this exercises the handler's defensive check
+    pcpp::ICMPv6EchoLayer foreign6(pcpp::ICMPv6EchoLayer::REQUEST, 0x77, 9, nullptr, 0);
+    emit_ping(fx.proxy, Path::Recv, foreign6, {100, 6'000'000});
+
+    pcpp::IcmpLayer reply;
+    reply.setEchoReplyData(0x2a, 1, 0, payload, sizeof(payload));
+    emit_ping(fx.proxy, Path::Recv, reply, {100, 12'000'000});
+
+    json j;
+    fx.manager()->bucket(0)->to_json(j);
+    CHECK(j["targets"]["lo"]["attempts"] == 1);
+    CHECK(j["targets"]["lo"]["successes"] == 1);
+    CHECK(j["targets"]["lo"]["response_max_us"] == 12000);
+}
+
+TEST_CASE("NetProbe ping: a looped-back request does not move a probe to another target", "[netprobe][unit]")
+{
+    // Two targets in one policy: only "local" probes here. The receiver hands each packet to
+    // every probe in turn, so the looped-back request and the reply reach both, each under its
+    // own target name.
+    UnitFixture fx;
+    const uint8_t payload[] = {0x01, 0x02};
+    const std::vector<std::string> both{"local", "remote"};
+
+    pcpp::IcmpLayer sent;
+    sent.setEchoRequestData(0x2a, 1, 0, payload, sizeof(payload));
+    emit_ping(fx.proxy, Path::Send, sent, {100, 0}, {"local"});
+
+    pcpp::IcmpLayer looped;
+    looped.setEchoRequestData(0x2a, 1, 0, payload, sizeof(payload));
+    emit_ping(fx.proxy, Path::Recv, looped, {100, 1'000'000}, both);
+
+    pcpp::IcmpLayer reply;
+    reply.setEchoReplyData(0x2a, 1, 0, payload, sizeof(payload));
+    emit_ping(fx.proxy, Path::Recv, reply, {100, 12'000'000}, both);
+
+    json j;
+    fx.manager()->bucket(0)->to_json(j);
+    // "remote" sent nothing and was answered nothing: it has no metrics at all
+    CHECK(!j["targets"].contains("remote"));
+    CHECK(j["targets"]["local"]["attempts"] == 1);
+    CHECK(j["targets"]["local"]["successes"] == 1);
+    CHECK(j["targets"]["local"]["response_max_us"] == 12000);
 }
 
 TEST_CASE("NetProbe process_filtered increments event count", "[netprobe][unit]")
