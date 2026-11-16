@@ -1,5 +1,6 @@
 #include "BuiltinPlugins.h"
 #include "CoreRegistry.h"
+#include "CoreServer.h"
 #include "HandlerManager.h"
 #include "HandlerModulePlugin.h"
 #include "InputStream.h"
@@ -2150,45 +2151,31 @@ public:
     }
 };
 
-TEST_CASE("Removing a tap waits for a policy load that holds it", "[policies][taps][concurrency]")
-{
-    CoreRegistry registry;
-    visor::load_builtin_plugins(registry);
-    registry.start(nullptr);
-    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(R"(
-visor:
-  taps:
-    anycast:
-      input_type: mock
-      config:
-        iface: eth0
-)"));
+// opens once, by release() or on destruction, so a failed REQUIRE does not leave a load held for good
+struct Gate {
+    std::promise<void> promise;
+    bool open{false};
+    void release()
+    {
+        if (!open) {
+            open = true;
+            promise.set_value();
+        }
+    }
+    ~Gate()
+    {
+        release();
+    }
+};
 
-    GatedPolicyManager policies(&registry);
-    std::future<void> load;
-    std::future<void> remove;
-    // declared after the futures so it is destroyed first: a failed REQUIRE releases the load before the futures
-    // wait for their threads
-    struct Gate {
-        std::promise<void> promise;
-        bool open{false};
-        void release()
-        {
-            if (!open) {
-                open = true;
-                promise.set_value();
-            }
-        }
-        ~Gate()
-        {
-            release();
-        }
-    } gate;
+// starts loading default_view on the tap anycast and returns once the load is held at its first registration
+static std::future<void> hold_load_at_gate(GatedPolicyManager &policies, Gate &gate)
+{
     policies.release = gate.promise.get_future().share();
     policies.armed = true;
     auto reached = policies.reached.get_future();
 
-    load = std::async(std::launch::async, [&policies] {
+    auto load = std::async(std::launch::async, [&policies] {
         policies.load_from_str(R"(
 visor:
   policies:
@@ -2215,6 +2202,30 @@ visor:
             std::abort();
         }
     }
+    return load;
+}
+
+TEST_CASE("Removing a tap waits for a policy load that holds it", "[policies][taps][concurrency]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(R"(
+visor:
+  taps:
+    anycast:
+      input_type: mock
+      config:
+        iface: eth0
+)"));
+
+    GatedPolicyManager policies(&registry);
+    std::future<void> load;
+    std::future<void> remove;
+    // declared after the futures so it is destroyed first: a failed REQUIRE releases the load before the futures
+    // wait for their threads
+    Gate gate;
+    load = hold_load_at_gate(policies, gate);
 
     // the policy holds the tap but is not registered yet, so a removal now would leave it holding a freed tap
     remove = std::async(std::launch::async, [&policies] { policies.remove_tap("anycast"); });
@@ -2235,4 +2246,180 @@ visor:
         CHECK(policy->taps().empty());
     }
     policies.remove_policy("default_view");
+}
+
+TEST_CASE("Deleting a tap that does not exist answers 404 without waiting for a policy load", "[policies][taps][concurrency]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(R"(
+visor:
+  taps:
+    anycast:
+      input_type: mock
+      config:
+        iface: eth0
+)"));
+
+    GatedPolicyManager policies(&registry);
+    std::future<void> load;
+    std::future<httplib::Response> remove;
+    // declared after the futures so it is destroyed first: a failed REQUIRE releases the load before the futures
+    // wait for their threads
+    Gate gate;
+    load = hold_load_at_gate(policies, gate);
+
+    // the held load keeps the lock that removing a tap waits for, as a load starting a long pcap_file input does
+    remove = std::async(std::launch::async, [&policies] {
+        httplib::Response res;
+        api::delete_tap(policies, "missing", res);
+        return res;
+    });
+    CHECK(remove.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+    gate.release();
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
+    if (load.wait_until(deadline) == std::future_status::timeout || remove.wait_until(deadline) == std::future_status::timeout) {
+        // the stuck threads can never be joined, so fail loudly instead of hanging the suite
+        std::fprintf(stderr, "the policy load and the tap delete did not finish within 180 s, most likely a deadlock\n");
+        std::abort();
+    }
+    REQUIRE_NOTHROW(load.get());
+    auto res = remove.get();
+    CHECK(res.status == 404);
+    CHECK(json::parse(res.body) == json{{"error", "tap does not exists"}});
+    CHECK(registry.tap_manager()->module_exists("anycast"));
+    policies.remove_policy("default_view");
+}
+
+TEST_CASE("Two deletes of a tap that both found it remove it once and answer 404 to the other", "[policies][taps][concurrency]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(R"(
+visor:
+  taps:
+    anycast:
+      input_type: mock
+      config:
+        iface: eth0
+)"));
+
+    GatedPolicyManager policies(&registry);
+    std::future<void> load;
+    std::future<httplib::Response> first;
+    std::future<httplib::Response> second;
+    // declared after the futures so it is destroyed first: a failed REQUIRE releases the load before the futures
+    // wait for their threads
+    Gate gate;
+    load = hold_load_at_gate(policies, gate);
+
+    // only remove_tap removes taps, and it waits for the held load, so both deletes find the tap before they wait.
+    // Once the load ends, one removes the tap and the other must find it gone under the locks
+    auto remove = [&policies] {
+        httplib::Response res;
+        api::delete_tap(policies, "anycast", res);
+        return res;
+    };
+    first = std::async(std::launch::async, remove);
+    second = std::async(std::launch::async, remove);
+    CHECK(first.wait_for(std::chrono::milliseconds(200)) == std::future_status::timeout);
+    CHECK(second.wait_for(std::chrono::seconds(0)) == std::future_status::timeout);
+    gate.release();
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
+    if (load.wait_until(deadline) == std::future_status::timeout || first.wait_until(deadline) == std::future_status::timeout || second.wait_until(deadline) == std::future_status::timeout) {
+        // the stuck threads can never be joined, so fail loudly instead of hanging the suite
+        std::fprintf(stderr, "the policy load and the tap deletes did not finish within 180 s, most likely a deadlock\n");
+        std::abort();
+    }
+    REQUIRE_NOTHROW(load.get());
+    auto a = first.get();
+    auto b = second.get();
+    auto &missing = (a.status == 404) ? a : b;
+    CHECK(std::set<int>{a.status, b.status} == std::set<int>{200, 404});
+    CHECK(json::parse(missing.body) == json{{"error", "tap does not exists"}});
+    CHECK_FALSE(registry.tap_manager()->module_exists("anycast"));
+    {
+        auto [policy, lock] = policies.module_get_locked("default_view");
+        CHECK(policy->taps().empty());
+    }
+    policies.remove_policy("default_view");
+}
+
+TEST_CASE("Concurrent removals of a policy remove it once and find it missing otherwise", "[policies][concurrency]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(R"(
+visor:
+  taps:
+    anycast:
+      input_type: mock
+      config:
+        iface: eth0
+)"));
+
+    QuietLogger quiet;
+
+    // each round starts four removals together: one removes the policy, and the others throw ModuleException, which
+    // DELETE /api/v1/policies/{name} answers with 404
+    int removed{0};
+    int missing{0};
+    std::vector<std::string> failures;
+    for (int round = 0; round < 100; ++round) {
+        REQUIRE_NOTHROW(registry.policy_manager()->load_from_str(R"(
+visor:
+  policies:
+    default_view:
+      kind: collection
+      input:
+        tap: anycast
+        input_type: mock
+      handlers:
+        modules:
+          default_net:
+            type: net
+)"));
+        std::promise<void> go;
+        std::shared_future<void> start = go.get_future().share();
+        std::vector<std::future<bool>> removals;
+        for (int i = 0; i < 4; ++i) {
+            removals.push_back(std::async(std::launch::async, [&registry, start] {
+                start.wait();
+                try {
+                    registry.policy_manager()->remove_policy("default_view");
+                    return true;
+                } catch (const ModuleException &) {
+                    return false;
+                }
+            }));
+        }
+        go.set_value();
+        // well past what a round takes, so it only fires on a hang
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
+        for (auto &removal : removals) {
+            if (removal.wait_until(deadline) == std::future_status::timeout) {
+                // the stuck threads can never be joined, so fail loudly instead of hanging the suite
+                std::fprintf(stderr, "concurrent policy removals did not finish within 180 s, most likely a deadlock\n");
+                std::abort();
+            }
+            try {
+                if (removal.get()) {
+                    ++removed;
+                } else {
+                    ++missing;
+                }
+            } catch (const std::exception &e) {
+                failures.emplace_back(e.what());
+            }
+        }
+    }
+
+    CHECK(removed == 100);
+    CHECK(missing == 300);
+    CHECK(failures == std::vector<std::string>{});
+    auto [inputs, lock] = registry.input_manager()->module_get_all_locked();
+    CHECK(inputs.empty());
 }

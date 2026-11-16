@@ -160,8 +160,12 @@ public:
     std::vector<Policy *> load_from_str(const std::string &str);
     std::vector<Policy *> load(const YAML::Node &tap_yaml, bool single = false);
     std::pair<std::unique_ptr<Policy>, std::string> create_resources_policy(InputStream *input, const Config &window_config);
+    // throws ModuleException, having changed nothing, when no policy has that name; any later failure, such as
+    // removing its handlers or inputs, throws another type
     void remove_policy(const std::string &name);
-    // detaches the tap from every policy and removes it, after any policy load in progress
+    // detaches the tap from every policy and removes it, after any policy load in progress. Throws
+    // ModuleException, having changed nothing, when no tap has that name; a tap already missing is reported without
+    // waiting for a load
     void remove_tap(const std::string &name);
     // Adds one scope per policy with a window to push, and returns whether any
     // policy had one, so the exporter sends nothing when none has.

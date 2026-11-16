@@ -9,6 +9,8 @@
 #include "OpenTelemetry.h"
 #include <chrono>
 #include <spdlog/spdlog.h>
+#include <string>
+#include <vector>
 
 namespace visor {
 
@@ -16,6 +18,21 @@ struct PrometheusConfig {
     std::string default_path;
     std::string instance_label;
 };
+
+// The admin API routes that read or remove one module, or the metrics of several policies. Each looks its modules
+// up when it uses them, so one that does not exist answers 404, also when a concurrent request removed it.
+namespace api {
+void get_tap(TapManager &taps, const std::string &name, httplib::Response &res);
+void delete_tap(PolicyManager &policies, const std::string &name, httplib::Response &res);
+void get_policy(PolicyManager &policies, const std::string &name, httplib::Response &res);
+void delete_policy(PolicyManager &policies, const std::string &name, httplib::Response &res);
+void get_default_bucket(PolicyManager &policies, const std::string &period, httplib::Response &res);
+void get_default_window(PolicyManager &policies, const std::string &period, httplib::Response &res);
+void get_default_prometheus(PolicyManager &policies, httplib::Response &res);
+// with all set, names is every policy, listed beforehand: one removed since, or without the period, is skipped
+void get_policies_metrics(PolicyManager &policies, const std::vector<std::string> &names, bool all, const std::string &period, bool merge, httplib::Response &res);
+void get_policies_prometheus(PolicyManager &policies, const std::vector<std::string> &names, bool all, httplib::Response &res);
+}
 
 class CoreServer
 {

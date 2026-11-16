@@ -10,6 +10,7 @@
 #include "Taps.h"
 #include "visor_config.h"
 #include <chrono>
+#include <optional>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 #include <spdlog/stopwatch.h>
@@ -105,91 +106,17 @@ void CoreServer::_setup_routes(const PrometheusConfig &prom_config)
     });
     // 3.0.x compatible: reference "default" policy
     _svr.Get(R"(/api/v1/metrics/bucket/(\d+))", [&](const httplib::Request &req, httplib::Response &res) {
-        json j;
-        bool bc_period{false};
-        if (!_registry->policy_manager()->module_exists("default")) {
-            res.status = 404;
-            j["error"] = "no \"default\" policy exists";
-            res.set_content(j.dump(), "text/json");
-            return;
-        }
-        try {
-            auto [policy, lock] = _registry->policy_manager()->module_get_locked("default");
-            uint64_t period(std::stol(req.matches[1]));
-            for (auto &mod : policy->modules()) {
-                auto hmod = dynamic_cast<StreamHandler *>(mod);
-                if (hmod) {
-                    spdlog::stopwatch sw;
-                    hmod->window_json(j["1m"], period, false);
-                    // hoist up the first "period" we see for backwards compatibility with 3.0.x
-                    if (!bc_period && j["1m"][hmod->schema_key()].contains("period")) {
-                        j["1m"]["period"] = j["1m"][hmod->schema_key()]["period"];
-                        bc_period = true;
-                    }
-                    _logger->debug("{} bucket window_json elapsed time: {}", hmod->name(), sw);
-                }
-            }
-            res.set_content(j.dump(), "text/json");
-        } catch (const std::exception &e) {
-            res.status = 500;
-            j["error"] = e.what();
-            res.set_content(j.dump(), "text/json");
-        }
+        api::get_default_bucket(*_registry->policy_manager(), req.matches[1].str(), res);
     });
     // 3.0.x compatible: reference "default" policy
     _svr.Get(R"(/api/v1/metrics/window/(\d+))", [&](const httplib::Request &req, httplib::Response &res) {
-        json j;
-        if (!_registry->policy_manager()->module_exists("default")) {
-            res.status = 404;
-            j["error"] = "no \"default\" policy exists";
-            res.set_content(j.dump(), "text/json");
-            return;
-        }
-        try {
-            auto [policy, lock] = _registry->policy_manager()->module_get_locked("default");
-            uint64_t period(std::stol(req.matches[1]));
-            for (auto &mod : policy->modules()) {
-                auto hmod = dynamic_cast<StreamHandler *>(mod);
-                if (hmod) {
-                    spdlog::stopwatch sw;
-                    auto key = fmt::format("{}m", period);
-                    hmod->window_json(j[key], period, true);
-                    _logger->debug("{} window_json {} elapsed time: {}", hmod->name(), period, sw);
-                }
-            }
-            res.set_content(j.dump(), "text/json");
-        } catch (const std::exception &e) {
-            res.status = 500;
-            j["error"] = e.what();
-            res.set_content(j.dump(), "text/json");
-        }
+        api::get_default_window(*_registry->policy_manager(), req.matches[1].str(), res);
     });
     // "default" policy prometheus
     if (!prom_config.default_path.empty()) {
         _logger->info("enabling prometheus metrics for \"default\" policy on: {}", prom_config.default_path);
         _svr.Get(prom_config.default_path.c_str(), [&]([[maybe_unused]] const httplib::Request &req, httplib::Response &res) {
-            if (!_registry->policy_manager()->module_exists("default")) {
-                res.status = 404;
-                return;
-            }
-            try {
-                std::stringstream output;
-                PrometheusSerializer ser;
-                auto [policy, lock] = _registry->policy_manager()->module_get_locked("default");
-                for (auto &mod : policy->modules()) {
-                    auto hmod = dynamic_cast<StreamHandler *>(mod);
-                    if (hmod) {
-                        spdlog::stopwatch sw;
-                        hmod->window_prometheus(ser, {{"policy", "default"}});
-                        _logger->debug("{} window_prometheus elapsed time: {}", hmod->name(), sw);
-                    }
-                }
-                output << ser.finalize();
-                res.set_content(output.str(), "text/plain");
-            } catch (const std::exception &e) {
-                res.status = 500;
-                res.set_content(e.what(), "text/plain");
-            }
+            api::get_default_prometheus(*_registry->policy_manager(), res);
         });
     }
     // Taps
@@ -211,23 +138,7 @@ void CoreServer::_setup_routes(const PrometheusConfig &prom_config)
         }
     });
     _svr.Get(fmt::format("/api/v1/taps/({})", AbstractModule::MODULE_ID_REGEX).c_str(), [&](const httplib::Request &req, httplib::Response &res) {
-        json j = json::object();
-        auto name = req.matches[1];
-        if (!_registry->tap_manager()->module_exists(name)) {
-            res.status = 404;
-            j["error"] = "tap does not exists";
-            res.set_content(j.dump(), "text/json");
-            return;
-        }
-        try {
-            auto [tap, lock] = _registry->tap_manager()->module_get_locked(name);
-            tap->info_json(j[name]);
-            res.set_content(j.dump(), "text/json");
-        } catch (const std::exception &e) {
-            res.status = 500;
-            j["error"] = e.what();
-            res.set_content(j.dump(), "text/json");
-        }
+        api::get_tap(*_registry->tap_manager(), req.matches[1].str(), res);
     });
     _svr.Post(R"(/api/v1/taps)", [&]([[maybe_unused]] const httplib::Request &req, httplib::Response &res) {
         json j = json::object();
@@ -258,28 +169,7 @@ void CoreServer::_setup_routes(const PrometheusConfig &prom_config)
         }
     });
     _svr.Delete(fmt::format("/api/v1/taps/({})", AbstractModule::MODULE_ID_REGEX).c_str(), [&](const httplib::Request &req, httplib::Response &res) {
-        json j = json::object();
-        auto name = req.matches[1];
-        if (!_registry->tap_manager()->module_exists(name)) {
-            res.status = 404;
-            j["error"] = "tap does not exists";
-            res.set_content(j.dump(), "text/json");
-            return;
-        }
-        try {
-            _registry->policy_manager()->remove_tap(name);
-            res.status = 200;
-            res.set_content(j.dump(), "text/json");
-        } catch (const ModuleException &) {
-            // removed by a concurrent request since the check above
-            res.status = 404;
-            j["error"] = "tap does not exists";
-            res.set_content(j.dump(), "text/json");
-        } catch (const std::exception &e) {
-            res.status = 500;
-            j["error"] = e.what();
-            res.set_content(j.dump(), "text/json");
-        }
+        api::delete_tap(*_registry->policy_manager(), req.matches[1].str(), res);
     });
     // Policies
     _svr.Get(R"(/api/v1/policies)", [&]([[maybe_unused]] const httplib::Request &req, httplib::Response &res) {
@@ -332,122 +222,278 @@ void CoreServer::_setup_routes(const PrometheusConfig &prom_config)
         }
     });
     _svr.Get(fmt::format("/api/v1/policies/({})", AbstractModule::MODULE_ID_REGEX).c_str(), [&](const httplib::Request &req, httplib::Response &res) {
-        json j = json::object();
-        auto name = req.matches[1];
-        if (!_registry->policy_manager()->module_exists(name)) {
-            res.status = 404;
-            j["error"] = "policy does not exists";
-            res.set_content(j.dump(), "text/json");
-            return;
-        }
-        try {
-            auto [policy, lock] = _registry->policy_manager()->module_get_locked(name);
-            policy->info_json(j[name]);
-            res.set_content(j.dump(), "text/json");
-        } catch (const std::exception &e) {
-            res.status = 500;
-            j["error"] = e.what();
-            res.set_content(j.dump(), "text/json");
-        }
+        api::get_policy(*_registry->policy_manager(), req.matches[1].str(), res);
     });
     _svr.Delete(fmt::format("/api/v1/policies/({})", AbstractModule::MODULE_ID_REGEX).c_str(), [&](const httplib::Request &req, httplib::Response &res) {
-        json j = json::object();
-        auto name = req.matches[1];
-        if (!_registry->policy_manager()->module_exists(name)) {
-            res.status = 404;
-            j["error"] = "policy does not exists";
-            res.set_content(j.dump(), "text/json");
-            return;
-        }
-        try {
-            _registry->policy_manager()->remove_policy(name);
-            res.status = 200;
-            res.set_content(j.dump(), "text/json");
-        } catch (const std::exception &e) {
-            res.status = 500;
-            j["error"] = e.what();
-            res.set_content(j.dump(), "text/json");
-        }
+        api::delete_policy(*_registry->policy_manager(), req.matches[1].str(), res);
     });
     _svr.Get(fmt::format("/api/v1/policies/({})/metrics/(window|bucket)/(\\d+)", AbstractModule::MODULE_ID_REGEX).c_str(), [&](const httplib::Request &req, httplib::Response &res) {
-        json j = json::object();
-        auto name = req.matches[1];
-        std::vector<std::string> plist;
-        if (name == "__all") {
-            // special route to get all policy metrics in one call, for scraping performance reasons
-            plist = _registry->policy_manager()->module_get_keys();
-        } else if (!_registry->policy_manager()->module_exists(name)) {
-            res.status = 404;
-            j["error"] = "policy does not exist";
-            res.set_content(j.dump(), "text/json");
-            return;
-        } else {
-            plist.emplace_back(name);
-        }
-        try {
-            uint64_t period(std::stol(req.matches[3]));
-            auto merge = (req.matches[2] == "window");
-            for (const auto &p_mname : plist) {
-                spdlog::stopwatch psw;
-                auto [policy, lock] = _registry->policy_manager()->module_get_locked(p_mname);
-                try {
-                    policy->json_metrics(j, period, merge);
-                } catch (const PeriodException &e) {
-                    // if period is bad for a single policy in __all mode, skip it. otherwise fail
-                    if (name == "__all") {
-                        j.erase(policy->name());
-                        continue;
-                    } else {
-                        throw e;
-                    }
-                }
-                _logger->debug("{} policy json metrics elapsed time: {}", policy->name(), psw);
-            }
-            res.set_content(j.dump(), "text/json");
-        } catch (const PeriodException &e) {
-            res.status = 425; // 425 Too Early
-            j["error"] = e.what();
-            res.set_content(j.dump(), "text/json");
-        } catch (const std::exception &e) {
-            res.status = 500;
-            j["error"] = e.what();
-            res.set_content(j.dump(), "text/json");
-        }
+        // special route to get all policy metrics in one call, for scraping performance reasons
+        auto all = (req.matches[1] == "__all");
+        auto names = all ? _registry->policy_manager()->module_get_keys() : std::vector<std::string>{req.matches[1].str()};
+        api::get_policies_metrics(*_registry->policy_manager(), names, all, req.matches[3].str(), req.matches[2] == "window", res);
     });
     _svr.Get(fmt::format("/api/v1/policies/({})/metrics/prometheus", AbstractModule::MODULE_ID_REGEX).c_str(), [&](const httplib::Request &req, httplib::Response &res) {
-        std::vector<std::string> plist;
-        {
-            auto name = req.matches[1];
-            if (name == "__all") {
-                // special route to get all policy metrics in one call, for scraping performance reasons
-                plist = _registry->policy_manager()->module_get_keys();
-            } else if (!_registry->policy_manager()->module_exists(name)) {
-                res.status = 404;
-                res.set_content("policy does not exists", "text/plain");
-                return;
-            } else {
-                plist.emplace_back(name);
-            }
-        }
-        std::stringstream output;
-        PrometheusSerializer ser;
-        try {
-            for (const auto &p_mname : plist) {
-                auto [policy, lock] = _registry->policy_manager()->module_get_locked(p_mname);
-                policy->prometheus_metrics(ser);
-            }
-        } catch (const std::exception &e) {
-            res.status = 500;
-            res.set_content(e.what(), "text/plain");
-            return;
-        }
-        output << ser.finalize();
-        res.set_content(output.str(), "text/plain");
+        // special route to get all policy metrics in one call, for scraping performance reasons
+        auto all = (req.matches[1] == "__all");
+        auto names = all ? _registry->policy_manager()->module_get_keys() : std::vector<std::string>{req.matches[1].str()};
+        api::get_policies_prometheus(*_registry->policy_manager(), names, all, res);
     });
     if (_otel) {
         _otel->OnInterval([&](metrics::v1::ResourceMetrics &resource) {
             return _registry->policy_manager()->opentelemetry_metrics(resource);
         });
     }
+}
+
+namespace api {
+
+void get_tap(TapManager &taps, const std::string &name, httplib::Response &res)
+{
+    json j = json::object();
+    try {
+        auto [tap, lock] = taps.module_find_locked(name);
+        if (!tap) {
+            res.status = 404;
+            j["error"] = "tap does not exists";
+            res.set_content(j.dump(), "text/json");
+            return;
+        }
+        tap->info_json(j[name]);
+        res.set_content(j.dump(), "text/json");
+    } catch (const std::exception &e) {
+        res.status = 500;
+        j["error"] = e.what();
+        res.set_content(j.dump(), "text/json");
+    }
+}
+
+void delete_tap(PolicyManager &policies, const std::string &name, httplib::Response &res)
+{
+    json j = json::object();
+    try {
+        policies.remove_tap(name);
+        res.status = 200;
+        res.set_content(j.dump(), "text/json");
+    } catch (const ModuleException &) {
+        // no tap has that name, maybe since a concurrent request removed it
+        res.status = 404;
+        j["error"] = "tap does not exists";
+        res.set_content(j.dump(), "text/json");
+    } catch (const std::exception &e) {
+        res.status = 500;
+        j["error"] = e.what();
+        res.set_content(j.dump(), "text/json");
+    }
+}
+
+void get_policy(PolicyManager &policies, const std::string &name, httplib::Response &res)
+{
+    json j = json::object();
+    try {
+        auto [policy, lock] = policies.module_find_locked(name);
+        if (!policy) {
+            res.status = 404;
+            j["error"] = "policy does not exists";
+            res.set_content(j.dump(), "text/json");
+            return;
+        }
+        policy->info_json(j[name]);
+        res.set_content(j.dump(), "text/json");
+    } catch (const std::exception &e) {
+        res.status = 500;
+        j["error"] = e.what();
+        res.set_content(j.dump(), "text/json");
+    }
+}
+
+void delete_policy(PolicyManager &policies, const std::string &name, httplib::Response &res)
+{
+    json j = json::object();
+    try {
+        policies.remove_policy(name);
+        res.status = 200;
+        res.set_content(j.dump(), "text/json");
+    } catch (const ModuleException &) {
+        // no policy has that name, maybe since a concurrent request removed it
+        res.status = 404;
+        j["error"] = "policy does not exists";
+        res.set_content(j.dump(), "text/json");
+    } catch (const std::exception &e) {
+        res.status = 500;
+        j["error"] = e.what();
+        res.set_content(j.dump(), "text/json");
+    }
+}
+
+void get_default_bucket(PolicyManager &policies, const std::string &period, httplib::Response &res)
+{
+    json j;
+    bool bc_period{false};
+    try {
+        auto [policy, lock] = policies.module_find_locked("default");
+        if (!policy) {
+            res.status = 404;
+            j["error"] = "no \"default\" policy exists";
+            res.set_content(j.dump(), "text/json");
+            return;
+        }
+        uint64_t period_value(std::stol(period));
+        auto logger = spdlog::get("visor");
+        for (auto &mod : policy->modules()) {
+            auto hmod = dynamic_cast<StreamHandler *>(mod);
+            if (hmod) {
+                spdlog::stopwatch sw;
+                hmod->window_json(j["1m"], period_value, false);
+                // hoist up the first "period" we see for backwards compatibility with 3.0.x
+                if (!bc_period && j["1m"][hmod->schema_key()].contains("period")) {
+                    j["1m"]["period"] = j["1m"][hmod->schema_key()]["period"];
+                    bc_period = true;
+                }
+                logger->debug("{} bucket window_json elapsed time: {}", hmod->name(), sw);
+            }
+        }
+        res.set_content(j.dump(), "text/json");
+    } catch (const std::exception &e) {
+        res.status = 500;
+        j["error"] = e.what();
+        res.set_content(j.dump(), "text/json");
+    }
+}
+
+void get_default_window(PolicyManager &policies, const std::string &period, httplib::Response &res)
+{
+    json j;
+    try {
+        auto [policy, lock] = policies.module_find_locked("default");
+        if (!policy) {
+            res.status = 404;
+            j["error"] = "no \"default\" policy exists";
+            res.set_content(j.dump(), "text/json");
+            return;
+        }
+        uint64_t period_value(std::stol(period));
+        auto logger = spdlog::get("visor");
+        for (auto &mod : policy->modules()) {
+            auto hmod = dynamic_cast<StreamHandler *>(mod);
+            if (hmod) {
+                spdlog::stopwatch sw;
+                auto key = fmt::format("{}m", period_value);
+                hmod->window_json(j[key], period_value, true);
+                logger->debug("{} window_json {} elapsed time: {}", hmod->name(), period_value, sw);
+            }
+        }
+        res.set_content(j.dump(), "text/json");
+    } catch (const std::exception &e) {
+        res.status = 500;
+        j["error"] = e.what();
+        res.set_content(j.dump(), "text/json");
+    }
+}
+
+void get_default_prometheus(PolicyManager &policies, httplib::Response &res)
+{
+    try {
+        std::stringstream output;
+        PrometheusSerializer ser;
+        auto [policy, lock] = policies.module_find_locked("default");
+        if (!policy) {
+            res.status = 404;
+            return;
+        }
+        auto logger = spdlog::get("visor");
+        for (auto &mod : policy->modules()) {
+            auto hmod = dynamic_cast<StreamHandler *>(mod);
+            if (hmod) {
+                spdlog::stopwatch sw;
+                hmod->window_prometheus(ser, {{"policy", "default"}});
+                logger->debug("{} window_prometheus elapsed time: {}", hmod->name(), sw);
+            }
+        }
+        output << ser.finalize();
+        res.set_content(output.str(), "text/plain");
+    } catch (const std::exception &e) {
+        res.status = 500;
+        res.set_content(e.what(), "text/plain");
+    }
+}
+
+void get_policies_metrics(PolicyManager &policies, const std::vector<std::string> &names, bool all, const std::string &period, bool merge, httplib::Response &res)
+{
+    json j = json::object();
+    try {
+        // a single policy that does not exist answers 404 whatever the period, so its period is parsed once it is found
+        std::optional<uint64_t> period_value;
+        if (all) {
+            period_value = std::stol(period);
+        }
+        auto logger = spdlog::get("visor");
+        for (const auto &name : names) {
+            spdlog::stopwatch psw;
+            auto [policy, lock] = policies.module_find_locked(name);
+            if (!policy) {
+                if (all) {
+                    // removed since it was listed
+                    continue;
+                }
+                res.status = 404;
+                j["error"] = "policy does not exist";
+                res.set_content(j.dump(), "text/json");
+                return;
+            }
+            if (!period_value) {
+                period_value = std::stol(period);
+            }
+            try {
+                policy->json_metrics(j, *period_value, merge);
+            } catch (const PeriodException &) {
+                // if period is bad for a single policy in __all mode, skip it. otherwise fail
+                if (all) {
+                    j.erase(name);
+                    continue;
+                }
+                throw;
+            }
+            logger->debug("{} policy json metrics elapsed time: {}", name, psw);
+        }
+        res.set_content(j.dump(), "text/json");
+    } catch (const PeriodException &e) {
+        res.status = 425; // 425 Too Early
+        j["error"] = e.what();
+        res.set_content(j.dump(), "text/json");
+    } catch (const std::exception &e) {
+        res.status = 500;
+        j["error"] = e.what();
+        res.set_content(j.dump(), "text/json");
+    }
+}
+
+void get_policies_prometheus(PolicyManager &policies, const std::vector<std::string> &names, bool all, httplib::Response &res)
+{
+    std::stringstream output;
+    PrometheusSerializer ser;
+    try {
+        for (const auto &name : names) {
+            auto [policy, lock] = policies.module_find_locked(name);
+            if (!policy) {
+                if (all) {
+                    // removed since it was listed
+                    continue;
+                }
+                res.status = 404;
+                res.set_content("policy does not exists", "text/plain");
+                return;
+            }
+            policy->prometheus_metrics(ser);
+        }
+    } catch (const std::exception &e) {
+        res.status = 500;
+        res.set_content(e.what(), "text/plain");
+        return;
+    }
+    output << ser.finalize();
+    res.set_content(output.str(), "text/plain");
+}
+
 }
 }
