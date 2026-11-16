@@ -155,18 +155,7 @@ void CoreServer::_setup_routes(const PrometheusConfig &prom_config)
             res.set_content(j.dump(), "text/json");
             return;
         }
-        try {
-            auto taps = _registry->tap_manager()->load_from_str(req.body);
-            for (auto &mod : taps) {
-                mod->info_json(j[mod->name()]);
-            }
-            res.status = 201;
-            res.set_content(j.dump(), "text/json");
-        } catch (const std::exception &e) {
-            (std::string(e.what()).find("already") != std::string::npos) ? res.status = 409 : res.status = 500;
-            j["error"] = e.what();
-            res.set_content(j.dump(), "text/json");
-        }
+        api::post_taps(*_registry->tap_manager(), req.body, res);
     });
     _svr.Delete(fmt::format("/api/v1/taps/({})", AbstractModule::MODULE_ID_REGEX).c_str(), [&](const httplib::Request &req, httplib::Response &res) {
         api::delete_tap(*_registry->policy_manager(), req.matches[1].str(), res);
@@ -204,22 +193,7 @@ void CoreServer::_setup_routes(const PrometheusConfig &prom_config)
             res.set_content(j.dump(), "text/json");
             return;
         }
-        try {
-            auto policies = _registry->policy_manager()->load_from_str(req.body);
-            for (auto &mod : policies) {
-                mod->info_json(j[mod->name()]);
-            }
-            res.status = 201;
-            res.set_content(j.dump(), "text/json");
-        } catch (const std::invalid_argument &e) {
-            res.status = 422;
-            j["error"] = e.what();
-            res.set_content(j.dump(), "text/json");
-        } catch (const std::exception &e) {
-            (std::string(e.what()).find("already") != std::string::npos) ? res.status = 409 : res.status = 500;
-            j["error"] = e.what();
-            res.set_content(j.dump(), "text/json");
-        }
+        api::post_policies(*_registry->policy_manager(), req.body, res);
     });
     _svr.Get(fmt::format("/api/v1/policies/({})", AbstractModule::MODULE_ID_REGEX).c_str(), [&](const httplib::Request &req, httplib::Response &res) {
         api::get_policy(*_registry->policy_manager(), req.matches[1].str(), res);
@@ -493,6 +467,41 @@ void get_policies_prometheus(PolicyManager &policies, const std::vector<std::str
     }
     output << ser.finalize();
     res.set_content(output.str(), "text/plain");
+}
+
+// both answer with what the load rendered: a concurrent DELETE can free what it returns as soon as it returns
+void post_taps(TapManager &taps, const std::string &body, httplib::Response &res)
+{
+    json j = json::object();
+    try {
+        json loaded = json::object();
+        taps.load_from_str(body, &loaded);
+        res.status = 201;
+        res.set_content(loaded.dump(), "text/json");
+    } catch (const std::exception &e) {
+        (std::string(e.what()).find("already") != std::string::npos) ? res.status = 409 : res.status = 500;
+        j["error"] = e.what();
+        res.set_content(j.dump(), "text/json");
+    }
+}
+
+void post_policies(PolicyManager &policies, const std::string &body, httplib::Response &res)
+{
+    json j = json::object();
+    try {
+        json loaded = json::object();
+        policies.load_from_str(body, &loaded);
+        res.status = 201;
+        res.set_content(loaded.dump(), "text/json");
+    } catch (const std::invalid_argument &e) {
+        res.status = 422;
+        j["error"] = e.what();
+        res.set_content(j.dump(), "text/json");
+    } catch (const std::exception &e) {
+        (std::string(e.what()).find("already") != std::string::npos) ? res.status = 409 : res.status = 500;
+        j["error"] = e.what();
+        res.set_content(j.dump(), "text/json");
+    }
 }
 
 }

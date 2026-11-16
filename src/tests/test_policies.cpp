@@ -10,6 +10,7 @@
 #include "handlers/dns/v1/DnsStreamHandler.h"
 #include "handlers/input_resources/InputResourcesStreamHandler.h"
 #include "handlers/net/v1/NetStreamHandler.h"
+#include "inputs/mock/MockInputModulePlugin.h"
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
@@ -19,10 +20,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fmt/format.h>
+#include <functional>
 #include <future>
+#include <map>
 #include <set>
+#include <spdlog/details/null_mutex.h>
+#include <spdlog/sinks/base_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
+#include <string_view>
 #include <yaml-cpp/yaml.h>
 
 using namespace visor;
@@ -2130,24 +2136,35 @@ visor:
     CHECK(taps.size() == 1);
 }
 
-// once armed, holds the next policy load at its first registration, after it has added its taps to the policy
+// once armed, holds the next policy load at its first registration, after it has added its taps to the policy, or
+// with hold_after set, just after it registers the policy of that name
 class GatedPolicyManager : public PolicyManager
 {
+    void hold()
+    {
+        armed = false;
+        reached.set_value();
+        release.wait();
+    }
+
 public:
     using PolicyManager::PolicyManager;
 
     bool armed{false};
+    std::string hold_after;
     std::promise<void> reached;
     std::shared_future<void> release;
 
     void module_add(std::unique_ptr<Policy> &&m) override
     {
-        if (armed) {
-            armed = false;
-            reached.set_value();
-            release.wait();
+        auto name = m->name();
+        if (armed && hold_after.empty()) {
+            hold();
         }
         PolicyManager::module_add(std::move(m));
+        if (armed && name == hold_after) {
+            hold();
+        }
     }
 };
 
@@ -2168,15 +2185,7 @@ struct Gate {
     }
 };
 
-// starts loading default_view on the tap anycast and returns once the load is held at its first registration
-static std::future<void> hold_load_at_gate(GatedPolicyManager &policies, Gate &gate)
-{
-    policies.release = gate.promise.get_future().share();
-    policies.armed = true;
-    auto reached = policies.reached.get_future();
-
-    auto load = std::async(std::launch::async, [&policies] {
-        policies.load_from_str(R"(
+static const char *DEFAULT_VIEW_POLICY = R"(
 visor:
   policies:
     default_view:
@@ -2188,21 +2197,38 @@ visor:
         modules:
           default_net:
             type: net
-)");
-    });
-    // a load that fails before its first registration finishes without reaching the gate
+)";
+
+// returns once the load is held at its gate, failing if it finishes first
+static void wait_held(std::future<void> &reached, std::future<void> &load)
+{
+    // a load that fails before the gate finishes without reaching it
     auto reach_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
     while (reached.wait_for(std::chrono::milliseconds(10)) == std::future_status::timeout) {
         if (load.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
             REQUIRE_NOTHROW(load.get());
-            FAIL("the policy load finished without registering anything");
+            FAIL("the policy load finished without reaching the gate");
         }
         if (std::chrono::steady_clock::now() > reach_deadline) {
-            std::fprintf(stderr, "the policy load neither reached its first registration nor finished within 180 s\n");
+            std::fprintf(stderr, "the policy load neither reached the gate nor finished within 180 s\n");
             std::abort();
         }
     }
-    return load;
+}
+
+// starts loading default_view on the tap anycast, or runs load, and returns once the load is held at the gate
+static std::future<void> hold_load_at_gate(GatedPolicyManager &policies, Gate &gate, std::function<void()> load = {})
+{
+    policies.release = gate.promise.get_future().share();
+    policies.armed = true;
+    auto reached = policies.reached.get_future();
+
+    if (!load) {
+        load = [&policies] { policies.load_from_str(DEFAULT_VIEW_POLICY); };
+    }
+    auto loading = std::async(std::launch::async, std::move(load));
+    wait_held(reached, loading);
+    return loading;
 }
 
 TEST_CASE("Removing a tap waits for a policy load that holds it", "[policies][taps][concurrency]")
@@ -2422,4 +2448,541 @@ visor:
     CHECK(failures == std::vector<std::string>{});
     auto [inputs, lock] = registry.input_manager()->module_get_all_locked();
     CHECK(inputs.empty());
+}
+
+static const char *ANYCAST_TAP = R"(
+visor:
+  taps:
+    anycast:
+      input_type: mock
+      config:
+        iface: eth0
+)";
+
+// on the tap anycast, with the same input whatever the name, so the policies loaded from it share one input
+static std::string policy_on_shared_input(const std::string &name)
+{
+    return fmt::format(R"(
+visor:
+  policies:
+    {0}:
+      kind: collection
+      input:
+        tap: anycast
+        input_type: mock
+      handlers:
+        modules:
+          {0}_net:
+            type: net
+)",
+        name);
+}
+
+// waits for every thread until 180 s from now, well past any test's time box, so it only fires on a hang
+template <typename... Futures>
+static void wait_or_abort(const char *what, Futures &...threads)
+{
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
+    if (((threads.wait_until(deadline) == std::future_status::timeout) || ...)) {
+        // the stuck threads can never be joined, so fail loudly instead of hanging the suite
+        std::fprintf(stderr, "%s did not finish within 180 s, most likely a deadlock\n", what);
+        std::abort();
+    }
+}
+
+static void check_no_modules(CoreRegistry &registry)
+{
+    {
+        auto [policies, lock] = registry.policy_manager()->module_get_all_locked();
+        CHECK(policies.empty());
+    }
+    {
+        auto [handlers, lock] = registry.handler_manager()->module_get_all_locked();
+        CHECK(handlers.empty());
+    }
+    auto [inputs, lock] = registry.input_manager()->module_get_all_locked();
+    CHECK(inputs.empty());
+}
+
+TEST_CASE("POST and DELETE of one tap at once", "[policies][taps][api][concurrency]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+
+    QuietLogger quiet;
+
+    auto stop_at = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    std::map<int, int> post_statuses;
+    std::map<int, int> delete_statuses;
+    int bad_bodies{0};
+    auto post = std::async(std::launch::async, [&registry, &post_statuses, &bad_bodies, stop_at] {
+        while (std::chrono::steady_clock::now() < stop_at) {
+            httplib::Response res;
+            api::post_taps(*registry.tap_manager(), ANYCAST_TAP, res);
+            ++post_statuses[res.status];
+            if (res.status == 201) {
+                auto j = json::parse(res.body);
+                if (j["anycast"]["input_type"] != "mock" || j["anycast"]["config"]["iface"] != "eth0") {
+                    ++bad_bodies;
+                }
+            }
+        }
+    });
+    auto remove = std::async(std::launch::async, [&registry, &delete_statuses, stop_at] {
+        while (std::chrono::steady_clock::now() < stop_at) {
+            httplib::Response res;
+            api::delete_tap(*registry.policy_manager(), "anycast", res);
+            ++delete_statuses[res.status];
+        }
+    });
+    wait_or_abort("racing tap POST and DELETE", post, remove);
+    REQUIRE_NOTHROW(post.get());
+    REQUIRE_NOTHROW(remove.get());
+
+    // a POST that loads the tap answers with it as loaded, even if a DELETE has removed it since; one that finds the
+    // tap still there is refused
+    INFO("POST: " << json(post_statuses).dump() << " DELETE: " << json(delete_statuses).dump());
+    for (auto &[code, count] : post_statuses) {
+        CHECK((code == 201 || code == 409));
+    }
+    for (auto &[code, count] : delete_statuses) {
+        CHECK((code == 200 || code == 404));
+    }
+    CHECK(post_statuses[201] > 0);
+    CHECK(delete_statuses[200] > 0);
+    CHECK(bad_bodies == 0);
+}
+
+// the mock input, counting how often a tap of its type is rendered
+class RenderCountingMock : public input::mock::MockInputModulePlugin
+{
+public:
+    using MockInputModulePlugin::MockInputModulePlugin;
+
+    mutable std::atomic<int> renders{0};
+
+    void redact_config_json(nlohmann::json &j) const override
+    {
+        ++renders;
+        MockInputModulePlugin::redact_config_json(j);
+    }
+};
+
+// once armed, holds the next tap load just after it registers a tap
+class GatedTapManager : public TapManager
+{
+public:
+    using TapManager::TapManager;
+
+    bool armed{false};
+    std::promise<void> reached;
+    std::shared_future<void> release;
+
+    void module_add(std::unique_ptr<Tap> &&m) override
+    {
+        TapManager::module_add(std::move(m));
+        if (armed) {
+            armed = false;
+            reached.set_value();
+            release.wait();
+        }
+    }
+};
+
+TEST_CASE("A tap POST answers with the tap as loaded when it is removed before the POST answers", "[policies][taps][api][concurrency]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    auto plugin = std::make_unique<RenderCountingMock>("counted_mock");
+    auto counted = plugin.get();
+    registry.add_input_plugin("counted_mock", "1.0", std::move(plugin));
+    registry.start(nullptr);
+
+    GatedTapManager taps(&registry);
+    httplib::Response posted;
+    std::future<void> post;
+    // declared after the future so it is destroyed first: a failed REQUIRE releases the load before the future waits
+    // for its thread
+    Gate gate;
+    taps.release = gate.promise.get_future().share();
+    taps.armed = true;
+    auto reached = taps.reached.get_future();
+    post = std::async(std::launch::async, [&taps, &posted] {
+        api::post_taps(taps, R"(
+visor:
+  taps:
+    anycast:
+      input_type: counted_mock
+      config:
+        iface: eth0
+)",
+            posted);
+    });
+    wait_held(reached, post);
+
+    // registered, and the POST has not answered yet: a removal now frees the tap, so the POST must have rendered it
+    // already. module_remove frees it as DELETE /api/v1/taps/{name} does, which goes through the registry's own tap
+    // manager instead of this one
+    REQUIRE(counted->renders == 1);
+    taps.module_remove("anycast");
+    gate.release();
+    wait_or_abort("the tap POST", post);
+    REQUIRE_NOTHROW(post.get());
+
+    INFO(posted.body);
+    CHECK(posted.status == 201);
+    auto j = json::parse(posted.body);
+    CHECK(j["anycast"]["input_type"] == "counted_mock");
+    CHECK(j["anycast"]["config"] == json{{"iface", "eth0"}});
+    CHECK(counted->renders == 1);
+    CHECK_FALSE(taps.module_exists("anycast"));
+}
+
+TEST_CASE("POST and DELETE of one policy at once", "[policies][api][concurrency]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(ANYCAST_TAP));
+
+    QuietLogger quiet;
+
+    auto stop_at = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    std::map<int, int> post_statuses;
+    std::map<int, int> delete_statuses;
+    int bad_bodies{0};
+    auto post = std::async(std::launch::async, [&registry, &post_statuses, &bad_bodies, stop_at] {
+        while (std::chrono::steady_clock::now() < stop_at) {
+            httplib::Response res;
+            api::post_policies(*registry.policy_manager(), policy_on_shared_input("view"), res);
+            ++post_statuses[res.status];
+            if (res.status == 201) {
+                auto j = json::parse(res.body);
+                if (!j["view"]["taps"].contains("anycast") || j["view"]["input"].size() != 1 || !j["view"]["modules"].contains("view-anycast-view_net")) {
+                    ++bad_bodies;
+                }
+            }
+        }
+    });
+    auto remove = std::async(std::launch::async, [&registry, &delete_statuses, stop_at] {
+        while (std::chrono::steady_clock::now() < stop_at) {
+            httplib::Response res;
+            api::delete_policy(*registry.policy_manager(), "view", res);
+            ++delete_statuses[res.status];
+        }
+    });
+    wait_or_abort("racing policy POST and DELETE", post, remove);
+    REQUIRE_NOTHROW(post.get());
+    REQUIRE_NOTHROW(remove.get());
+
+    INFO("POST: " << json(post_statuses).dump() << " DELETE: " << json(delete_statuses).dump());
+    for (auto &[code, count] : post_statuses) {
+        CHECK((code == 201 || code == 409));
+    }
+    for (auto &[code, count] : delete_statuses) {
+        CHECK((code == 200 || code == 404));
+    }
+    CHECK(post_statuses[201] > 0);
+    CHECK(delete_statuses[200] > 0);
+    CHECK(bad_bodies == 0);
+    if (registry.policy_manager()->module_exists("view")) {
+        registry.policy_manager()->remove_policy("view");
+    }
+    check_no_modules(registry);
+}
+
+TEST_CASE("Deleting a policy waits for the POST loading it to answer with the policy as loaded", "[policies][api][concurrency]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(ANYCAST_TAP));
+
+    GatedPolicyManager policies(&registry);
+    policies.hold_after = "default_view";
+    httplib::Response posted;
+    std::future<void> post;
+    std::future<httplib::Response> remove;
+    // declared after the futures so it is destroyed first: a failed REQUIRE releases the load before the futures
+    // wait for their threads
+    Gate gate;
+    post = hold_load_at_gate(policies, gate, [&policies, &posted] { api::post_policies(policies, DEFAULT_VIEW_POLICY, posted); });
+
+    // registered, and the POST has not answered yet: a removal now would free the policy under the POST
+    remove = std::async(std::launch::async, [&policies] {
+        httplib::Response res;
+        api::delete_policy(policies, "default_view", res);
+        return res;
+    });
+    CHECK(remove.wait_for(std::chrono::milliseconds(200)) == std::future_status::timeout);
+    gate.release();
+    wait_or_abort("the policy POST and DELETE", post, remove);
+    REQUIRE_NOTHROW(post.get());
+    auto removed = remove.get();
+
+    INFO(posted.body);
+    REQUIRE(posted.status == 201);
+    auto j = json::parse(posted.body);
+    CHECK(j["default_view"]["taps"].contains("anycast"));
+    CHECK(j["default_view"]["input"].size() == 1);
+    CHECK(j["default_view"]["modules"].contains("default_view-anycast-default_net"));
+    CHECK(removed.status == 200);
+    CHECK(policies.module_get_keys().empty());
+    check_no_modules(registry);
+}
+
+TEST_CASE("Deleting a policy that does not exist answers 404 without waiting for a policy load", "[policies][api][concurrency]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(ANYCAST_TAP));
+
+    GatedPolicyManager policies(&registry);
+    std::future<void> load;
+    std::future<httplib::Response> remove;
+    // declared after the futures so it is destroyed first: a failed REQUIRE releases the load before the futures
+    // wait for their threads
+    Gate gate;
+    load = hold_load_at_gate(policies, gate);
+
+    // the held load keeps the lock that removing a policy waits for, as a load starting a long pcap_file input does
+    remove = std::async(std::launch::async, [&policies] {
+        httplib::Response res;
+        api::delete_policy(policies, "missing", res);
+        return res;
+    });
+    CHECK(remove.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+    gate.release();
+    wait_or_abort("the policy load and the policy delete", load, remove);
+    REQUIRE_NOTHROW(load.get());
+    auto res = remove.get();
+    CHECK(res.status == 404);
+    CHECK(json::parse(res.body) == json{{"error", "policy does not exists"}});
+    policies.remove_policy("default_view");
+}
+
+TEST_CASE("Two deletes of a policy that both found it remove it once and answer 404 to the other", "[policies][api][concurrency]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(ANYCAST_TAP));
+
+    GatedPolicyManager policies(&registry);
+    REQUIRE_NOTHROW(policies.load_from_str(policy_on_shared_input("edge")));
+    std::future<void> load;
+    std::future<httplib::Response> first;
+    std::future<httplib::Response> second;
+    // declared after the futures so it is destroyed first: a failed REQUIRE releases the load before the futures
+    // wait for their threads
+    Gate gate;
+    load = hold_load_at_gate(policies, gate);
+
+    // both deletes find edge before they wait for the held load. Once it ends, one removes edge and the other must
+    // find it gone under the locks
+    auto remove = [&policies] {
+        httplib::Response res;
+        api::delete_policy(policies, "edge", res);
+        return res;
+    };
+    first = std::async(std::launch::async, remove);
+    second = std::async(std::launch::async, remove);
+    CHECK(first.wait_for(std::chrono::milliseconds(200)) == std::future_status::timeout);
+    CHECK(second.wait_for(std::chrono::seconds(0)) == std::future_status::timeout);
+    gate.release();
+    wait_or_abort("the policy load and the policy deletes", load, first, second);
+    REQUIRE_NOTHROW(load.get());
+    auto a = first.get();
+    auto b = second.get();
+    auto &missing = (a.status == 404) ? a : b;
+    CHECK(std::set<int>{a.status, b.status} == std::set<int>{200, 404});
+    CHECK(json::parse(missing.body) == json{{"error", "policy does not exists"}});
+    CHECK_FALSE(policies.module_exists("edge"));
+    policies.remove_policy("default_view");
+    CHECK(policies.module_get_keys().empty());
+    check_no_modules(registry);
+}
+
+// holds the first thread that logs a message containing pattern, without holding a lock other threads log under
+class LogGate : public spdlog::sinks::base_sink<spdlog::details::null_mutex>
+{
+    std::string _pattern;
+    std::atomic<bool> _fired{false};
+
+public:
+    std::promise<void> reached;
+    std::shared_future<void> release;
+
+    explicit LogGate(std::string pattern)
+        : _pattern(std::move(pattern))
+    {
+    }
+
+protected:
+    void sink_it_(const spdlog::details::log_msg &msg) override
+    {
+        if (std::string_view(msg.payload.data(), msg.payload.size()).find(_pattern) == std::string_view::npos || _fired.exchange(true)) {
+            return;
+        }
+        reached.set_value();
+        release.wait();
+    }
+
+    void flush_() override
+    {
+    }
+};
+
+// sends the visor logger's debug messages to a sink while in scope, and nothing below warnings to the others. Set up
+// and torn down while no input runs, since running inputs log from their own threads
+struct ScopedDebugSink {
+    std::shared_ptr<spdlog::logger> logger = spdlog::get("visor");
+    spdlog::level::level_enum level = logger->level();
+    std::vector<spdlog::level::level_enum> sink_levels;
+
+    explicit ScopedDebugSink(std::shared_ptr<spdlog::sinks::sink> sink)
+    {
+        for (auto &s : logger->sinks()) {
+            sink_levels.push_back(s->level());
+            s->set_level(spdlog::level::warn);
+        }
+        logger->sinks().push_back(std::move(sink));
+        logger->set_level(spdlog::level::debug);
+    }
+    ~ScopedDebugSink()
+    {
+        logger->set_level(level);
+        logger->sinks().pop_back();
+        for (size_t i = 0; i < sink_levels.size(); ++i) {
+            logger->sinks()[i]->set_level(sink_levels[i]);
+        }
+    }
+};
+
+// removes the policies still loaded on scope exit, stopping their inputs. Declared after a ScopedDebugSink, it runs
+// first, so a test that fails midway leaves no input logging while the sink is torn down
+struct RemovePoliciesOnExit {
+    PolicyManager &policies;
+    std::vector<std::string> names;
+    ~RemovePoliciesOnExit()
+    {
+        for (auto &name : names) {
+            try {
+                policies.remove_policy(name);
+            } catch (const std::exception &) {
+                // not loaded, or already removed by the test
+            }
+        }
+    }
+};
+
+TEST_CASE("A policy POST reusing an input outlasts the DELETE of the input's last policy", "[policies][api][concurrency]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(ANYCAST_TAP));
+
+    // holds the load of view_b once it has found the input view_a runs on, before it takes it
+    auto log_gate = std::make_shared<LogGate>("policy [view_b]: input stream already exists. reusing");
+    ScopedDebugSink debug_sink(log_gate);
+    RemovePoliciesOnExit cleanup{*registry.policy_manager(), {"view_a", "view_b"}};
+
+    REQUIRE_NOTHROW(registry.policy_manager()->load_from_str(policy_on_shared_input("view_a")));
+    std::string input_name;
+    {
+        auto [view_a, lock] = registry.policy_manager()->module_get_locked("view_a");
+        input_name = view_a->input_stream().front()->name();
+    }
+
+    httplib::Response posted;
+    std::future<void> post;
+    std::future<httplib::Response> remove;
+    // declared after the futures so it is destroyed first: a failed REQUIRE releases the load before the futures
+    // wait for their threads
+    Gate gate;
+    log_gate->release = gate.promise.get_future().share();
+    auto reached = log_gate->reached.get_future();
+    post = std::async(std::launch::async, [&registry, &posted] { api::post_policies(*registry.policy_manager(), policy_on_shared_input("view_b"), posted); });
+    wait_held(reached, post);
+
+    // view_a is the last policy on the input, so removing it now removes the input too
+    remove = std::async(std::launch::async, [&registry] {
+        httplib::Response res;
+        api::delete_policy(*registry.policy_manager(), "view_a", res);
+        return res;
+    });
+    CHECK(remove.wait_for(std::chrono::milliseconds(200)) == std::future_status::timeout);
+    gate.release();
+    wait_or_abort("the view_b POST and the view_a DELETE", post, remove);
+    REQUIRE_NOTHROW(post.get());
+    auto removed = remove.get();
+
+    INFO(posted.body);
+    CHECK(posted.status == 201);
+    CHECK(removed.status == 200);
+    REQUIRE(registry.policy_manager()->module_exists("view_b"));
+    {
+        auto [view_b, lock] = registry.policy_manager()->module_get_locked("view_b");
+        REQUIRE(view_b->input_stream().size() == 1);
+        CHECK(view_b->input_stream().front()->name() == input_name);
+        CHECK(view_b->input_stream().front()->running());
+        CHECK(view_b->running());
+    }
+    registry.policy_manager()->remove_policy("view_b");
+    check_no_modules(registry);
+}
+
+TEST_CASE("POSTs and DELETEs of policies sharing one input", "[policies][api][concurrency]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(ANYCAST_TAP));
+
+    QuietLogger quiet;
+
+    // two policies on one input, each posted and deleted in turn, so a POST often reuses the input while the other
+    // policy, its last one, is being deleted
+    auto stop_at = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    struct Answers {
+        std::map<int, int> statuses;
+        std::string error;
+    };
+    auto churn = [&registry, stop_at](const std::string &name, Answers &answers) {
+        while (std::chrono::steady_clock::now() < stop_at) {
+            httplib::Response res;
+            api::post_policies(*registry.policy_manager(), policy_on_shared_input(name), res);
+            ++answers.statuses[res.status];
+            if (res.status != 201) {
+                answers.error = res.body;
+                continue;
+            }
+            httplib::Response removed;
+            api::delete_policy(*registry.policy_manager(), name, removed);
+            ++answers.statuses[removed.status];
+            if (removed.status != 200) {
+                answers.error = removed.body;
+            }
+        }
+    };
+    Answers a_answers;
+    Answers b_answers;
+    auto a = std::async(std::launch::async, churn, std::string("view_a"), std::ref(a_answers));
+    auto b = std::async(std::launch::async, churn, std::string("view_b"), std::ref(b_answers));
+    wait_or_abort("policy POSTs and DELETEs on one input", a, b);
+    REQUIRE_NOTHROW(a.get());
+    REQUIRE_NOTHROW(b.get());
+
+    // each POST either reuses the input or, once the other policy's DELETE has removed it, creates it again
+    for (auto answers : {a_answers, b_answers}) {
+        INFO(json(answers.statuses).dump() << " " << answers.error);
+        for (auto &[code, count] : answers.statuses) {
+            CHECK((code == 201 || code == 200));
+        }
+        CHECK(answers.statuses[201] > 0);
+    }
+    check_no_modules(registry);
 }

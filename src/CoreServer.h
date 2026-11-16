@@ -32,6 +32,10 @@ void get_default_prometheus(PolicyManager &policies, httplib::Response &res);
 // with all set, names is every policy, listed beforehand: one removed since, or without the period, is skipped
 void get_policies_metrics(PolicyManager &policies, const std::vector<std::string> &names, bool all, const std::string &period, bool merge, httplib::Response &res);
 void get_policies_prometheus(PolicyManager &policies, const std::vector<std::string> &names, bool all, httplib::Response &res);
+// for a body whose Content-Type was accepted: answer 201 with the module as loaded, even if a concurrent request
+// has removed it since
+void post_taps(TapManager &taps, const std::string &body, httplib::Response &res);
+void post_policies(PolicyManager &policies, const std::string &body, httplib::Response &res);
 }
 
 class CoreServer

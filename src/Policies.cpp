@@ -15,7 +15,7 @@
 
 namespace visor {
 
-std::vector<Policy *> PolicyManager::load_from_str(const std::string &str)
+std::vector<Policy *> PolicyManager::load_from_str(const std::string &str, json *info)
 {
     if (str.empty()) {
         throw PolicyException("empty data");
@@ -32,14 +32,14 @@ std::vector<Policy *> PolicyManager::load_from_str(const std::string &str)
         throw PolicyException("unsupported version");
     }
     if (node["visor"]["policies"] && node["visor"]["policies"].IsMap()) {
-        return load(node["visor"]["policies"], true);
+        return load(node["visor"]["policies"], true, info);
     } else {
         throw PolicyException("no policies found in schema");
     }
 }
 
 // needs to be thread safe and transactional: any errors mean resources get cleaned up with no side effects
-std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool single)
+std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool single, json *info)
 {
     assert(policy_yaml.IsMap());
     assert(spdlog::get("visor"));
@@ -83,11 +83,9 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
 
         std::vector<std::string> added_inputs;
         std::vector<std::string> added_handlers;
-        // by name, like the resources policies below: once the policy is detached from an input, nothing keeps
-        // that input alive, and a concurrent removal of its last policy can free it while this load runs
+        // by name, like the resources policies below: the rollback looks each one up again
         std::vector<std::string> attached_inputs;
         std::vector<std::unique_ptr<Policy>> resources_policies;
-        // by name: once registered, a resources policy can be deleted through the API while this load runs
         std::vector<std::string> added_resources_policies;
         // Undo everything this load did, one step at a time, so that a step that fails neither skips the rest
         // nor replaces the exception that started the rollback. stop() undoes a completed start; after a
@@ -105,8 +103,7 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
             step([&] { policy_ptr->stop(); });
             for (auto &name : attached_inputs) {
                 step([&] {
-                    // under the policy map lock, as remove_policy does: no other removal can free the input
-                    // meanwhile. one that is already gone was freed after stop() detached the policy
+                    // under the policy map lock, as remove_policy does
                     std::unique_lock policies_lock(_map_mutex);
                     InputStream *input = nullptr;
                     {
@@ -118,8 +115,7 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
                         input = found->second.get();
                     }
                     input->remove_policy(policy_ptr);
-                    // a reused input outlives this load. If its last other policy was removed while this one
-                    // still counted on it, that removal left it running, so finish the teardown here
+                    // a reused input is left to its other policies, and removed only if none is left
                     if (std::find(added_inputs.begin(), added_inputs.end(), name) == added_inputs.end()) {
                         _remove_input_if_unused(name, input, policy_name);
                     }
@@ -152,6 +148,7 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
                 window_config.config_set<std::string>("_internal_tap_name", tap_name);
 
                 std::string input_stream_name = tap->get_input_name(input_config, input_filter);
+                // removals wait for the load, so an input found here is still there to reuse below
                 if (!_registry->input_manager()->module_exists(input_stream_name)) {
                     try {
                         spdlog::get("visor")->info("policy [{}]: creating input stream: {}", policy_name, input_stream_name);
@@ -161,6 +158,7 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
                         throw PolicyException(fmt::format("unable to instantiate tap '{}': {}", tap_name, e.what()));
                     }
                 } else {
+                    // a test holds the load on this message, between finding the input and taking it
                     spdlog::get("visor")->debug("policy [{}]: input stream already exists. reusing: {}", policy_name, input_stream_name);
                 }
 
@@ -218,7 +216,8 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
             }
             policy_ptr->start();
             for (auto &resources_policy : resources_policies) {
-                // attached before it is registered, and not touched after: from then on the API can delete it
+                // attached before it is registered, and not touched after: once registered, a removal after this load
+                // ends can free it
                 auto resources_name = resources_policy->name();
                 resources_policy->start();
                 resources_policy->input_stream().back()->add_policy(resources_policy.get());
@@ -230,6 +229,10 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
                     throw;
                 }
                 added_resources_policies.push_back(resources_name);
+            }
+            if (info) {
+                // before it is registered: from then on a removal can free it as soon as this load ends
+                policy_ptr->info_json((*info)[policy_name]);
             }
             module_add(std::move(policy));
         } catch (const std::runtime_error &e) {
@@ -303,6 +306,14 @@ std::string PolicyManager::_get_policy_name(YAML::const_iterator it)
 
 void PolicyManager::remove_policy(const std::string &name)
 {
+    // a missing policy is reported at once, as remove_tap does. One that exists is looked up again below, under the
+    // locks
+    if (!module_exists(name)) {
+        throw ModuleException(name, fmt::format("module name '{}' does not exist", name));
+    }
+    // after any load in progress: from finding an input to reuse until its handlers consume it, a load relies on no
+    // removal taking that input away
+    std::unique_lock load_lock(_load_mutex);
     std::unique_lock lock(_map_mutex);
     if (_map.count(name) == 0) {
         throw ModuleException(name, fmt::format("module name '{}' does not exist", name));

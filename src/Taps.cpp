@@ -12,7 +12,7 @@
 
 namespace visor {
 
-std::vector<Tap *> TapManager::load_from_str(const std::string &str)
+std::vector<Tap *> TapManager::load_from_str(const std::string &str, json *info)
 {
     if (str.empty()) {
         throw TapException("empty data");
@@ -29,14 +29,14 @@ std::vector<Tap *> TapManager::load_from_str(const std::string &str)
         throw PolicyException("unsupported version");
     }
     if (node["visor"]["taps"] && node["visor"]["taps"].IsMap()) {
-        return load(node["visor"]["taps"], true, true);
+        return load(node["visor"]["taps"], true, true, info);
     } else {
         throw TapException("no taps found in schema");
     }
 }
 
 // needs to be thread safe and transactional: any errors mean resources get cleaned up with no side effects
-std::vector<Tap *> TapManager::load(const YAML::Node &tap_yaml, bool strict, bool single)
+std::vector<Tap *> TapManager::load(const YAML::Node &tap_yaml, bool strict, bool single, json *info)
 {
     assert(tap_yaml.IsMap());
     assert(spdlog::get("visor"));
@@ -86,6 +86,9 @@ std::vector<Tap *> TapManager::load(const YAML::Node &tap_yaml, bool strict, boo
             tap_module->tags_set_yaml(it->second["tags"]);
         }
 
+        if (info) {
+            tap_module->info_json((*info)[tap_name]);
+        }
         // will throw if it already exists. nothing else to clean up
         result.push_back(tap_module.get());
         module_add(std::move(tap_module));
