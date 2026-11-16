@@ -333,6 +333,11 @@ void PolicyManager::remove_policy(const std::string &name)
 
 void PolicyManager::remove_tap(const std::string &name)
 {
+    // a missing tap is reported at once, not after a policy load in progress, which can take as long as reading a
+    // whole pcap file. A tap that exists is looked up again below, under the locks
+    if (!_registry->tap_manager()->module_exists(name)) {
+        throw ModuleException(name, fmt::format("module name '{}' does not exist", name));
+    }
     // a load adds its taps to a policy it registers only at the end, out of reach of the detach below
     std::unique_lock load_lock(_load_mutex);
     // the policy map, then the tap map, held until the tap is gone: no reader of either map sees a policy holding a

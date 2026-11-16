@@ -98,6 +98,19 @@ public:
         return retVals{_map[name].get(), std::move(lock)};
     }
 
+    // like module_get_locked, but a missing module comes back as nullptr. Checking and getting in one step leaves
+    // no room for a concurrent removal in between, which module_exists followed by module_get_locked leaves
+    auto module_find_locked(const std::string &name)
+    {
+        std::unique_lock lock(_map_mutex);
+        struct retVals {
+            ModuleType *module;
+            std::unique_lock<std::shared_mutex> lock;
+        };
+        auto found = _map.find(name);
+        return retVals{found == _map.end() ? nullptr : found->second.get(), std::move(lock)};
+    }
+
     virtual void module_remove(const std::string &name)
     {
         std::unique_lock lock(_map_mutex);
@@ -107,7 +120,8 @@ public:
         _map.erase(name);
     }
 
-    // note, this only guarantees the name existed at the time of call, watch for race conditions!
+    // note, this only guarantees the name existed at the time of call, watch for race conditions! To use the module
+    // too, look it up with module_find_locked instead
     bool module_exists(const std::string &name) const
     {
         std::shared_lock lock(_map_mutex);

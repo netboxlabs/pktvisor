@@ -55,6 +55,11 @@ target_link_libraries(visor-core
         OpenSSL::SSL
         )
 
+if(APPLE)
+    # httplib's HTTPS client, used by OpenTelemetry in CoreServer, loads root certificates from the macOS keychain
+    target_link_libraries(visor-core PUBLIC "-framework CoreFoundation" "-framework Security")
+endif()
+
 configure_file(visor_config.h.in visor_config.h @ONLY)
 
 add_subdirectory(inputs)
@@ -87,6 +92,7 @@ add_executable(unit-tests-visor-core
         tests/test_handlers.cpp
         tests/test_module_plugins.cpp
         tests/test_prometheus_serializer.cpp
+        tests/test_core_server.cpp
         )
 
 target_include_directories(unit-tests-visor-core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
