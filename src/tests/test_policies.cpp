@@ -1937,7 +1937,7 @@ TEST_CASE("Multi-policy Prometheus shared serializer", "[policies][prometheus][m
     }
 }
 
-TEST_CASE("OpenTelemetry push tags each policy's scope with orb.policy.name", "[policies][metrics][multi-policy]")
+TEST_CASE("OpenTelemetry push tags each policy's scope with pktvisor.policy.name", "[policies][metrics][multi-policy]")
 {
     CoreRegistry registry;
     visor::load_builtin_plugins(registry);
@@ -1974,7 +1974,7 @@ TEST_CASE("OpenTelemetry push tags each policy's scope with orb.policy.name", "[
         REQUIRE(it != by_scope_name.end());
         const auto &attributes = it->second->scope().attributes();
         REQUIRE(attributes.size() == 1);
-        CHECK(attributes[0].key() == "orb.policy.name");
+        CHECK(attributes[0].key() == "pktvisor.policy.name");
         CHECK(attributes[0].value().string_value() == name);
         for (const auto &attribute : attributes) {
             CHECK(attribute.key() != "policy_name");
