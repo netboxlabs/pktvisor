@@ -87,8 +87,10 @@ public:
     {
     }
 
-    std::vector<Tap *> load_from_str(const std::string &str);
-    std::vector<Tap *> load(const YAML::Node &tap_yaml, bool strict = true, bool single = false);
+    // info, if given, gets the info_json of each tap loaded, rendered before it is registered: from then on, a removal
+    // can free the taps returned
+    std::vector<Tap *> load_from_str(const std::string &str, json *info = nullptr);
+    std::vector<Tap *> load(const YAML::Node &tap_yaml, bool strict = true, bool single = false, json *info = nullptr);
     std::vector<std::string> get_input_taps_name(const YAML::Node &input_node);
 };
 

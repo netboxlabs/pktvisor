@@ -18,22 +18,24 @@ int status(const httplib::Response &res)
     return res.status == -1 ? 200 : res.status;
 }
 
-void load_tap(CoreRegistry &registry)
-{
-    registry.tap_manager()->load_from_str(R"(
+auto constexpr TAP = R"(
 visor:
   taps:
     anycast:
       input_type: mock
       config:
         iface: eth0
-)");
+)";
+
+void load_tap(CoreRegistry &registry)
+{
+    registry.tap_manager()->load_from_str(TAP);
 }
 
 // on the tap from load_tap, with an input of its own and a net handler
-void load_policy(CoreRegistry &registry, const std::string &name)
+std::string policy(const std::string &name)
 {
-    registry.policy_manager()->load_from_str(fmt::format(R"(
+    return fmt::format(R"(
 visor:
   policies:
     {0}:
@@ -48,7 +50,12 @@ visor:
           {0}_net:
             type: net
 )",
-        name));
+        name);
+}
+
+void load_policy(CoreRegistry &registry, const std::string &name)
+{
+    registry.policy_manager()->load_from_str(policy(name));
 }
 
 }
@@ -249,4 +256,64 @@ TEST_CASE("Policy metrics skip a policy without the period under __all and answe
     api::get_policies_metrics(*registry.policy_manager(), {"edge"}, false, "1", false, res);
     CHECK(res.status == 425);
     CHECK_THAT(json::parse(res.body).value("error", ""), Catch::Matchers::ContainsSubstring("has not yet accumulated"));
+}
+
+TEST_CASE("POST routes answer 201 with what they loaded and refuse a name already taken", "[api][taps][policies]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+
+    SECTION("POST /api/v1/taps")
+    {
+        httplib::Response res;
+        api::post_taps(*registry.tap_manager(), TAP, res);
+        CHECK(res.status == 201);
+        auto j = json::parse(res.body);
+        CHECK(j["anycast"]["input_type"] == "mock");
+        CHECK(j["anycast"]["config"]["iface"] == "eth0");
+
+        httplib::Response again;
+        api::post_taps(*registry.tap_manager(), TAP, again);
+        CHECK(again.status == 409);
+        CHECK(json::parse(again.body) == json{{"error", "module name 'anycast' already exists"}});
+    }
+
+    SECTION("POST /api/v1/policies")
+    {
+        REQUIRE_NOTHROW(load_tap(registry));
+        httplib::Response res;
+        api::post_policies(*registry.policy_manager(), policy("edge"), res);
+        CHECK(res.status == 201);
+        auto j = json::parse(res.body);
+        CHECK(j["edge"]["taps"].contains("anycast"));
+        CHECK(j["edge"]["input"].size() == 1);
+        CHECK(j["edge"]["modules"].contains("edge-anycast-edge_net"));
+
+        httplib::Response again;
+        api::post_policies(*registry.policy_manager(), policy("edge"), again);
+        CHECK(again.status == 409);
+        CHECK(json::parse(again.body) == json{{"error", "policy with name 'edge' already defined"}});
+
+        // a tap selector that matches no tap
+        httplib::Response unmatched;
+        api::post_policies(*registry.policy_manager(), R"(
+visor:
+  policies:
+    core:
+      kind: collection
+      input:
+        tap_selector:
+          any:
+            - site: nowhere
+        input_type: mock
+      handlers:
+        modules:
+          core_net:
+            type: net
+)",
+            unmatched);
+        CHECK(unmatched.status == 422);
+        CHECK_FALSE(registry.policy_manager()->module_exists("core"));
+    }
 }

@@ -157,11 +157,14 @@ public:
     {
     }
 
-    std::vector<Policy *> load_from_str(const std::string &str);
-    std::vector<Policy *> load(const YAML::Node &tap_yaml, bool single = false);
+    // info, if given, gets the info_json of each policy loaded, rendered during the load: once it ends, a removal can
+    // free the policies returned
+    std::vector<Policy *> load_from_str(const std::string &str, json *info = nullptr);
+    std::vector<Policy *> load(const YAML::Node &tap_yaml, bool single = false, json *info = nullptr);
     std::pair<std::unique_ptr<Policy>, std::string> create_resources_policy(InputStream *input, const Config &window_config);
-    // throws ModuleException, having changed nothing, when no policy has that name; any later failure, such as
-    // removing its handlers or inputs, throws another type
+    // removes the policy, and its inputs if no other policy uses them, after any policy load in progress. Throws
+    // ModuleException, having changed nothing, when no policy has that name; a policy already missing is reported
+    // without waiting for a load. Any later failure, such as removing its handlers or inputs, throws another type
     void remove_policy(const std::string &name);
     // detaches the tap from every policy and removes it, after any policy load in progress. Throws
     // ModuleException, having changed nothing, when no tap has that name; a tap already missing is reported without
