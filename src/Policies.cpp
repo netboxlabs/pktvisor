@@ -524,7 +524,7 @@ bool PolicyManager::opentelemetry_metrics(metrics::v1::ResourceMetrics &resource
             auto scope = resource.add_scope_metrics();
             scope->mutable_scope()->set_name("pktvisor/" + p_mname);
             auto attr = scope->mutable_scope()->add_attributes();
-            attr->set_key("policy_name");
+            attr->set_key("pktvisor.policy.name");
             attr->mutable_value()->set_string_value(p_mname);
             policy->opentelemetry_metrics(*scope);
         } catch (const std::exception &) {
