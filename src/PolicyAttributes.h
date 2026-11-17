@@ -17,8 +17,9 @@ namespace visor {
 using TargetAttributes = std::map<std::string, LabelMap>;
 
 // Reads the `attributes` mapping of a policy (`where` names it in errors). Values are the text
-// as written in the YAML, so "007" stays 007 and "True" stays True. Throws PolicyException for
-// a node that is not a map, and for a value that is not a scalar, is null or is empty.
+// as written in the YAML, so "007" stays 007 and "True" stays True. A null node is no attributes.
+// Throws PolicyException for a node that is not a map, for a key that is empty, is not valid UTF-8 or
+// does not start with an ASCII letter, and for a value that is not a scalar, is null or is empty.
 LabelMap parse_attributes(const YAML::Node &node, const std::string &where);
 
 // Reads the `attributes` of every target in input.config.targets of a policy's `input` node, each as
@@ -29,11 +30,9 @@ TargetAttributes parse_target_attributes(const YAML::Node &input_node, const std
 // A copy of a policy's `input` node with the `attributes` of every target in input.config.targets removed, the
 // node the policy builds and names its input from. Target attributes belong to the policy, not to the input: kept
 // out of its config, they are never read as typed config values, and policies that differ only in them share one
-// input. `input_node` itself is left as it is, and one that is not a map comes back as it is.
+// input. `input_node` itself is left as it is, and one with no target attributes, or that is not a map,
+// comes back as it is (a clone loses the positions that YAML errors report).
 YAML::Node without_target_attributes(const YAML::Node &input_node);
-
-// A Prometheus label name for an attribute key: every character outside [A-Za-z0-9_] becomes _.
-std::string prometheus_label_name(const std::string &key);
 
 // Throws PolicyException, naming `where` and the key, when the Prometheus name of an attribute key is in
 // `reserved` (labels pktvisor sets itself, in their Prometheus form). A collision is refused, never resolved.

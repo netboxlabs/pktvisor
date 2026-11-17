@@ -4,7 +4,6 @@
 #pragma once
 
 #include "MetricLabels.h"
-#include "PolicyAttributes.h"
 #include <fmt/format.h>
 #include <iterator>
 #include <map>
@@ -131,7 +130,7 @@ private:
         line.push_back('{');
         bool any = false;
         auto append_one = [&](const std::string &k, const std::string &v) {
-            line.append(prometheus_label_name(k));
+            append_prometheus_label_name(line, k);
             line.append("=\"");
             append_escaped(line, v);
             line.append("\",");
@@ -139,13 +138,16 @@ private:
         };
         // Static labels first, but skip any whose written name is also given per-call so the per-call
         // value wins — emitting the same label name twice in one sample is invalid exposition.
-        std::set<std::string> call_names;
-        for (const auto &kv : labels) {
-            call_names.insert(prometheus_label_name(kv.first));
-        }
-        for (const auto &[k, v] : prometheus_static_labels()) {
-            if (call_names.find(prometheus_label_name(k)) == call_names.end()) {
-                append_one(k, v);
+        const auto &statics = prometheus_static_labels();
+        if (!statics.empty()) {
+            std::set<std::string> call_names;
+            for (const auto &kv : labels) {
+                call_names.insert(prometheus_label_name(kv.first));
+            }
+            for (const auto &[k, v] : statics) {
+                if (call_names.find(prometheus_label_name(k)) == call_names.end()) {
+                    append_one(k, v);
+                }
             }
         }
         for (const auto &[k, v] : labels) {

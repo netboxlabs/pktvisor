@@ -12,16 +12,28 @@ namespace visor {
 
 LabelMap parse_attributes(const YAML::Node &node, const std::string &where)
 {
+    LabelMap attrs;
+    if (node.IsNull()) {
+        return attrs;
+    }
     if (!node.IsMap()) {
         throw PolicyException(fmt::format("attributes of {} is not a map", where));
     }
-    LabelMap attrs;
     std::map<std::string, std::string> written_as; // Prometheus name -> key
     for (const auto &kv : node) {
         if (!kv.first.IsScalar()) {
             throw PolicyException(fmt::format("attributes of {} has a key that is not a scalar", where));
         }
         const auto key = kv.first.Scalar();
+        if (key.empty()) {
+            throw PolicyException(fmt::format("attributes of {} has an empty key", where));
+        }
+        if (!is_utf8(key)) {
+            throw PolicyException(fmt::format("attributes of {} has a key that is not valid UTF-8", where));
+        }
+        if (!((key[0] >= 'A' && key[0] <= 'Z') || (key[0] >= 'a' && key[0] <= 'z'))) {
+            throw PolicyException(fmt::format("attribute '{}' of {} must start with a letter (A-Z, a-z)", key, where));
+        }
         if (!kv.second.IsScalar()) {
             throw PolicyException(fmt::format("attribute '{}' of {} must be a scalar value", key, where));
         }
@@ -36,17 +48,6 @@ LabelMap parse_attributes(const YAML::Node &node, const std::string &where)
         attrs[key] = value;
     }
     return attrs;
-}
-
-std::string prometheus_label_name(const std::string &key)
-{
-    std::string name(key);
-    for (auto &c : name) {
-        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) {
-            c = '_';
-        }
-    }
-    return name;
 }
 
 void check_reserved(const LabelMap &attrs, const std::set<std::string> &reserved, const std::string &where)
@@ -94,7 +95,10 @@ TargetAttributes parse_target_attributes(const YAML::Node &input_node, const std
             continue;
         }
         const auto &name = kv.first.Scalar();
-        targets[name] = parse_attributes(kv.second["attributes"], fmt::format("policy '{}' target '{}'", policy_name, name));
+        auto attrs = parse_attributes(kv.second["attributes"], fmt::format("policy '{}' target '{}'", policy_name, name));
+        if (!attrs.empty()) {
+            targets[name] = std::move(attrs);
+        }
     }
     return targets;
 }
@@ -103,6 +107,21 @@ YAML::Node without_target_attributes(const YAML::Node &input_node)
 {
     // a missing or malformed input is for the input manager to refuse, exactly as written
     if (!input_node || !input_node.IsMap()) {
+        return input_node;
+    }
+    // YAML::Clone gives every node a default position, so a clone would send the input's YAML errors to line 1
+    auto original_targets = targets_map(input_node);
+    if (!original_targets) {
+        return input_node;
+    }
+    bool any = false;
+    for (const auto &kv : *original_targets) {
+        if (kv.second.IsMap() && kv.second["attributes"]) {
+            any = true;
+            break;
+        }
+    }
+    if (!any) {
         return input_node;
     }
     auto cleaned = YAML::Clone(input_node);

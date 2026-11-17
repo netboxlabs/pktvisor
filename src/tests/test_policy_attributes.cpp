@@ -12,6 +12,7 @@
 #include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <fmt/format.h>
+#include <algorithm>
 #include <map>
 #include <sstream>
 #include <string>
@@ -384,6 +385,12 @@ TEST_CASE("Malformed attributes are refused at load", "[policies][attributes]")
         {"      attributes: {k: \"\"}\n", "'k'"},
         {"      attributes: {netbox.site.name: a, netbox_site_name: b}\n", "'netbox.site.name'"},
         {"      attributes: {netbox.site.name: a, netbox_site_name: b}\n", "'netbox_site_name'"},
+        {"      attributes: {\"\": a}\n", "attributes of policy 'bad_view'"},
+        {"      attributes: {1st_floor: a}\n", "'1st_floor'"},
+        {"      attributes: {_x: a}\n", "'_x'"},
+        {"      attributes: {__name__: a}\n", "'__name__'"},
+        {"      attributes: {\"a\xff\": a}\n", "UTF-8"},
+        {"      attributes: {sit\xc3\xa9: a, sit_: b}\n", "'sit_'"},
     };
     for (const auto &c : cases) {
         DYNAMIC_SECTION(c.attributes << c.key)
@@ -793,4 +800,89 @@ config:
     for (const std::string yaml : {"{input_type: pcap, config: {pcap_file: x.pcap}}", "{input_type: netprobe}", "[a, b]"}) {
         CHECK(YAML::Dump(without_target_attributes(YAML::Load(yaml))) == YAML::Dump(YAML::Load(yaml)));
     }
+}
+
+TEST_CASE("A malformed key of a target attribute is refused, naming the target", "[policies][attributes]")
+{
+    for (const std::string key : {"\"\"", "1st_floor", "_x", "__name__", "\"a\xff\""}) {
+        DYNAMIC_SECTION(key)
+        {
+            auto message = refusal("keyed_view", netprobe_policy("keyed_view", "", "{" + key + ": v}"));
+            CHECK_THAT(message, ContainsSubstring("gw1"));
+            CHECK_THAT(message, ContainsSubstring("keyed_view"));
+            CHECK(is_utf8(message));
+        }
+    }
+}
+
+TEST_CASE("A non-ASCII attribute key is written as a Prometheus label one underscore per character", "[policies][attributes]")
+{
+    CHECK(prometheus_label_name("sit\xc3\xa9") == "sit_");
+    CHECK(prometheus_label_name("a\xe2\x82\xac.b") == "a__b");
+    CHECK(prometheus_label_name("netbox.site") == "netbox_site");
+}
+
+TEST_CASE("A null attributes means none", "[policies][attributes]")
+{
+    for (const std::string attributes : {"      attributes:\n", "      attributes: ~\n"}) {
+        DYNAMIC_SECTION("policy " << attributes)
+        {
+            CoreRegistry registry;
+            visor::load_builtin_plugins(registry);
+            registry.start(nullptr);
+            REQUIRE_NOTHROW(load(registry, pcap_tap, pcap_policy("null_view", attributes)));
+            auto [policy, lock] = registry.policy_manager()->module_get_locked("null_view");
+            CHECK(policy->attributes().empty());
+        }
+    }
+    for (const std::string attributes : {"attributes:", "attributes: ~"}) {
+        DYNAMIC_SECTION("target " << attributes)
+        {
+            CoreRegistry registry;
+            visor::load_builtin_plugins(registry);
+            registry.start(nullptr);
+            REQUIRE_NOTHROW(load(registry, netprobe_tap, netprobe_policy("null_view", "", "")));
+            auto yaml = netprobe_policy("null_target_view", "", "");
+            yaml.replace(yaml.find("              target: http://localhost:1/"), 0, "              " + attributes + "\n");
+            REQUIRE_NOTHROW(registry.policy_manager()->load(YAML::Load(yaml)["visor"]["policies"]));
+            auto [policy, lock] = registry.policy_manager()->module_get_locked("null_target_view");
+            REQUIRE(feed_targets(policy));
+            std::stringstream out;
+            policy->prometheus_metrics(out);
+            CHECK_FALSE(sample_lines(out.str()).empty());
+            for (const auto &line : sample_lines(out.str())) {
+                CHECK_THAT(line, ContainsSubstring("policy=\"null_target_view\""));
+            }
+        }
+    }
+    CHECK(parse_target_attributes(YAML::Load("{config: {targets: {gw1: {target: x, attributes: ~}}}}"), "p").empty());
+}
+
+TEST_CASE("A bad input config value of a policy without target attributes reports its own position", "[policies][attributes]")
+{
+    auto yaml = netprobe_policy("pos_view", "", "");
+    const auto at = yaml.find("interval_msec: 60000");
+    yaml.replace(at, 20, "interval_msec: 99999999999999999999999");
+    const auto line = 1 + std::count(yaml.begin(), yaml.begin() + at, '\n');
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    std::string message;
+    try {
+        load(registry, netprobe_tap, yaml);
+    } catch (const std::exception &e) {
+        message = e.what();
+    }
+    INFO(message);
+    CHECK_THAT(message, ContainsSubstring(fmt::format("line {}", line)));
+    CHECK_THAT(message, !ContainsSubstring("line 1, column 1"));
+}
+
+TEST_CASE("An input node without target attributes is returned as it is", "[policies][attributes]")
+{
+    const auto raw = YAML::Load("input_type: netprobe\nconfig:\n  targets:\n    gw1:\n      target: x\n");
+    const auto same = without_target_attributes(raw);
+    CHECK(same["config"]["targets"]["gw1"].Mark().line == raw["config"]["targets"]["gw1"].Mark().line);
+    CHECK(same["config"]["targets"]["gw1"].Mark().line == 4);
+    CHECK(same.is(raw));
 }

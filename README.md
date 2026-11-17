@@ -343,12 +343,15 @@ visor:
 ```
 
 * A value is a scalar, kept as the text written: `"007"` stays `007`. Quote a value whose exact text matters. A map, a list, a
-  null or an empty value is refused.
+  null or an empty value is refused. The one exception is a backslash followed by three digits, which is rewritten as `\092`
+  and those digits (`C:\123` becomes `C:\092123`), as in every label value pktvisor exports.
+* A key starts with an ASCII letter and is valid UTF-8; an empty key, or one that starts with a digit, an underscore or any
+  other character (`__name__` included), is refused. A null `attributes` is the same as none.
 * OTLP carries each key as written. Prometheus writes each key with every character outside `[A-Za-z0-9_]` replaced by `_`,
-  so `netbox.site.name` becomes `netbox_site_name`.
+  one `_` per character, so `netbox.site.name` becomes `netbox_site_name` and `sité` becomes `sit_`.
 * The policy does not load if two keys have the same Prometheus name (`netbox.site.name` and `netbox_site_name`).
 * The policy does not load if a key is, or becomes after that conversion, a label pktvisor sets on the policy's series: `policy`,
-  `handler`, `tap`, `le`, `quantile`, `instance` when `--prom-instance` is set, or a label of one of the policy's handlers.
+  `handler`, `tap`, `le`, `quantile`, `instance` when `--prom-instance` (or `prom_instance` in the configuration file) is set, or a label of one of the policy's handlers.
   The labels of each handler are:
 
   | Handler | Own labels |
@@ -363,7 +366,9 @@ visor:
   | `pcap`, `bgp`, `input_resources` | none |
 
 * The `netprobe` handler also takes attributes per target, see its [README](src/handlers/netprobe/README.md).
-* A pktvisor version without this feature ignores `attributes` and runs the policy without them.
+* A pktvisor version without this feature ignores the policy's own `attributes` and runs the policy without them. It reads
+  per-target `attributes` as input config: an all-digit value past 2^64 makes it refuse the policy, and policies that differ
+  only in their target attributes get separate inputs.
 
 If running in a Docker container, you must mount the configuration file into the container. For example, if the configuration file
 is on the host at `/local/pktvisor/agent.yaml`, you can mount it into the container and use it with this command:

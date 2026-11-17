@@ -376,11 +376,14 @@ void get_default_prometheus(PolicyManager &policies, httplib::Response &res)
             return;
         }
         auto logger = spdlog::get("visor");
+        // the legacy shape: the policy's attributes and policy, no handler label
+        auto labels = policy->attributes();
+        labels["policy"] = "default";
         for (auto &mod : policy->modules()) {
             auto hmod = dynamic_cast<StreamHandler *>(mod);
             if (hmod) {
                 spdlog::stopwatch sw;
-                hmod->window_prometheus(ser, {{"policy", "default"}});
+                hmod->window_prometheus(ser, labels);
                 logger->debug("{} window_prometheus elapsed time: {}", hmod->name(), sw);
             }
         }
