@@ -36,11 +36,15 @@ struct UnitFixture {
     visor::InputEventProxy *proxy;
     std::unique_ptr<NetProbeStreamHandler> handler;
 
-    explicit UnitFixture(uint64_t num_periods = 1)
+    explicit UnitFixture(uint64_t num_periods = 1, std::shared_ptr<const visor::TargetAttributes> target_attributes = nullptr)
     {
         c.config_set<uint64_t>("num_periods", num_periods);
         proxy = stream.add_event_proxy(c);
         handler = std::make_unique<NetProbeStreamHandler>("netprobe-unit", proxy, &c);
+        // as a policy load does, before the handler starts
+        if (target_attributes) {
+            handler->set_target_attributes(target_attributes);
+        }
         handler->start();
     }
 
@@ -1047,4 +1051,146 @@ TEST_CASE("Net Probe TCP tests", "[netprobe][tcp]")
     netprobe_handler.metrics()->bucket(0)->to_json(j);
 
     CHECK(j["targets"]["my_target"]["attempts"] >= 0);
+}
+
+namespace {
+
+using Labels = std::map<std::string, std::string>;
+
+std::shared_ptr<const visor::TargetAttributes> gw1_attributes()
+{
+    return std::make_shared<const visor::TargetAttributes>(visor::TargetAttributes{
+        {"gw1", {{"netbox.site.name", "dc-east"}, {"netbox_id", "netbox-device-1"}}}});
+}
+
+// What a policy hands its handlers: its own attributes, then `policy` and `handler`.
+const visor::LabelMap policy_labels{{"netbox.site.name", "dc-west"}, {"policy", "p"}, {"handler", "h"}};
+
+// The attributes of every datapoint in the scope, by the target they are for.
+std::multimap<std::string, Labels> datapoints_by_target(const opentelemetry::proto::metrics::v1::ScopeMetrics &scope)
+{
+    std::multimap<std::string, Labels> points;
+    auto add = [&points](const auto &kvs) {
+        Labels labels;
+        for (const auto &kv : kvs) {
+            labels[kv.key()] = kv.value().string_value();
+        }
+        points.emplace(labels["target"], labels);
+    };
+    for (const auto &metric : scope.metrics()) {
+        for (const auto &point : metric.gauge().data_points()) {
+            add(point.attributes());
+        }
+        for (const auto &point : metric.summary().data_points()) {
+            add(point.attributes());
+        }
+        for (const auto &point : metric.histogram().data_points()) {
+            add(point.attributes());
+        }
+    }
+    return points;
+}
+
+// gw1's series carry its own attributes over the policy's; gw2's only the policy's.
+void check_target_datapoints(const opentelemetry::proto::metrics::v1::ScopeMetrics &scope)
+{
+    auto points = datapoints_by_target(scope);
+    REQUIRE(points.count("gw1") > 0);
+    REQUIRE(points.count("gw2") > 0);
+    CHECK(points.size() == points.count("gw1") + points.count("gw2"));
+    for (auto [it, end] = points.equal_range("gw1"); it != end; ++it) {
+        const auto &labels = it->second;
+        CHECK(labels.at("netbox.site.name") == "dc-east");
+        CHECK(labels.at("netbox_id") == "netbox-device-1");
+        CHECK(labels.at("policy") == "p");
+        CHECK(labels.at("handler") == "h");
+    }
+    for (auto [it, end] = points.equal_range("gw2"); it != end; ++it) {
+        const auto &labels = it->second;
+        CHECK(labels.at("netbox.site.name") == "dc-west");
+        CHECK(labels.count("netbox_id") == 0);
+        CHECK(labels.at("policy") == "p");
+        CHECK(labels.at("handler") == "h");
+    }
+}
+
+// The same in Prometheus output, where netbox.site.name is written netbox_site_name.
+void check_target_samples(const std::string &text)
+{
+    size_t gw1 = 0;
+    size_t gw2 = 0;
+    std::istringstream in(text);
+    for (std::string line; std::getline(in, line);) {
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+        CHECK(line.find("netbox.site.name") == std::string::npos);
+        CHECK(line.find("policy=\"p\"") != std::string::npos);
+        if (line.find("target=\"gw1\"") != std::string::npos) {
+            ++gw1;
+            CHECK(line.find("netbox_site_name=\"dc-east\"") != std::string::npos);
+            CHECK(line.find("netbox_id=\"netbox-device-1\"") != std::string::npos);
+        } else if (line.find("target=\"gw2\"") != std::string::npos) {
+            ++gw2;
+            CHECK(line.find("netbox_site_name=\"dc-west\"") != std::string::npos);
+            CHECK(line.find("netbox_id=") == std::string::npos);
+        } else {
+            FAIL("a sample for neither target: " << line);
+        }
+    }
+    CHECK(gw1 > 0);
+    CHECK(gw2 > 0);
+}
+
+void check_target_series(const NetProbeMetricsBucket &bucket)
+{
+    opentelemetry::proto::metrics::v1::ScopeMetrics scope;
+    timespec start_ts{0, 0};
+    timespec end_ts{60, 0};
+    bucket.to_opentelemetry(scope, start_ts, end_ts, policy_labels);
+    check_target_datapoints(scope);
+
+    visor::PrometheusSerializer ser;
+    bucket.to_prometheus(ser, policy_labels);
+    check_target_samples(ser.finalize());
+}
+
+}
+
+TEST_CASE("Per-target attributes override the policy's on that target's series only", "[netprobe][attributes]")
+{
+    UnitFixture fx(1, gw1_attributes());
+    fx.manager()->live_bucket()->process_attempts(false, "gw1");
+    fx.manager()->live_bucket()->process_attempts(false, "gw2");
+
+    check_target_series(*fx.manager()->bucket(0));
+}
+
+TEST_CASE("Per-target attributes survive a merge", "[netprobe][attributes]")
+{
+    UnitFixture fx_a(1, gw1_attributes());
+    UnitFixture fx_b(1, gw1_attributes());
+    fx_a.manager()->live_bucket()->process_attempts(false, "gw1");
+    fx_b.manager()->live_bucket()->process_attempts(false, "gw2");
+
+    // as a policy merges like handlers: the first merge starts a fresh bucket, the next merges into it
+    auto merged = fx_a.handler->merge(nullptr, 0, false, false);
+    REQUIRE(merged);
+    CHECK_FALSE(fx_b.handler->merge(merged.get(), 0, false, false));
+
+    check_target_series(static_cast<const NetProbeMetricsBucket &>(*merged));
+}
+
+TEST_CASE("Per-target attributes reach the bucket a period shift opens", "[netprobe][attributes]")
+{
+    UnitFixture fx(2, gw1_attributes());
+    timespec later;
+    timespec_get(&later, TIME_UTC);
+    later.tv_sec += 61;
+    fx.handler->check_period_shift(later);
+    REQUIRE(fx.manager()->current_periods() == 2);
+    fx.manager()->live_bucket()->process_attempts(false, "gw1");
+    fx.manager()->live_bucket()->process_attempts(false, "gw2");
+
+    check_target_series(*fx.manager()->bucket(0));
 }

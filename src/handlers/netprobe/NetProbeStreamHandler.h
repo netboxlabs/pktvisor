@@ -104,13 +104,27 @@ protected:
     size_t _topn_count{10};
     uint64_t _topn_percentile_threshold{0};
 
+    // The attributes of each target, from the policy. Shared by every bucket of the window and never
+    // changed once set, so the bucket's lock is all that reading it needs.
+    std::shared_ptr<const TargetAttributes> _target_attributes;
+
     // Return the metrics for `target`, creating it (with the current top-N settings applied to its
     // TopN metrics) if it doesn't exist yet. Callers must already hold _mutex.
     Target &get_or_create_target(const std::string &target);
 
+    // The labels of `target`'s series: add_labels (the policy's attributes, policy, handler and tap), the
+    // target's attributes over them, and `target` itself last. Callers must already hold _mutex.
+    Metric::LabelMap labels_for_target(const Metric::LabelMap &add_labels, const std::string &target) const;
+
 public:
     NetProbeMetricsBucket()
     {
+    }
+
+    void set_target_attributes(std::shared_ptr<const TargetAttributes> attrs)
+    {
+        std::unique_lock lock(_mutex);
+        _target_attributes = std::move(attrs);
     }
 
     // visor::AbstractMetricsBucket
@@ -147,6 +161,13 @@ class NetProbeMetricsManager final : public visor::AbstractMetricsManager<NetPro
 {
     typedef TransactionManager<std::string, NetProbeTransaction, std::hash<std::string>> NetProbeTransactionManager;
     std::unique_ptr<NetProbeTransactionManager> _request_reply_manager;
+    // set before the handler starts, then only read
+    std::shared_ptr<const TargetAttributes> _target_attributes;
+
+    void on_new_bucket(NetProbeMetricsBucket &bucket) override
+    {
+        bucket.set_target_attributes(_target_attributes);
+    }
 
 public:
     NetProbeMetricsManager(const Configurable *window_config)
@@ -159,6 +180,14 @@ public:
     {
         // Clear all old transactions
         _request_reply_manager->clear();
+    }
+
+    // Before the handler starts, while the live bucket is the only one: it gets the map here, and each bucket a
+    // period shift opens gets it in on_new_bucket. A merge carries it to the merged bucket.
+    void set_target_attributes(std::shared_ptr<const TargetAttributes> attrs)
+    {
+        _target_attributes = attrs;
+        live_bucket()->set_target_attributes(std::move(attrs));
     }
 
     void set_xact_ttl(uint32_t ttl)
@@ -216,6 +245,11 @@ public:
     std::vector<std::string> own_label_names() const override
     {
         return {"target", "status_code", "rcode"};
+    }
+
+    void set_target_attributes(std::shared_ptr<const TargetAttributes> attrs) override
+    {
+        _metrics->set_target_attributes(std::move(attrs));
     }
 
     std::string schema_key() const override

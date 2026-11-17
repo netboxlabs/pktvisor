@@ -295,6 +295,7 @@ private:
         _metric_buckets[0]->configure_groups(_groups);
         _metric_buckets[0]->set_start_tstamp(stamp);
         _metric_buckets[0]->update_topn_metrics(_topn_count, _topn_percentile_threshold);
+        on_new_bucket(*_metric_buckets[0]);
         if (_recorded_stream) {
             _metric_buckets[0]->set_recorded_stream();
         }
@@ -388,6 +389,14 @@ protected:
      * @param expiring_bucket pointer to bucket that is expiring, or nullptr if there was none (since shift may occur that does not expire a bucket)
      */
     virtual void on_period_shift([[maybe_unused]] timespec stamp, [[maybe_unused]] const MetricsBucketClass *maybe_expiring_bucket)
+    {
+    }
+
+    /**
+     * call back for the live bucket a period shift opens, made under the bucket lock before any event or export reaches
+     * it. The first bucket is made in the constructor, before a derived class exists, so this is not called for it.
+     */
+    virtual void on_new_bucket([[maybe_unused]] MetricsBucketClass &bucket)
     {
     }
 

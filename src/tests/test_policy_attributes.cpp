@@ -6,6 +6,7 @@
 #include "PrometheusSerializer.h"
 #include "handlers/flow/FlowStreamHandler.h"
 #include "handlers/net/v1/NetStreamHandler.h"
+#include "handlers/netprobe/NetProbeStreamHandler.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
@@ -532,4 +533,157 @@ TEST_CASE("A refused policy leaves nothing behind", "[policies][attributes]")
     CHECK_FALSE(registry.policy_manager()->module_exists("refused_view"));
     CHECK_FALSE(registry.handler_manager()->module_exists("refused_view-flows-the_handler"));
     CHECK(registry.input_manager()->module_get_keys().empty());
+}
+
+namespace {
+
+// A netprobe policy probing gw1 and gw2. Either attributes argument is a YAML flow map, or empty for none.
+std::string netprobe_policy(const std::string &name, const std::string &policy_attributes, const std::string &gw1_attributes)
+{
+    return fmt::format(R"(
+visor:
+  policies:
+    {}:
+      kind: collection
+      {}
+      input:
+        tap: probes
+        input_type: netprobe
+        config:
+          test_type: http
+          interval_msec: 60000
+          targets:
+            gw1:
+              target: http://localhost:1/
+              {}
+            gw2:
+              target: http://localhost:1/
+      handlers:
+        modules:
+          probe:
+            type: netprobe
+)",
+        name,
+        policy_attributes.empty() ? "" : "attributes: " + policy_attributes,
+        gw1_attributes.empty() ? "" : "attributes: " + gw1_attributes);
+}
+
+// Loads a policy that must be refused, and returns the refusal. Nothing the load made may be left behind.
+std::string refusal(const std::string &policy_name, const std::string &policy_yaml)
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    std::string message;
+    try {
+        load(registry, netprobe_tap, policy_yaml);
+    } catch (const PolicyException &e) {
+        message = e.what();
+    }
+    CHECK_FALSE(registry.policy_manager()->module_exists(policy_name));
+    CHECK_FALSE(registry.handler_manager()->module_exists(policy_name + "-probes-probe"));
+    CHECK(registry.input_manager()->module_get_keys().empty());
+    return message;
+}
+
+}
+
+TEST_CASE("Netprobe target attributes are parsed from the raw policy YAML", "[policies][attributes]")
+{
+    auto input = YAML::Load(R"(
+input_type: netprobe
+config:
+  test_type: ping
+  targets:
+    gw1:
+      target: 192.0.2.1
+      attributes:
+        zero: "007"
+        flag: True
+    gw2:
+      target: 192.0.2.2
+)");
+    CHECK(parse_target_attributes(input, "probe_view") == TargetAttributes{{"gw1", {{"zero", "007"}, {"flag", "True"}}}});
+
+    CHECK(parse_target_attributes(YAML::Load("input_type: netprobe"), "probe_view").empty());
+    CHECK(parse_target_attributes(YAML::Load("{input_type: pcap, config: {pcap_file: x.pcap}}"), "probe_view").empty());
+
+    std::string message;
+    try {
+        parse_target_attributes(YAML::Load("{config: {targets: {gw1: {target: 192.0.2.1, attributes: [a, b]}}}}"), "probe_view");
+    } catch (const PolicyException &e) {
+        message = e.what();
+    }
+    CHECK_THAT(message, ContainsSubstring("probe_view"));
+    CHECK_THAT(message, ContainsSubstring("gw1"));
+}
+
+TEST_CASE("A target attribute named after a pktvisor label is refused", "[policies][attributes]")
+{
+    for (const std::string key : {"target", "policy", "rcode", "status_code", "le"}) {
+        DYNAMIC_SECTION(key)
+        {
+            auto message = refusal("target_view", netprobe_policy("target_view", "", "{" + key + ": v}"));
+            CHECK_THAT(message, ContainsSubstring("'" + key + "'"));
+            CHECK_THAT(message, ContainsSubstring("gw1"));
+            CHECK_THAT(message, ContainsSubstring("target_view"));
+        }
+    }
+}
+
+TEST_CASE("A target attribute written as the Prometheus label of another policy attribute is refused", "[policies][attributes]")
+{
+    for (const auto &[policy_key, target_key] : std::vector<std::pair<std::string, std::string>>{
+             {"netbox.site.name", "netbox_site_name"},
+             {"netbox_site_name", "netbox.site.name"}}) {
+        DYNAMIC_SECTION(policy_key << " / " << target_key)
+        {
+            auto message = refusal("clash_view", netprobe_policy("clash_view", "{" + policy_key + ": dc-west}", "{" + target_key + ": dc-east}"));
+            CHECK_THAT(message, ContainsSubstring("'" + policy_key + "'"));
+            CHECK_THAT(message, ContainsSubstring("'" + target_key + "'"));
+            CHECK_THAT(message, ContainsSubstring("gw1"));
+            CHECK_THAT(message, ContainsSubstring("clash_view"));
+        }
+    }
+}
+
+TEST_CASE("A netprobe policy's target attributes reach that target's series", "[policies][attributes][prometheus]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(load(registry, netprobe_tap, netprobe_policy("probe_view", "{netbox.site.name: dc-west}", R"({netbox.site.name: dc-east, netbox_id: netbox-device-1, device_ip: 192.0.2.1, zero: "007"})")));
+
+    auto [policy, lock] = registry.policy_manager()->module_get_locked("probe_view");
+    bool fed = false;
+    for (auto mod : policy->modules()) {
+        if (auto probe = dynamic_cast<handler::netprobe::NetProbeStreamHandler *>(mod)) {
+            auto metrics = const_cast<handler::netprobe::NetProbeMetricsManager *>(probe->metrics());
+            metrics->process_failure(input::netprobe::ErrorType::Timeout, "gw1");
+            metrics->process_failure(input::netprobe::ErrorType::Timeout, "gw2");
+            fed = true;
+        }
+    }
+    REQUIRE(fed);
+
+    std::stringstream out;
+    policy->prometheus_metrics(out);
+    size_t gw1 = 0;
+    size_t gw2 = 0;
+    for (const auto &line : sample_lines(out.str())) {
+        CHECK_THAT(line, ContainsSubstring("policy=\"probe_view\""));
+        if (line.find("target=\"gw1\"") != std::string::npos) {
+            ++gw1;
+            CHECK_THAT(line, ContainsSubstring("netbox_site_name=\"dc-east\""));
+            CHECK_THAT(line, ContainsSubstring("netbox_id=\"netbox-device-1\""));
+            CHECK_THAT(line, ContainsSubstring("device_ip=\"192.0.2.1\""));
+            CHECK_THAT(line, ContainsSubstring("zero=\"007\""));
+        } else if (line.find("target=\"gw2\"") != std::string::npos) {
+            ++gw2;
+            CHECK_THAT(line, ContainsSubstring("netbox_site_name=\"dc-west\""));
+            CHECK(line.find("netbox_id=") == std::string::npos);
+        }
+    }
+    CHECK(gw1 > 0);
+    CHECK(gw2 > 0);
 }

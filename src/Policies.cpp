@@ -10,7 +10,6 @@
 #include "PrometheusSerializer.h"
 #include "Taps.h"
 #include <algorithm>
-#include <set>
 #include <fmt/format.h>
 #include <spdlog/spdlog.h>
 #include <spdlog/stopwatch.h>
@@ -86,6 +85,9 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
         if (it->second["attributes"]) {
             policy_ptr->set_attributes(parse_attributes(it->second["attributes"], fmt::format("policy '{}'", policy_name)));
         }
+        // the attributes of each netprobe target, read from the YAML as written like the policy's own; the input
+        // has them in its config too, but typed (Configurable reads "007" as 7)
+        auto target_attributes = std::make_shared<const TargetAttributes>(parse_target_attributes(input_node, policy_name));
 
         std::vector<std::string> added_inputs;
         std::vector<std::string> added_handlers;
@@ -192,18 +194,18 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
 
                 // the labels pktvisor sets itself, so an attribute cannot replace one: the policy's own, the static
                 // ones, and those of every handler it runs. A refusal rolls the load back like any other failure
-                std::set<std::string> reserved{"policy", "handler", "tap", "le", "quantile"};
-                for (const auto &[label, value] : prometheus_static_labels()) {
-                    reserved.insert(prometheus_label_name(label));
-                }
+                std::vector<std::string> handler_labels;
                 for (const auto &m : handler_modules) {
-                    for (const auto &label : m->own_label_names()) {
-                        reserved.insert(prometheus_label_name(label));
-                    }
+                    auto names = m->own_label_names();
+                    handler_labels.insert(handler_labels.end(), names.begin(), names.end());
                 }
+                auto reserved = reserved_label_names(handler_labels);
                 check_reserved(policy_ptr->attributes(), reserved, fmt::format("policy '{}'", policy_name));
+                check_target_attributes(*target_attributes, policy_ptr->attributes(), reserved, policy_name);
 
                 for (auto &m : handler_modules) {
+                    // before the handler starts, and never changed after
+                    m->set_target_attributes(target_attributes);
                     auto hname = m->name();
                     _registry->handler_manager()->module_add(std::move(m));
                     added_handlers.push_back(hname);

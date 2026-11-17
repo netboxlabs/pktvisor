@@ -58,4 +58,61 @@ void check_reserved(const LabelMap &attrs, const std::set<std::string> &reserved
     }
 }
 
+TargetAttributes parse_target_attributes(const YAML::Node &input_node, const std::string &policy_name)
+{
+    // each level is checked before it is indexed: yaml-cpp throws on a type check of a key that is not there
+    TargetAttributes targets;
+    if (!input_node || !input_node.IsMap()) {
+        return targets;
+    }
+    const auto config = input_node["config"];
+    if (!config || !config.IsMap()) {
+        return targets;
+    }
+    const auto config_targets = config["targets"];
+    if (!config_targets || !config_targets.IsMap()) {
+        return targets;
+    }
+    for (const auto &kv : config_targets) {
+        // a target that is not a map of its own is the input's to refuse
+        if (!kv.first.IsScalar() || !kv.second.IsMap() || !kv.second["attributes"]) {
+            continue;
+        }
+        const auto &name = kv.first.Scalar();
+        targets[name] = parse_attributes(kv.second["attributes"], fmt::format("policy '{}' target '{}'", policy_name, name));
+    }
+    return targets;
+}
+
+std::set<std::string> reserved_label_names(const std::vector<std::string> &handler_labels)
+{
+    std::set<std::string> reserved{"policy", "handler", "tap", "le", "quantile"};
+    for (const auto &[label, value] : prometheus_static_labels()) {
+        reserved.insert(prometheus_label_name(label));
+    }
+    for (const auto &label : handler_labels) {
+        reserved.insert(prometheus_label_name(label));
+    }
+    return reserved;
+}
+
+void check_target_attributes(const TargetAttributes &targets, const LabelMap &policy_attrs, const std::set<std::string> &reserved, const std::string &policy_name)
+{
+    std::map<std::string, std::string> policy_keys; // Prometheus name -> key; parse_attributes keeps them one to one
+    for (const auto &[key, value] : policy_attrs) {
+        policy_keys.emplace(prometheus_label_name(key), key);
+    }
+    for (const auto &[target, attrs] : targets) {
+        auto where = fmt::format("policy '{}' target '{}'", policy_name, target);
+        check_reserved(attrs, reserved, where);
+        for (const auto &[key, value] : attrs) {
+            auto name = prometheus_label_name(key);
+            auto found = policy_keys.find(name);
+            if (found != policy_keys.end() && found->second != key) {
+                throw PolicyException(fmt::format("attribute '{}' of {} and attribute '{}' of policy '{}' are both written as the Prometheus label '{}'", key, where, found->second, policy_name, name));
+            }
+        }
+    }
+}
+
 }

@@ -144,6 +144,11 @@ void NetProbeMetricsBucket::specialized_merge(const AbstractMetricsBucket &o, Me
     std::shared_lock r_lock(other._mutex);
     std::unique_lock w_lock(_mutex);
 
+    // a merge starts from a fresh bucket, which has no target attributes until a bucket of the window hands it them
+    if (!_target_attributes) {
+        _target_attributes = other._target_attributes;
+    }
+
     for (const auto &target : other._targets_metrics) {
         const auto &targetId = target.first;
         get_or_create_target(targetId);
@@ -184,14 +189,26 @@ void NetProbeMetricsBucket::specialized_merge(const AbstractMetricsBucket &o, Me
     }
 }
 
+Metric::LabelMap NetProbeMetricsBucket::labels_for_target(const Metric::LabelMap &add_labels, const std::string &target) const
+{
+    auto labels = add_labels;
+    if (_target_attributes) {
+        if (auto attrs = _target_attributes->find(target); attrs != _target_attributes->end()) {
+            for (const auto &[key, value] : attrs->second) {
+                labels[key] = value;
+            }
+        }
+    }
+    labels["target"] = target;
+    return labels;
+}
+
 void NetProbeMetricsBucket::to_prometheus(PrometheusSerializer &ser, Metric::LabelMap add_labels) const
 {
     std::shared_lock r_lock(_mutex);
 
     for (const auto &target : _targets_metrics) {
-        auto target_labels = add_labels;
-        auto targetId = target.first;
-        target_labels["target"] = targetId;
+        auto target_labels = labels_for_target(add_labels, target.first);
 
         if (group_enabled(group::NetProbeMetrics::Counters)) {
             target.second->attempts.to_prometheus(ser, target_labels);
@@ -266,9 +283,7 @@ void NetProbeMetricsBucket::to_opentelemetry(metrics::v1::ScopeMetrics &scope, t
     std::shared_lock r_lock(_mutex);
 
     for (const auto &target : _targets_metrics) {
-        auto target_labels = add_labels;
-        auto targetId = target.first;
-        target_labels["target"] = targetId;
+        auto target_labels = labels_for_target(add_labels, target.first);
 
         if (group_enabled(group::NetProbeMetrics::Counters)) {
             target.second->attempts.to_opentelemetry(scope, start_ts, end_ts, target_labels);
