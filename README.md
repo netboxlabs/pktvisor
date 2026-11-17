@@ -318,6 +318,53 @@ visor:
             type: dns
 ```
 
+#### Policy attributes
+
+A policy can have an `attributes` mapping, next to `kind`, `input`, `handlers` and `config`. Every series of every handler
+of the policy carries these attributes, in the OpenTelemetry (OTLP) push and in the Prometheus output. The JSON output
+does not carry them.
+
+```yaml
+visor:
+  policies:
+    mysocket:
+      kind: collection
+      attributes:
+        netbox.site.name: dc-west
+        netbox.tenant.name: acme
+        netbox_id: "007"
+      input:
+        tap: unix_dnstap
+        input_type: dnstap
+      handlers:
+        modules:
+          default_dns:
+            type: dns
+```
+
+* A value is a scalar, kept as the text written: `"007"` stays `007`. Quote a value whose exact text matters. A map, a list, a
+  null or an empty value is refused.
+* OTLP carries each key as written. Prometheus writes each key with every character outside `[A-Za-z0-9_]` replaced by `_`,
+  so `netbox.site.name` becomes `netbox_site_name`.
+* The policy does not load if two keys have the same Prometheus name (`netbox.site.name` and `netbox_site_name`).
+* The policy does not load if a key is, or becomes after that conversion, a label pktvisor sets on the policy's series: `policy`,
+  `handler`, `tap`, `le`, `quantile`, `instance` when `--prom-instance` is set, or a label of one of the policy's handlers.
+  The labels of each handler are:
+
+  | Handler | Own labels |
+  |---|---|
+  | `net` v1 | `lat`, `lon`, `geo_loc`, `asn`, `ipv4`, `ipv6` |
+  | `net` v2 | `direction`, `lat`, `lon`, `geo_loc`, `asn`, `ipv4`, `ipv6` |
+  | `dns` v1 | `lat`, `lon`, `geo_loc`, `asn`, `ecs`, `qname`, `port`, `qtype`, `rcode` |
+  | `dns` v2 | `direction`, `lat`, `lon`, `geo_loc`, `asn`, `ecs`, `qname`, `port`, `qtype`, `rcode` |
+  | `dhcp` | `client`, `server` |
+  | `flow` | `device`, `device_interface`, `lat`, `lon`, `conversation`, `geo_loc`, `asn`, `ip`, `port`, `ip_port`, `dscp`, `ecn`, `interface` |
+  | `netprobe` | `target`, `status_code`, `rcode` |
+  | `pcap`, `bgp`, `input_resources` | none |
+
+* The `netprobe` handler also takes attributes per target, see its [README](src/handlers/netprobe/README.md).
+* A pktvisor version without this feature ignores `attributes` and runs the policy without them.
+
 If running in a Docker container, you must mount the configuration file into the container. For example, if the configuration file
 is on the host at `/local/pktvisor/agent.yaml`, you can mount it into the container and use it with this command:
 
