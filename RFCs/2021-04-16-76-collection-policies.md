@@ -25,7 +25,7 @@ the Prometheus output:
       kind: collection
       attributes:
         netbox.site.name: dc-west
-        netbox_id: "007"
+        netbox.device.asset_tag: "007"
 ```
 
 Values are scalars kept as the text written (a backslash followed by three digits is rewritten, as in every exported label

@@ -332,7 +332,7 @@ visor:
       attributes:
         netbox.site.name: dc-west
         netbox.tenant.name: acme
-        netbox_id: "007"
+        netbox.device.asset_tag: "007"
       input:
         tap: unix_dnstap
         input_type: dnstap
