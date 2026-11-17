@@ -5,6 +5,7 @@
 #pragma once
 
 #include "MetricLabels.h"
+#include <set>
 #include <string>
 #include <yaml-cpp/yaml.h>
 
@@ -17,5 +18,9 @@ LabelMap parse_attributes(const YAML::Node &node, const std::string &where);
 
 // A Prometheus label name for an attribute key: every character outside [A-Za-z0-9_] becomes _.
 std::string prometheus_label_name(const std::string &key);
+
+// Throws PolicyException, naming `where` and the key, when the Prometheus name of an attribute key is in
+// `reserved` (labels pktvisor sets itself, in their Prometheus form). A collision is refused, never resolved.
+void check_reserved(const LabelMap &attrs, const std::set<std::string> &reserved, const std::string &where);
 
 }

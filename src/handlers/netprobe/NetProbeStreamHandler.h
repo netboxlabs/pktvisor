@@ -213,6 +213,11 @@ public:
     ~NetProbeStreamHandler() = default;
 
     // visor::AbstractModule
+    std::vector<std::string> own_label_names() const override
+    {
+        return {"target", "status_code", "rcode"};
+    }
+
     std::string schema_key() const override
     {
         return NET_PROBE_SCHEMA;

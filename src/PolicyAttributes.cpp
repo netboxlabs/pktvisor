@@ -48,4 +48,14 @@ std::string prometheus_label_name(const std::string &key)
     return name;
 }
 
+void check_reserved(const LabelMap &attrs, const std::set<std::string> &reserved, const std::string &where)
+{
+    for (const auto &[key, value] : attrs) {
+        auto name = prometheus_label_name(key);
+        if (reserved.count(name)) {
+            throw PolicyException(fmt::format("attribute '{}' of {} collides with the label '{}' that pktvisor sets itself", key, where, name));
+        }
+    }
+}
+
 }

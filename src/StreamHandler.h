@@ -16,6 +16,8 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <sstream>
+#include <string>
+#include <vector>
 
 namespace visor {
 
@@ -70,6 +72,13 @@ public:
     const std::string &version() const
     {
         return _version;
+    }
+
+    // Every label key this handler writes into a label map (its labels["..."] keys, plus the item_key of every
+    // TopN it builds). A policy attribute whose Prometheus name is one of these is refused at load.
+    virtual std::vector<std::string> own_label_names() const
+    {
+        return {};
     }
 
     virtual void window_json(json &j, uint64_t period, bool merged) = 0;

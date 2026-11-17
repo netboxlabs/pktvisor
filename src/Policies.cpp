@@ -6,9 +6,11 @@
 #include "CoreRegistry.h"
 #include "HandlerManager.h"
 #include "InputStreamManager.h"
+#include "PolicyAttributes.h"
 #include "PrometheusSerializer.h"
 #include "Taps.h"
 #include <algorithm>
+#include <set>
 #include <fmt/format.h>
 #include <spdlog/spdlog.h>
 #include <spdlog/stopwatch.h>
@@ -187,6 +189,19 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
                     policy_ptr->add_module(handler_module.get());
                     handler_modules.emplace_back(std::move(handler_module));
                 }
+
+                // the labels pktvisor sets itself, so an attribute cannot replace one: the policy's own, the static
+                // ones, and those of every handler it runs. A refusal rolls the load back like any other failure
+                std::set<std::string> reserved{"policy", "handler", "tap", "le", "quantile"};
+                for (const auto &[label, value] : prometheus_static_labels()) {
+                    reserved.insert(prometheus_label_name(label));
+                }
+                for (const auto &m : handler_modules) {
+                    for (const auto &label : m->own_label_names()) {
+                        reserved.insert(prometheus_label_name(label));
+                    }
+                }
+                check_reserved(policy_ptr->attributes(), reserved, fmt::format("policy '{}'", policy_name));
 
                 for (auto &m : handler_modules) {
                     auto hname = m->name();

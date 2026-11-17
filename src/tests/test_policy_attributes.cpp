@@ -400,3 +400,136 @@ TEST_CASE("Malformed attributes are refused at load", "[policies][attributes]")
         }
     }
 }
+
+namespace {
+
+constexpr auto flow_tap = R"(
+visor:
+  taps:
+    flows:
+      input_type: flow
+)";
+
+constexpr auto netprobe_tap = R"(
+visor:
+  taps:
+    probes:
+      input_type: netprobe
+)";
+
+std::string handler_policy(const std::string &name, const std::string &tap, const std::string &input_type, const std::string &input_config, const std::string &handler_type, const std::string &attributes)
+{
+    return fmt::format(R"(
+visor:
+  policies:
+    {}:
+      kind: collection
+      attributes:
+        {}
+      input:
+        tap: {}
+        input_type: {}
+        config:
+{}
+      handlers:
+        modules:
+          the_handler:
+            type: {}
+)",
+        name, attributes, tap, input_type, input_config, handler_type);
+}
+
+constexpr auto flow_input = R"(          flow_type: sflow
+          pcap_file: tests/fixtures/ecmp.pcap)";
+
+constexpr auto netprobe_input = R"(          test_type: http
+          targets:
+            one:
+              target: http://localhost:1/)";
+
+constexpr auto pcap_input = R"(          pcap_file: tests/fixtures/dns_ipv4_udp.pcap)";
+
+}
+
+TEST_CASE("An attribute named after a label pktvisor sets is refused", "[policies][attributes]")
+{
+    struct Case {
+        std::string key;
+        std::string tap_yaml;
+        std::string tap;
+        std::string input_type;
+        std::string input_config;
+        std::string handler;
+    };
+    const std::string pcap = "pcap";
+    std::vector<Case> cases;
+    for (const std::string key : {"policy", "handler", "tap", "le", "quantile"}) {
+        cases.push_back({key, pcap_tap, "recorded", pcap, pcap_input, "net"});
+    }
+    // direction is a label of the 2.0 handlers only
+    const std::string v2 = "\n            require_version: \"2.0\"";
+    cases.push_back({"direction", pcap_tap, "recorded", pcap, pcap_input, "net" + v2});
+    cases.push_back({"direction", pcap_tap, "recorded", pcap, pcap_input, "dns" + v2});
+    cases.push_back({"lat", pcap_tap, "recorded", pcap, pcap_input, "dns"});
+    cases.push_back({"device", flow_tap, "flows", "flow", flow_input, "flow"});
+    cases.push_back({"device.interface", flow_tap, "flows", "flow", flow_input, "flow"});
+    cases.push_back({"target", netprobe_tap, "probes", "netprobe", netprobe_input, "netprobe"});
+    cases.push_back({"status_code", netprobe_tap, "probes", "netprobe", netprobe_input, "netprobe"});
+    for (const auto &c : cases) {
+        DYNAMIC_SECTION(c.handler << " handler: " << c.key)
+        {
+            CoreRegistry registry;
+            visor::load_builtin_plugins(registry);
+            registry.start(nullptr);
+            std::string message;
+            try {
+                load(registry, c.tap_yaml, handler_policy("reserved_view", c.tap, c.input_type, c.input_config, c.handler, c.key + ": v"));
+            } catch (const PolicyException &e) {
+                message = e.what();
+            }
+            CHECK_THAT(message, ContainsSubstring("'" + c.key + "'"));
+            CHECK_THAT(message, ContainsSubstring("reserved_view"));
+            CHECK_FALSE(registry.policy_manager()->module_exists("reserved_view"));
+        }
+    }
+}
+
+TEST_CASE("Attributes that no label pktvisor sets are accepted", "[policies][attributes]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(load(registry, flow_tap, handler_policy("free_view", "flows", "flow", flow_input, "flow", R"(netbox.site.name: dc
+        netbox_id: "12"
+        device_ip: 10.0.0.1)")));
+    CHECK(registry.policy_manager()->module_exists("free_view"));
+}
+
+TEST_CASE("An attribute named after a static label is refused", "[policies][attributes]")
+{
+    Metric::reset_static_labels();
+    Metric::add_static_label("instance_id", "x");
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    std::string message;
+    try {
+        load(registry, pcap_tap, pcap_policy("static_view", "      attributes: {instance.id: v}\n"));
+    } catch (const PolicyException &e) {
+        message = e.what();
+    }
+    Metric::reset_static_labels();
+    CHECK_THAT(message, ContainsSubstring("'instance.id'"));
+    CHECK_FALSE(registry.policy_manager()->module_exists("static_view"));
+}
+
+TEST_CASE("A refused policy leaves nothing behind", "[policies][attributes]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    CHECK_THROWS_AS(load(registry, flow_tap, handler_policy("refused_view", "flows", "flow", flow_input, "flow", "device: v")), PolicyException);
+    CHECK_FALSE(registry.policy_manager()->module_exists("refused_view"));
+    CHECK_FALSE(registry.handler_manager()->module_exists("refused_view-flows-the_handler"));
+    CHECK(registry.input_manager()->module_get_keys().empty());
+}
