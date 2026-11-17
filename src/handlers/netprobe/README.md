@@ -256,7 +256,7 @@ policy_name:
           target: 192.0.2.1
           attributes:
             netbox.site.name: dc-east
-            netbox_id: netbox-device-42
+            netbox_id: "42"
             device_ip: 192.0.2.1
 ```
 
@@ -267,6 +267,7 @@ policy_name:
   label pktvisor sets (here also `target`, `status_code` and `rcode`).
 * A target key whose Prometheus name is the same as that of a different policy key is refused (`netbox.site.name` on the
   policy and `netbox_site_name` on a target). The same key, written the same way, is an override.
+* `netbox_id` takes NetBox's numeric device ID (`"42"`, not `netbox-device-42`), and `device_ip` the device's address.
 * Target attributes are not part of the input's config. Policies that differ only in them share one input.
 * Targets declared in a tap's config rather than in the policy get no per-target attributes; they carry the policy's.
 
