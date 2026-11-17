@@ -81,6 +81,10 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
             }
         }
 
+        if (it->second["attributes"]) {
+            policy_ptr->set_attributes(parse_attributes(it->second["attributes"], fmt::format("policy '{}'", policy_name)));
+        }
+
         std::vector<std::string> added_inputs;
         std::vector<std::string> added_handlers;
         // by name, like the resources policies below: the rollback looks each one up again
@@ -494,14 +498,14 @@ void Policy::prometheus_metrics(PrometheusSerializer &ser)
     if (_merge_like_handlers) {
         auto bucket_map = _get_merged_buckets();
         for (auto &[bucket, hmod] : bucket_map) {
-            hmod->window_prometheus(ser, bucket.get(), {{"policy", name()}, {"handler", hmod->schema_key() + "_merged"}});
+            hmod->window_prometheus(ser, bucket.get(), series_labels(hmod->schema_key() + "_merged"));
         }
     } else {
         for (auto &mod : modules()) {
             auto hmod = dynamic_cast<StreamHandler *>(mod);
             if (hmod) {
                 spdlog::stopwatch sw;
-                hmod->window_prometheus(ser, {{"policy", name()}, {"handler", hmod->name()}});
+                hmod->window_prometheus(ser, series_labels(hmod->name()));
                 spdlog::get("visor")->debug("{} window_prometheus elapsed time: {}", hmod->name(), sw);
             }
         }
@@ -575,7 +579,7 @@ void Policy::_merged_opentelemetry(metrics::v1::ScopeMetrics &scope)
         auto metrics_before = scope.metrics_size();
         try {
             for (auto &[bucket, hmod] : bucket_map) {
-                hmod->window_opentelemetry(scope, bucket.get(), {{"policy", name()}, {"handler", hmod->schema_key() + "_merged"}});
+                hmod->window_opentelemetry(scope, bucket.get(), series_labels(hmod->schema_key() + "_merged"));
             }
         } catch (...) {
             scope.mutable_metrics()->DeleteSubrange(metrics_before, scope.metrics_size() - metrics_before);
@@ -627,7 +631,7 @@ void Policy::opentelemetry_metrics(metrics::v1::ScopeMetrics &scope)
                 // it fails what it wrote is dropped and sent whole next time.
                 auto metrics_before = scope.metrics_size();
                 try {
-                    hmod->window_opentelemetry(scope, {{"policy", name()}, {"handler", hmod->name()}});
+                    hmod->window_opentelemetry(scope, series_labels(hmod->name()));
                 } catch (...) {
                     scope.mutable_metrics()->DeleteSubrange(metrics_before, scope.metrics_size() - metrics_before);
                     throw;

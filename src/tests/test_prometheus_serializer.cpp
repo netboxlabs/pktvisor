@@ -145,3 +145,14 @@ TEST_CASE("per-call label overrides static label of the same key (no duplicate)"
     CHECK(out.find("static_inst") == std::string::npos); // static value suppressed; key emitted once
     Metric::reset_static_labels();
 }
+
+TEST_CASE("Label keys outside [A-Za-z0-9_] are written with underscores", "[prometheus]")
+{
+    Metric::reset_static_labels();
+    PrometheusSerializer s;
+    s.write("m", Type::Gauge, "h", {}, {{"netbox.site.name", "x"}, {"a-b", "y"}, {"ok_key", "z"}}, 1);
+    CHECK(s.finalize() ==
+        "# HELP m h\n"
+        "# TYPE m gauge\n"
+        "m{a_b=\"y\",netbox_site_name=\"x\",ok_key=\"z\"} 1\n");
+}

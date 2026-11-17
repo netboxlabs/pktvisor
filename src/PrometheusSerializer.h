@@ -4,6 +4,7 @@
 #pragma once
 
 #include "MetricLabels.h"
+#include "PolicyAttributes.h"
 #include <fmt/format.h>
 #include <iterator>
 #include <map>
@@ -129,7 +130,7 @@ private:
         line.push_back('{');
         bool any = false;
         auto append_one = [&](const std::string &k, const std::string &v) {
-            line.append(k);
+            line.append(prometheus_label_name(k));
             line.append("=\"");
             append_escaped(line, v);
             line.append("\",");
