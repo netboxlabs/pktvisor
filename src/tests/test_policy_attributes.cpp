@@ -71,6 +71,8 @@ void close_windows(Policy *policy)
             net->check_period_shift(stamp);
         } else if (auto flow = dynamic_cast<handler::flow::FlowStreamHandler *>(mod)) {
             flow->check_period_shift(stamp);
+        } else if (auto probe = dynamic_cast<handler::netprobe::NetProbeStreamHandler *>(mod)) {
+            probe->check_period_shift(stamp);
         }
     }
 }
@@ -586,6 +588,21 @@ std::string refusal(const std::string &policy_name, const std::string &policy_ya
     return message;
 }
 
+// Records a timeout for gw1 and gw2 on the policy's netprobe handler, as a probe would. False if it has none.
+bool feed_targets(Policy *policy)
+{
+    bool fed = false;
+    for (auto mod : policy->modules()) {
+        if (auto probe = dynamic_cast<handler::netprobe::NetProbeStreamHandler *>(mod)) {
+            auto metrics = const_cast<handler::netprobe::NetProbeMetricsManager *>(probe->metrics());
+            metrics->process_failure(input::netprobe::ErrorType::Timeout, "gw1");
+            metrics->process_failure(input::netprobe::ErrorType::Timeout, "gw2");
+            fed = true;
+        }
+    }
+    return fed;
+}
+
 }
 
 TEST_CASE("Netprobe target attributes are parsed from the raw policy YAML", "[policies][attributes]")
@@ -655,16 +672,7 @@ TEST_CASE("A netprobe policy's target attributes reach that target's series", "[
     REQUIRE_NOTHROW(load(registry, netprobe_tap, netprobe_policy("probe_view", "{netbox.site.name: dc-west}", R"({netbox.site.name: dc-east, netbox_id: netbox-device-1, device_ip: 192.0.2.1, zero: "007"})")));
 
     auto [policy, lock] = registry.policy_manager()->module_get_locked("probe_view");
-    bool fed = false;
-    for (auto mod : policy->modules()) {
-        if (auto probe = dynamic_cast<handler::netprobe::NetProbeStreamHandler *>(mod)) {
-            auto metrics = const_cast<handler::netprobe::NetProbeMetricsManager *>(probe->metrics());
-            metrics->process_failure(input::netprobe::ErrorType::Timeout, "gw1");
-            metrics->process_failure(input::netprobe::ErrorType::Timeout, "gw2");
-            fed = true;
-        }
-    }
-    REQUIRE(fed);
+    REQUIRE(feed_targets(policy));
 
     std::stringstream out;
     policy->prometheus_metrics(out);
@@ -686,4 +694,103 @@ TEST_CASE("A netprobe policy's target attributes reach that target's series", "[
     }
     CHECK(gw1 > 0);
     CHECK(gw2 > 0);
+}
+
+TEST_CASE("A target attribute too long to be a number reaches its series as written", "[policies][attributes]")
+{
+    constexpr auto serial = "1234567890123456789012345";
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(load(registry, netprobe_tap, netprobe_policy("serial_view", "", fmt::format(R"({{serial: "{}"}})", serial))));
+
+    auto [policy, lock] = registry.policy_manager()->module_get_locked("serial_view");
+    REQUIRE(feed_targets(policy));
+    close_windows(policy);
+    metrics::v1::ScopeMetrics scope;
+    policy->opentelemetry_metrics(scope);
+    size_t gw1 = 0;
+    size_t gw2 = 0;
+    for (const auto &attrs : datapoint_attributes(scope)) {
+        auto target = attrs.find("target");
+        REQUIRE(target != attrs.end());
+        if (target->second == "gw1") {
+            ++gw1;
+            CHECK(attrs.at("serial") == serial);
+        } else if (target->second == "gw2") {
+            ++gw2;
+            CHECK(attrs.count("serial") == 0);
+        }
+    }
+    CHECK(gw1 > 0);
+    CHECK(gw2 > 0);
+}
+
+TEST_CASE("Policies that differ only in their target attributes share one input", "[policies][attributes]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(load(registry, netprobe_tap, netprobe_policy("east_view", "", "{netbox.site.name: dc-east}")));
+    REQUIRE_NOTHROW(registry.policy_manager()->load(YAML::Load(netprobe_policy("west_view", "", "{netbox.site.name: dc-west}"))["visor"]["policies"]));
+
+    CHECK(registry.input_manager()->module_get_keys().size() == 1);
+    for (const auto &[name, site] : std::vector<std::pair<std::string, std::string>>{{"east_view", "dc-east"}, {"west_view", "dc-west"}}) {
+        auto [policy, lock] = registry.policy_manager()->module_get_locked(name);
+        REQUIRE(feed_targets(policy));
+        std::stringstream out;
+        policy->prometheus_metrics(out);
+        size_t gw1 = 0;
+        for (const auto &line : sample_lines(out.str())) {
+            if (line.find("target=\"gw1\"") != std::string::npos) {
+                ++gw1;
+                CHECK_THAT(line, ContainsSubstring("netbox_site_name=\"" + site + "\""));
+                CHECK_THAT(line, ContainsSubstring("policy=\"" + name + "\""));
+            }
+        }
+        CHECK(gw1 > 0);
+    }
+}
+
+TEST_CASE("A malformed target attribute is refused, naming the target and the key", "[policies][attributes]")
+{
+    for (const std::string value : {"[{x: 1}]", "{x: 1}", "~", "\"\""}) {
+        DYNAMIC_SECTION(value)
+        {
+            auto message = refusal("malformed_view", netprobe_policy("malformed_view", "", "{k: " + value + "}"));
+            CHECK_THAT(message, ContainsSubstring("'k'"));
+            CHECK_THAT(message, ContainsSubstring("gw1"));
+            CHECK_THAT(message, ContainsSubstring("malformed_view"));
+        }
+    }
+}
+
+TEST_CASE("The input node a policy builds its input from has no target attributes", "[policies][attributes]")
+{
+    const auto raw = YAML::Load(R"(
+tap: probes
+input_type: netprobe
+config:
+  test_type: http
+  targets:
+    gw1:
+      target: http://localhost:1/
+      attributes: {serial: "1234567890123456789012345"}
+    gw2:
+      target: http://localhost:1/
+)");
+    const auto cleaned = without_target_attributes(raw);
+    CHECK_FALSE(cleaned["config"]["targets"]["gw1"]["attributes"].IsDefined());
+    CHECK(cleaned["config"]["targets"]["gw1"]["target"].Scalar() == "http://localhost:1/");
+    CHECK(cleaned["config"]["targets"]["gw2"]["target"].Scalar() == "http://localhost:1/");
+    CHECK(cleaned["config"]["test_type"].Scalar() == "http");
+    CHECK(cleaned["input_type"].Scalar() == "netprobe");
+    CHECK(cleaned["tap"].Scalar() == "probes");
+    // a clone: the node as read keeps them
+    CHECK(raw["config"]["targets"]["gw1"]["attributes"]["serial"].Scalar() == "1234567890123456789012345");
+
+    // nothing to remove: the same node back
+    for (const std::string yaml : {"{input_type: pcap, config: {pcap_file: x.pcap}}", "{input_type: netprobe}", "[a, b]"}) {
+        CHECK(YAML::Dump(without_target_attributes(YAML::Load(yaml))) == YAML::Dump(YAML::Load(yaml)));
+    }
 }

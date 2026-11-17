@@ -56,8 +56,12 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
         std::unique_lock lock(_load_mutex);
 
         auto policy_name = _get_policy_name(it);
-        // Input Section
-        auto input_node = it->second["input"];
+        // Input Section. The attributes of each netprobe target belong to the policy, not to the input: they are
+        // read from the YAML as written, like the policy's own, and the input is built and named from a copy
+        // without them, so they are never typed as config values and do not split one input in two
+        const auto raw_input_node = it->second["input"];
+        auto target_attributes = std::make_shared<const TargetAttributes>(parse_target_attributes(raw_input_node, policy_name));
+        auto input_node = without_target_attributes(raw_input_node);
         auto [input_config, input_filter] = _registry->input_manager()->get_config_and_filter(input_node);
         // Handler Default Section
         auto handler_node = it->second["handlers"];
@@ -85,9 +89,6 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
         if (it->second["attributes"]) {
             policy_ptr->set_attributes(parse_attributes(it->second["attributes"], fmt::format("policy '{}'", policy_name)));
         }
-        // the attributes of each netprobe target, read from the YAML as written like the policy's own; the input
-        // has them in its config too, but typed (Configurable reads "007" as 7)
-        auto target_attributes = std::make_shared<const TargetAttributes>(parse_target_attributes(input_node, policy_name));
 
         std::vector<std::string> added_inputs;
         std::vector<std::string> added_handlers;

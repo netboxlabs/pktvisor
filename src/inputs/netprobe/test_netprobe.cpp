@@ -979,8 +979,8 @@ TEST_CASE("NetProbe v3 config: per-target ip_version + resolve also parse for do
 
 TEST_CASE("A netprobe target with attributes starts like one without", "[netprobe][attributes]")
 {
-    // A policy's input config reaches the input as written, a target's attributes included: they are for the
-    // handler's series, and the input must neither refuse them nor probe differently.
+    // A policy keeps its targets' attributes out of the input's config, but targets declared in a tap's config reach
+    // the input as written, attributes included: the input must neither refuse them nor probe differently.
     auto start = [](const std::string &name, const std::string &gw1_attributes) {
         NetProbeInputStream stream{name};
         stream.config_set_yaml(YAML::Load(R"(

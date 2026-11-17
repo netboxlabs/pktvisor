@@ -26,6 +26,12 @@ LabelMap parse_attributes(const YAML::Node &node, const std::string &where);
 // result is empty when there is no targets map.
 TargetAttributes parse_target_attributes(const YAML::Node &input_node, const std::string &policy_name);
 
+// A copy of a policy's `input` node with the `attributes` of every target in input.config.targets removed, the
+// node the policy builds and names its input from. Target attributes belong to the policy, not to the input: kept
+// out of its config, they are never read as typed config values, and policies that differ only in them share one
+// input. `input_node` itself is left as it is, and one that is not a map comes back as it is.
+YAML::Node without_target_attributes(const YAML::Node &input_node);
+
 // A Prometheus label name for an attribute key: every character outside [A-Za-z0-9_] becomes _.
 std::string prometheus_label_name(const std::string &key);
 
