@@ -235,6 +235,43 @@ handlers:
 
 ---
 
+## Target attributes
+
+Besides the policy's own `attributes` (see the main [README](../../../README.md#policy-attributes)), each target can have
+`attributes` under `input.config.targets.<name>.attributes`:
+
+```yaml
+policy_name:
+  kind: collection
+  attributes:
+    netbox.site.name: dc-west
+    netbox.tenant.name: acme
+  input:
+    tap: probes
+    input_type: netprobe
+    config:
+      test_type: ping
+      targets:
+        gw1:
+          target: 192.0.2.1
+          attributes:
+            netbox.site.name: dc-east
+            netbox_id: netbox-device-42
+            device_ip: 192.0.2.1
+```
+
+* The attributes of a target are laid over the policy's, key by key: the target's value wins. Then `target` is set.
+  Here `gw1`'s series carry `netbox.site.name: dc-east`, `netbox.tenant.name: acme`, `netbox_id`, `device_ip` and
+  `target`.
+* The same rules apply as for the policy's attributes: scalar values kept as written, and a refused policy when a key is a
+  label pktvisor sets (here also `target`, `status_code` and `rcode`).
+* A target key whose Prometheus name is the same as that of a different policy key is refused (`netbox.site.name` on the
+  policy and `netbox_site_name` on a target). The same key, written the same way, is an override.
+* Target attributes are not part of the input's config. Policies that differ only in them share one input.
+* Targets declared in a tap's config rather than in the policy get no per-target attributes; they carry the policy's.
+
+---
+
 ## Testing notes
 
 Automated test coverage (`test_netprobe.cpp`) exercises the `tls.*` config-validation paths

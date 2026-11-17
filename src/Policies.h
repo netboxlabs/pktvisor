@@ -10,6 +10,7 @@
 #include "HandlerModulePlugin.h"
 #include "InputModulePlugin.h"
 #include "OpenTelemetry.h"
+#include "PolicyAttributes.h"
 #include "Taps.h"
 #include <chrono>
 #include <ctime>
@@ -65,6 +66,9 @@ private:
     BucketMap _get_merged_buckets(const std::function<std::unique_ptr<AbstractMetricsBucket>(StreamHandler *, AbstractMetricsBucket *)> &merge);
     void _merged_opentelemetry(metrics::v1::ScopeMetrics &scope);
 
+    // set on every series the policy's handlers produce, under the labels pktvisor sets itself
+    LabelMap _attributes;
+
 public:
     Policy(const std::string &name)
         : AbstractRunnableModule(name)
@@ -74,6 +78,26 @@ public:
     std::string schema_key() const override
     {
         return "policy";
+    }
+
+    void set_attributes(LabelMap attrs)
+    {
+        _attributes = std::move(attrs);
+    }
+
+    const LabelMap &attributes() const
+    {
+        return _attributes;
+    }
+
+    // The labels of every series of this policy's handler: the policy's attributes, then
+    // `policy` and `handler` on top.
+    LabelMap series_labels(const std::string &handler_label) const
+    {
+        auto labels = _attributes;
+        labels["policy"] = name();
+        labels["handler"] = handler_label;
+        return labels;
     }
 
     void set_modules_sequence(bool sequence)

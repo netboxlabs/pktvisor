@@ -107,6 +107,11 @@ public:
     ~PcapStreamHandler() = default;
 
     // visor::AbstractModule
+    std::vector<std::string> own_label_names() const override
+    {
+        return {};
+    }
+
     std::string schema_key() const override
     {
         return PCAP_SCHEMA;

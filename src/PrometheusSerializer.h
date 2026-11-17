@@ -7,6 +7,7 @@
 #include <fmt/format.h>
 #include <iterator>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
 #include <type_traits>
@@ -129,17 +130,24 @@ private:
         line.push_back('{');
         bool any = false;
         auto append_one = [&](const std::string &k, const std::string &v) {
-            line.append(k);
+            append_prometheus_label_name(line, k);
             line.append("=\"");
             append_escaped(line, v);
             line.append("\",");
             any = true;
         };
-        // Static labels first, but skip any key also given per-call so the per-call value wins —
-        // emitting the same label name twice in one sample is invalid exposition.
-        for (const auto &[k, v] : prometheus_static_labels()) {
-            if (labels.find(k) == labels.end()) {
-                append_one(k, v);
+        // Static labels first, but skip any whose written name is also given per-call so the per-call
+        // value wins — emitting the same label name twice in one sample is invalid exposition.
+        const auto &statics = prometheus_static_labels();
+        if (!statics.empty()) {
+            std::set<std::string> call_names;
+            for (const auto &kv : labels) {
+                call_names.insert(prometheus_label_name(kv.first));
+            }
+            for (const auto &[k, v] : statics) {
+                if (call_names.find(prometheus_label_name(k)) == call_names.end()) {
+                    append_one(k, v);
+                }
             }
         }
         for (const auto &[k, v] : labels) {

@@ -16,6 +16,28 @@ explicit support for the handler type upstream to them, otherwise the policy wil
 
 Policies require a `kind` to indicate the type of policy being applied.
 
+A policy may also have an `attributes` mapping at the top level, next to `kind`, `input`, `handlers` and `config`. Each
+entry is added as a label (an attribute, in OTLP) to every series of every handler of the policy, in the OTLP push and in
+the Prometheus output:
+
+```yaml
+    anycast_dns:
+      kind: collection
+      attributes:
+        netbox.site.name: dc-west
+        netbox.device.asset_tag: "007"
+```
+
+Values are scalars kept as the text written (a backslash followed by three digits is rewritten, as in every exported label
+value). A map, list, null or empty value is refused. A key starts with an ASCII letter and is valid UTF-8; a null
+`attributes` is none. OTLP uses the keys as written; Prometheus replaces every character outside `[A-Za-z0-9_]` in a key
+with `_`, one per character. A policy does not load when two keys share a
+Prometheus name, or when a key is, or becomes, a label pktvisor sets itself (`policy`, `handler`, `tap`, `le`, `quantile`,
+`instance` with `--prom-instance` or `prom_instance`, and the labels of the policy's handlers). The `netprobe` handler also accepts
+`attributes` per target under `input.config.targets.<name>.attributes`; see its README. A pktvisor that does not know
+`attributes` ignores the policy's own, but reads per-target attributes as input config: an all-digit value past 2^64 makes it
+refuse the policy, and policies that differ only in their target attributes get separate inputs.
+
 NOTE: this is not yet a complete, formal specification, and not all of it is implemented. See
 src/tests/test_policies.cpp for current, tested implementation.
 

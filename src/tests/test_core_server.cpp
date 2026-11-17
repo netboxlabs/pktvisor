@@ -186,6 +186,24 @@ TEST_CASE("Default policy routes answer 404 for a default policy a concurrent re
     }
 }
 
+TEST_CASE("The default policy's Prometheus path carries its attributes, with policy on top and no handler label", "[api][policies]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(load_tap(registry));
+    auto yaml = policy("default");
+    yaml.replace(yaml.find("      input:"), 0, "      attributes: {site: dc-west}\n");
+    REQUIRE_NOTHROW(registry.policy_manager()->load_from_str(yaml));
+
+    httplib::Response res;
+    api::get_default_prometheus(*registry.policy_manager(), res);
+    CHECK(status(res) == 200);
+    CHECK_THAT(res.body, Catch::Matchers::ContainsSubstring(R"(policy="default")"));
+    CHECK_THAT(res.body, Catch::Matchers::ContainsSubstring(R"(site="dc-west")"));
+    CHECK_THAT(res.body, !Catch::Matchers::ContainsSubstring("handler="));
+}
+
 TEST_CASE("Policy metrics answer 404 for a removed policy and __all skips one removed after it was listed", "[api][policies]")
 {
     CoreRegistry registry;

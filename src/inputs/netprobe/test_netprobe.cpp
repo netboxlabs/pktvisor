@@ -977,6 +977,47 @@ TEST_CASE("NetProbe v3 config: per-target ip_version + resolve also parse for do
     stream.stop();
 }
 
+TEST_CASE("A netprobe target with attributes starts like one without", "[netprobe][attributes]")
+{
+    // A policy keeps its targets' attributes out of the input's config, but targets declared in a tap's config reach
+    // the input as written, attributes included: the input must neither refuse them nor probe differently.
+    auto start = [](const std::string &name, const std::string &gw1_attributes) {
+        NetProbeInputStream stream{name};
+        stream.config_set_yaml(YAML::Load(R"(
+test_type: tcp
+interval_msec: 60000
+timeout_msec: 100
+targets:
+  gw1:
+    target: 127.0.0.1
+    port: 9
+)" + gw1_attributes + R"(
+  gw2:
+    target: localhost
+    port: 9
+)"));
+        CHECK_NOTHROW(stream.start());
+        json j;
+        stream.info_json(j);
+        stream.stop();
+        std::vector<std::string> targets;
+        for (const auto &target : j["module"]["config"]["targets"].items()) {
+            targets.push_back(target.key());
+        }
+        return std::make_pair(j[stream.schema_key()]["current_targets_total"], targets);
+    };
+
+    auto with = start("net-probe-test-target-attributes", R"(    attributes:
+      netbox.site.name: dc-east
+      netbox_id: netbox-device-1
+      zero: "007"
+      flag: True
+)");
+    auto without = start("net-probe-test-no-target-attributes", "");
+    CHECK(with.first == 2);
+    CHECK(with == without);
+}
+
 TEST_CASE("ICMPv6 reply carrier survives the fan-out Packet deep-copy", "[netprobe][ipv6]")
 {
     // Wire bytes of an ICMPv6 echo REPLY: type=129, code=0, checksum=0, id=0xBEEF, seq=0x0102 (network order).

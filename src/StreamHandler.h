@@ -8,14 +8,18 @@
 #include "AbstractModule.h"
 #include "CoreRegistry.h"
 #include "InputEventProxy.h"
+#include "PolicyAttributes.h"
 #include "PrometheusSerializer.h"
 #include <chrono>
 #include <ctime>
 #include <fmt/ostream.h>
 #include <fmt/ranges.h>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <sstream>
+#include <string>
+#include <vector>
 
 namespace visor {
 
@@ -70,6 +74,20 @@ public:
     const std::string &version() const
     {
         return _version;
+    }
+
+    // Every label key this handler writes into a label map (its labels["..."] keys, plus the item_key of every
+    // TopN it builds). A policy attribute whose Prometheus name is one of these is refused at load.
+    virtual std::vector<std::string> own_label_names() const
+    {
+        return {};
+    }
+
+    // The attributes of each netprobe target of the policy, set once before the handler starts. A handler
+    // with a series per target lays a target's attributes over the policy's on that target's series; every
+    // other handler ignores them.
+    virtual void set_target_attributes(std::shared_ptr<const TargetAttributes>)
+    {
     }
 
     virtual void window_json(json &j, uint64_t period, bool merged) = 0;

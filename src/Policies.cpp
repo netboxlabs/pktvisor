@@ -6,6 +6,7 @@
 #include "CoreRegistry.h"
 #include "HandlerManager.h"
 #include "InputStreamManager.h"
+#include "PolicyAttributes.h"
 #include "PrometheusSerializer.h"
 #include "Taps.h"
 #include <algorithm>
@@ -55,8 +56,12 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
         std::unique_lock lock(_load_mutex);
 
         auto policy_name = _get_policy_name(it);
-        // Input Section
-        auto input_node = it->second["input"];
+        // Input Section. The attributes of each netprobe target belong to the policy, not to the input: they are
+        // read from the YAML as written, like the policy's own, and the input is built and named from a copy
+        // without them, so they are never typed as config values and do not split one input in two
+        const auto raw_input_node = it->second["input"];
+        auto target_attributes = std::make_shared<const TargetAttributes>(parse_target_attributes(raw_input_node, policy_name));
+        auto input_node = without_target_attributes(raw_input_node);
         auto [input_config, input_filter] = _registry->input_manager()->get_config_and_filter(input_node);
         // Handler Default Section
         auto handler_node = it->second["handlers"];
@@ -79,6 +84,10 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
             } catch (ConfigException &e) {
                 throw HandlerException(fmt::format("invalid policy config for policy '{}': {}", policy_name, e.what()));
             }
+        }
+
+        if (it->second["attributes"]) {
+            policy_ptr->set_attributes(parse_attributes(it->second["attributes"], fmt::format("policy '{}'", policy_name)));
         }
 
         std::vector<std::string> added_inputs;
@@ -184,7 +193,20 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
                     handler_modules.emplace_back(std::move(handler_module));
                 }
 
+                // the labels pktvisor sets itself, so an attribute cannot replace one: the policy's own, the static
+                // ones, and those of every handler it runs. A refusal rolls the load back like any other failure
+                std::vector<std::string> handler_labels;
+                for (const auto &m : handler_modules) {
+                    auto names = m->own_label_names();
+                    handler_labels.insert(handler_labels.end(), names.begin(), names.end());
+                }
+                auto reserved = reserved_label_names(handler_labels);
+                check_reserved(policy_ptr->attributes(), reserved, fmt::format("policy '{}'", policy_name));
+                check_target_attributes(*target_attributes, policy_ptr->attributes(), reserved, policy_name);
+
                 for (auto &m : handler_modules) {
+                    // before the handler starts, and never changed after
+                    m->set_target_attributes(target_attributes);
                     auto hname = m->name();
                     _registry->handler_manager()->module_add(std::move(m));
                     added_handlers.push_back(hname);
@@ -494,14 +516,14 @@ void Policy::prometheus_metrics(PrometheusSerializer &ser)
     if (_merge_like_handlers) {
         auto bucket_map = _get_merged_buckets();
         for (auto &[bucket, hmod] : bucket_map) {
-            hmod->window_prometheus(ser, bucket.get(), {{"policy", name()}, {"handler", hmod->schema_key() + "_merged"}});
+            hmod->window_prometheus(ser, bucket.get(), series_labels(hmod->schema_key() + "_merged"));
         }
     } else {
         for (auto &mod : modules()) {
             auto hmod = dynamic_cast<StreamHandler *>(mod);
             if (hmod) {
                 spdlog::stopwatch sw;
-                hmod->window_prometheus(ser, {{"policy", name()}, {"handler", hmod->name()}});
+                hmod->window_prometheus(ser, series_labels(hmod->name()));
                 spdlog::get("visor")->debug("{} window_prometheus elapsed time: {}", hmod->name(), sw);
             }
         }
@@ -575,7 +597,7 @@ void Policy::_merged_opentelemetry(metrics::v1::ScopeMetrics &scope)
         auto metrics_before = scope.metrics_size();
         try {
             for (auto &[bucket, hmod] : bucket_map) {
-                hmod->window_opentelemetry(scope, bucket.get(), {{"policy", name()}, {"handler", hmod->schema_key() + "_merged"}});
+                hmod->window_opentelemetry(scope, bucket.get(), series_labels(hmod->schema_key() + "_merged"));
             }
         } catch (...) {
             scope.mutable_metrics()->DeleteSubrange(metrics_before, scope.metrics_size() - metrics_before);
@@ -627,7 +649,7 @@ void Policy::opentelemetry_metrics(metrics::v1::ScopeMetrics &scope)
                 // it fails what it wrote is dropped and sent whole next time.
                 auto metrics_before = scope.metrics_size();
                 try {
-                    hmod->window_opentelemetry(scope, {{"policy", name()}, {"handler", hmod->name()}});
+                    hmod->window_opentelemetry(scope, series_labels(hmod->name()));
                 } catch (...) {
                     scope.mutable_metrics()->DeleteSubrange(metrics_before, scope.metrics_size() - metrics_before);
                     throw;

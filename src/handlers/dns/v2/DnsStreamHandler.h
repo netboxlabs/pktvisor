@@ -593,6 +593,11 @@ public:
     ~DnsStreamHandler() = default;
 
     // visor::AbstractModule
+    std::vector<std::string> own_label_names() const override
+    {
+        return {"direction", "lat", "lon", "geo_loc", "asn", "ecs", "qname", "port", "qtype", "rcode"};
+    }
+
     std::string schema_key() const override
     {
         return DNS_SCHEMA;

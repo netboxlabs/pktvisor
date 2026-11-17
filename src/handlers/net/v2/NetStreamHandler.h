@@ -290,6 +290,11 @@ public:
     ~NetStreamHandler() override;
 
     // visor::AbstractModule
+    std::vector<std::string> own_label_names() const override
+    {
+        return {"direction", "lat", "lon", "geo_loc", "asn", "ipv4", "ipv6"};
+    }
+
     std::string schema_key() const override
     {
         return NET_SCHEMA;

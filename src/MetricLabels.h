@@ -22,6 +22,28 @@ bool is_utf8(std::string_view value);
 bool label_value_needs_escape(std::string_view value);
 std::string utf8_label_value(std::string_view value);
 
+// The Prometheus label name of a label key: every character outside [A-Za-z0-9_] becomes _, one _ per
+// code point (the bytes after the first of a UTF-8 sequence write nothing), as the OTLP to Prometheus
+// translators do. append_prometheus_label_name writes it onto `out` without a temporary string.
+inline void append_prometheus_label_name(std::string &out, std::string_view key)
+{
+    for (unsigned char c : key) {
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_') {
+            out.push_back(static_cast<char>(c));
+        } else if ((c & 0xC0) != 0x80) {
+            out.push_back('_');
+        }
+    }
+}
+
+inline std::string prometheus_label_name(std::string_view key)
+{
+    std::string name;
+    name.reserve(key.size());
+    append_prometheus_label_name(name, key);
+    return name;
+}
+
 // Process-global static labels (e.g. instance). Storage defined in Metrics.cpp.
 LabelMap &prometheus_static_labels_mutable();
 inline const LabelMap &prometheus_static_labels() { return prometheus_static_labels_mutable(); }

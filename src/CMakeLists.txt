@@ -24,6 +24,7 @@ add_library(visor-core
         CoreRegistry.cpp
         Metrics.cpp
         Policies.cpp
+        PolicyAttributes.cpp
         ThreadName.cpp
         IpPort.cpp
         Taps.cpp)
@@ -89,6 +90,7 @@ add_executable(unit-tests-visor-core
         tests/test_ipport.cpp
         tests/test_taps.cpp
         tests/test_policies.cpp
+        tests/test_policy_attributes.cpp
         tests/test_handlers.cpp
         tests/test_module_plugins.cpp
         tests/test_prometheus_serializer.cpp
