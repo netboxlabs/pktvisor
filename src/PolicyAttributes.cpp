@@ -5,6 +5,7 @@
 #include "PolicyAttributes.h"
 #include "Policies.h"
 #include <fmt/format.h>
+#include <map>
 
 namespace visor {
 
@@ -14,6 +15,7 @@ LabelMap parse_attributes(const YAML::Node &node, const std::string &where)
         throw PolicyException(fmt::format("attributes of {} is not a map", where));
     }
     LabelMap attrs;
+    std::map<std::string, std::string> written_as; // Prometheus name -> key
     for (const auto &kv : node) {
         if (!kv.first.IsScalar()) {
             throw PolicyException(fmt::format("attributes of {} has a key that is not a scalar", where));
@@ -25,6 +27,10 @@ LabelMap parse_attributes(const YAML::Node &node, const std::string &where)
         const auto &value = kv.second.Scalar();
         if (value.empty()) {
             throw PolicyException(fmt::format("attribute '{}' of {} must not be empty", key, where));
+        }
+        auto [seen, added] = written_as.emplace(prometheus_label_name(key), key);
+        if (!added) {
+            throw PolicyException(fmt::format("attributes '{}' and '{}' of {} are both written as the Prometheus label '{}'", seen->second, key, where, seen->first));
         }
         attrs[key] = value;
     }

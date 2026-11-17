@@ -156,3 +156,17 @@ TEST_CASE("Label keys outside [A-Za-z0-9_] are written with underscores", "[prom
         "# TYPE m gauge\n"
         "m{a_b=\"y\",netbox_site_name=\"x\",ok_key=\"z\"} 1\n");
 }
+
+TEST_CASE("A per-call label replaces a static label with the same written name", "[prometheus]")
+{
+    Metric::reset_static_labels();
+    Metric::add_static_label("a.b", "static");
+    PrometheusSerializer s;
+    s.write("m", Type::Gauge, "h", {}, {{"a_b", "call"}}, 1);
+    auto out = s.finalize();
+    Metric::reset_static_labels();
+    CHECK(out ==
+        "# HELP m h\n"
+        "# TYPE m gauge\n"
+        "m{a_b=\"call\"} 1\n");
+}

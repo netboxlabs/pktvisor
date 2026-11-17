@@ -379,9 +379,11 @@ TEST_CASE("Malformed attributes are refused at load", "[policies][attributes]")
         {"      attributes: {k: [1]}\n", "'k'"},
         {"      attributes: {k: ~}\n", "'k'"},
         {"      attributes: {k: \"\"}\n", "'k'"},
+        {"      attributes: {netbox.site.name: a, netbox_site_name: b}\n", "'netbox.site.name'"},
+        {"      attributes: {netbox.site.name: a, netbox_site_name: b}\n", "'netbox_site_name'"},
     };
     for (const auto &c : cases) {
-        DYNAMIC_SECTION(c.attributes)
+        DYNAMIC_SECTION(c.attributes << c.key)
         {
             CoreRegistry registry;
             visor::load_builtin_plugins(registry);
