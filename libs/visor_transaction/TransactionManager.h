@@ -5,8 +5,12 @@
 #pragma once
 
 #include "robin_hood.h"
+#include <algorithm>
 #include <chrono>
+#include <cstdint>
+#include <limits>
 #include <memory>
+#include <vector>
 
 namespace visor::lib::transaction {
 
@@ -56,6 +60,14 @@ class TransactionManager
     uint32_t _ttl_secs{0};
     uint32_t _ttl_ms{0};
     XactMap _transactions;
+    // While a transaction is open, none started before this. It can be earlier than the oldest open one, once
+    // maybe_end_transaction or purge_old_transactions has ended that, which costs expire_transactions one scan.
+    int64_t _oldest_start_ns{std::numeric_limits<int64_t>::max()};
+
+    static int64_t to_ns(timespec t)
+    {
+        return static_cast<int64_t>(t.tv_sec) * 1000000000 + t.tv_nsec;
+    }
 
 public:
     TransactionManager(uint32_t ttl_ms = 5000)
@@ -70,6 +82,7 @@ public:
 
     void start_transaction(XactID id, TransactionType type)
     {
+        _oldest_start_ns = std::min(_oldest_start_ns, to_ns(type.startTS));
         _transactions[id] = type;
     }
 
@@ -105,9 +118,40 @@ public:
         return timed_out.size();
     }
 
+    // Ends every transaction open for at least the TTL at `now`, the age at which maybe_end_transaction
+    // times a reply out, and passes each one to on_expired. Returns how many ended. Scans the open
+    // transactions only when the oldest can have expired.
+    template <typename OnExpired>
+    size_t expire_transactions(timespec now, OnExpired &&on_expired)
+    {
+        const int64_t ttl_ns = static_cast<int64_t>(_ttl_secs) * 1000000000 + static_cast<int64_t>(_ttl_ms) * 1000000;
+        const int64_t now_ns = to_ns(now);
+        if (_transactions.empty() || now_ns - _oldest_start_ns < ttl_ns) {
+            return 0;
+        }
+        std::vector<XactID> expired;
+        int64_t oldest_open = std::numeric_limits<int64_t>::max();
+        for (const auto &i : _transactions) {
+            const int64_t start_ns = to_ns(i.second.startTS);
+            if (now_ns - start_ns >= ttl_ns) {
+                expired.push_back(i.first);
+            } else {
+                oldest_open = std::min(oldest_open, start_ns);
+            }
+        }
+        _oldest_start_ns = oldest_open;
+        for (const auto &id : expired) {
+            auto it = _transactions.find(id);
+            on_expired(it->second);
+            _transactions.erase(it);
+        }
+        return expired.size();
+    }
+
     void clear()
     {
         _transactions.clear();
+        _oldest_start_ns = std::numeric_limits<int64_t>::max();
     }
 
     typename XactMap::size_type open_transaction_count() const
