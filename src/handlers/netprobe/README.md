@@ -15,6 +15,13 @@ It can attach to netprobe input streams to summarize probe traffic.
 Sends ICMP echo requests to the configured targets and measures round-trip latency.
 Requires raw-socket privileges.
 
+A request with no reply within `timeout_msec` (or the handler's `xact_ttl_ms` / `xact_ttl_secs`, when
+set) counts once in `packets_timeout`, and its reply, if one comes later, counts nowhere. It is counted
+at the next ICMP packet the host receives after the timeout, or at the input's next heartbeat (every
+30 seconds) at least a second after it, whichever comes first. A request sent near the end of a window
+can therefore count its timeout in the next window. With `timeout_msec: 0`, every request counts as a
+timeout.
+
 ### tcp
 
 Opens a TCP connection to the configured target host+port and measures connect latency.
@@ -160,7 +167,7 @@ All metrics are per-target (keyed by the name given in the `targets` config map)
 | `successes` | Total successful probes |
 | `connect_failures` | TCP/socket connection failures |
 | `dns_lookup_failures` | DNS resolution failures |
-| `packets_timeout` | Probes that timed out |
+| `packets_timeout` | Probes that timed out. For `ping`, requests with no reply within `timeout_msec`, whether the reply came late or never came |
 | `http_status_failures` | HTTP/DoH responses whose HTTP status failed the configured status checks (default: any status outside 2xx/3xx). See [Success semantics](#success-semantics) above for the full `failure_status`/`expected_status` precedence — this counter fires whenever that evaluation lands on "fail," whether by the default 2xx/3xx rule, an `expected_status` miss, or a `failure_status` hit. |
 | `content_failures` | HTTP responses whose status passed the status check but at least one configured response assertion failed — body (`expected_body`, `expected_body_regex`, `not_contains`, `body_not_matches_regex`), JSON (`json_path`/`json_equals`), size (`min_response_size_bytes`/`max_response_size_bytes`), header (`fail_if_header_matches`/`fail_if_header_not_matches`, `max_last_modified_diff_secs`) or protocol version (`valid_http_versions`). Never incremented together with `successes` or `http_status_failures` for the same response — HTTP-only (not applicable to `doh`, which has no response-assertion config). |
 | `top_status_codes` | Top HTTP status codes observed (e.g. `"200"`, `"404"`, `"503"`) |

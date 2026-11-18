@@ -160,7 +160,11 @@ public:
 class NetProbeMetricsManager final : public visor::AbstractMetricsManager<NetProbeMetricsBucket>
 {
     typedef TransactionManager<std::string, NetProbeTransaction, std::hash<std::string>> NetProbeTransactionManager;
+    // TCP attempts, cleared at each period shift: the TCP probe reports its own timeouts
     std::unique_ptr<NetProbeTransactionManager> _request_reply_manager;
+    // Ping requests. The ping probe reports no timeouts, so a request that gets no reply is counted as one
+    // when it expires (expire_ping_requests), and a request open at a period shift is kept.
+    std::unique_ptr<NetProbeTransactionManager> _ping_manager;
     // set before the handler starts, then only read
     std::shared_ptr<const TargetAttributes> _target_attributes;
 
@@ -173,12 +177,13 @@ public:
     NetProbeMetricsManager(const Configurable *window_config)
         : visor::AbstractMetricsManager<NetProbeMetricsBucket>(window_config)
         , _request_reply_manager(std::make_unique<NetProbeTransactionManager>())
+        , _ping_manager(std::make_unique<NetProbeTransactionManager>())
     {
     }
 
     void on_period_shift([[maybe_unused]] timespec stamp, [[maybe_unused]] const NetProbeMetricsBucket *maybe_expiring_bucket) override
     {
-        // Clear all old transactions
+        // Clear all old TCP transactions
         _request_reply_manager->clear();
     }
 
@@ -193,7 +198,12 @@ public:
     void set_xact_ttl(uint32_t ttl)
     {
         _request_reply_manager = std::make_unique<NetProbeTransactionManager>(ttl);
+        _ping_manager = std::make_unique<NetProbeTransactionManager>(ttl);
     }
+
+    // Count a timeout for each ping request open for at least the TTL as of `as_of`. Runs for every packet the
+    // ping receiver passes on, as of its read time, and on every heartbeat.
+    void expire_ping_requests(timespec as_of);
 
     void process_filtered(timespec stamp);
     void process_failure(ErrorType error, const std::string &target);
@@ -234,6 +244,7 @@ class NetProbeStreamHandler final : public visor::StreamMetricsHandler<NetProbeM
     void probe_signal_fail(ErrorType, TestType, const std::string &);
     void probe_signal_http_result(visor::http::HttpSample, const std::string &, timespec);
     void probe_signal_doh_result(uint16_t, uint8_t, bool, uint64_t, visor::http::HttpTimings, const std::string &, timespec);
+    void heartbeat(timespec);
 
     bool _filtering(pcpp::Packet *payload);
 

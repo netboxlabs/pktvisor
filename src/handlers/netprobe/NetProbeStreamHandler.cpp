@@ -51,7 +51,7 @@ void NetProbeStreamHandler::start()
         _probe_send_connection = _netprobe_proxy->probe_send_signal.connect(&NetProbeStreamHandler::probe_signal_send, this);
         _probe_recv_connection = _netprobe_proxy->probe_recv_signal.connect(&NetProbeStreamHandler::probe_signal_recv, this);
         _probe_fail_connection = _netprobe_proxy->probe_fail_signal.connect(&NetProbeStreamHandler::probe_signal_fail, this);
-        _heartbeat_connection = _netprobe_proxy->heartbeat_signal.connect(&NetProbeStreamHandler::check_period_shift, this);
+        _heartbeat_connection = _netprobe_proxy->heartbeat_signal.connect(&NetProbeStreamHandler::heartbeat, this);
         _probe_http_result_connection = _netprobe_proxy->probe_http_result_signal.connect(&NetProbeStreamHandler::probe_signal_http_result, this);
         _probe_doh_result_connection = _netprobe_proxy->probe_doh_result_signal.connect(&NetProbeStreamHandler::probe_signal_doh_result, this);
     }
@@ -113,6 +113,19 @@ void NetProbeStreamHandler::probe_signal_recv(pcpp::Packet &payload, TestType ty
             _metrics->process_netprobe_tcp(false, name, stamp);
         }
     }
+}
+
+// The ping receiver passes on what it read every 100 ms, so at a heartbeat it can still hold a reply it read
+// before its request's TTL ran out. A heartbeat expires requests as of a second earlier, which covers that.
+static constexpr time_t PING_REPLY_GRACE_SEC = 1;
+
+void NetProbeStreamHandler::heartbeat(timespec stamp)
+{
+    auto as_of = stamp;
+    as_of.tv_sec -= PING_REPLY_GRACE_SEC;
+    // before the shift, so a request that expired in the closing window is counted there
+    _metrics->expire_ping_requests(as_of);
+    check_period_shift(stamp);
 }
 
 void NetProbeStreamHandler::probe_signal_fail(ErrorType error, TestType type, const std::string &name)
@@ -513,21 +526,34 @@ void NetProbeMetricsManager::process_failure(ErrorType error, const std::string 
     live_bucket()->process_failure(error, target);
 }
 
+void NetProbeMetricsManager::expire_ping_requests(timespec as_of)
+{
+    _ping_manager->expire_transactions(as_of, [this](const NetProbeTransaction &xact) {
+        live_bucket()->process_failure(ErrorType::Timeout, xact.target);
+    });
+}
+
 void NetProbeMetricsManager::process_netprobe_icmp(pcpp::IcmpLayer *layer, const std::string &target, timespec stamp)
 {
+    // A received packet: the receiver has passed on what it read before it, so a request with no reply by its
+    // read time has none within the TTL. Before the base event, which may shift the period. A send expires
+    // nothing: after the loop was held up, its stamp can be ahead of replies not yet passed on.
+    if (layer->getMessageType() != pcpp::ICMP_ECHO_REQUEST) {
+        expire_ping_requests(stamp);
+    }
     // base event
     new_event(stamp);
 
     if (layer->getMessageType() == pcpp::ICMP_ECHO_REQUEST) {
         if (auto request = layer->getEchoRequestData(); request != nullptr) {
             auto ping_id = (static_cast<uint32_t>(request->header->id) << 16) | request->header->sequence;
-            _request_reply_manager->start_transaction(std::to_string(ping_id), {{stamp, {0, 0}}, target});
+            _ping_manager->start_transaction(std::to_string(ping_id), {{stamp, {0, 0}}, target});
         }
         live_bucket()->process_attempts(_deep_sampling_now, target);
     } else if (layer->getMessageType() == pcpp::ICMP_ECHO_REPLY) {
         if (auto reply = layer->getEchoReplyData(); reply != nullptr) {
             auto ping_id = (static_cast<uint32_t>(reply->header->id) << 16) | reply->header->sequence;
-            auto xact = _request_reply_manager->maybe_end_transaction(std::to_string(ping_id), stamp);
+            auto xact = _ping_manager->maybe_end_transaction(std::to_string(ping_id), stamp);
             if (xact.first == Result::Valid) {
                 live_bucket()->new_transaction(_deep_sampling_now, xact.second);
             } else if (xact.first == Result::TimedOut) {
@@ -539,16 +565,20 @@ void NetProbeMetricsManager::process_netprobe_icmp(pcpp::IcmpLayer *layer, const
 
 void NetProbeMetricsManager::process_netprobe_icmpv6(pcpp::ICMPv6EchoLayer *layer, const std::string &target, timespec stamp)
 {
+    // a received packet expires requests as of its read time, as in process_netprobe_icmp
+    if (layer->getMessageType() != pcpp::ICMPv6MessageType::ICMPv6_ECHO_REQUEST) {
+        expire_ping_requests(stamp);
+    }
     // base event
     new_event(stamp);
     // getIdentifier()/getSequenceNr() already byte-swap to host order inside pcpp (be16toh),
     // matching the htobe16 the send side used; do not add another ntohs.
     auto ping_id = (static_cast<uint32_t>(layer->getIdentifier()) << 16) | layer->getSequenceNr();
     if (layer->getMessageType() == pcpp::ICMPv6MessageType::ICMPv6_ECHO_REQUEST) {
-        _request_reply_manager->start_transaction(std::to_string(ping_id), {{stamp, {0, 0}}, target});
+        _ping_manager->start_transaction(std::to_string(ping_id), {{stamp, {0, 0}}, target});
         live_bucket()->process_attempts(_deep_sampling_now, target);
     } else if (layer->getMessageType() == pcpp::ICMPv6MessageType::ICMPv6_ECHO_REPLY) {
-        auto xact = _request_reply_manager->maybe_end_transaction(std::to_string(ping_id), stamp);
+        auto xact = _ping_manager->maybe_end_transaction(std::to_string(ping_id), stamp);
         if (xact.first == Result::Valid) {
             live_bucket()->new_transaction(_deep_sampling_now, xact.second);
         } else if (xact.first == Result::TimedOut) {

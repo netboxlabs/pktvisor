@@ -227,8 +227,8 @@ TEST_CASE("NetProbe ICMP request/reply transaction lifecycle", "[netprobe][unit]
 
 TEST_CASE("NetProbe ICMP reply that times out records a failure", "[netprobe][unit]")
 {
-    // ECHO_REQUEST → start transaction; ECHO_REPLY 6s later (default TTL is
-    // 5s) → maybe_end_transaction returns TimedOut → process_failure(Timeout).
+    // ECHO_REQUEST → start transaction; ECHO_REPLY 6 s later, past the fixture's
+    // 2 s TTL → the reply's own expiry counts the timeout, then finds no request.
     UnitFixture fx;
 
     const uint8_t payload[] = {0x00, 0x11, 0x22, 0x33};
@@ -267,6 +267,255 @@ TEST_CASE("NetProbe ICMP reply with no prior request is ignored", "[netprobe][un
     fx.manager()->bucket(0)->to_json(j);
     // No targets created — the orphan reply produced no metrics.
     CHECK(!j.contains("targets"));
+}
+
+namespace {
+// UnitFixture's handler takes the input's default timeout_msec, 2 s, as its transaction TTL. A packet the ping
+// receiver passes on expires the requests open for the TTL as of its read time. A heartbeat expires them as of
+// a second before it, the grace for a reply the receiver has read but not yet passed on.
+void ping_request(NetProbeMetricsManager *m, uint16_t id, const std::string &target, timespec stamp)
+{
+    const uint8_t payload[] = {0x01};
+    pcpp::IcmpLayer req;
+    req.setEchoRequestData(id, 1, 0, payload, sizeof(payload));
+    m->process_netprobe_icmp(&req, target, stamp);
+}
+
+void ping_reply(NetProbeMetricsManager *m, uint16_t id, const std::string &target, timespec stamp)
+{
+    const uint8_t payload[] = {0x01};
+    pcpp::IcmpLayer reply;
+    reply.setEchoReplyData(id, 1, 0, payload, sizeof(payload));
+    m->process_netprobe_icmp(&reply, target, stamp);
+}
+
+json target_json(NetProbeMetricsManager *m, const std::string &target, size_t period = 0)
+{
+    json j;
+    m->bucket(period)->to_json(j);
+    return j["targets"][target];
+}
+}
+
+TEST_CASE("NetProbe ping: a request that gets no reply counts one timeout", "[netprobe][unit]")
+{
+    UnitFixture fx;
+    ping_request(fx.manager(), 0x0101, "dead", {100, 0});
+
+    // past the timeout, but not yet past the grace after it
+    fx.proxy->heartbeat_cb({102, 900'000'000});
+    CHECK(target_json(fx.manager(), "dead")["packets_timeout"] == 0);
+
+    fx.proxy->heartbeat_cb({103, 0});
+    CHECK(target_json(fx.manager(), "dead")["packets_timeout"] == 1);
+
+    fx.proxy->heartbeat_cb({140, 0});
+    auto t = target_json(fx.manager(), "dead");
+    CHECK(t["attempts"] == 1);
+    CHECK(t["successes"] == 0);
+    CHECK(t["packets_timeout"] == 1);
+}
+
+TEST_CASE("NetProbe ping IPv6: a request that gets no reply counts one timeout", "[netprobe][unit]")
+{
+    UnitFixture fx;
+    pcpp::ICMPv6EchoLayer req(pcpp::ICMPv6EchoLayer::REQUEST, 0x0102, 1, nullptr, 0);
+    fx.manager()->process_netprobe_icmpv6(&req, "dead6", {100, 0});
+
+    fx.proxy->heartbeat_cb({103, 0});
+    fx.proxy->heartbeat_cb({140, 0});
+    auto t = target_json(fx.manager(), "dead6");
+    CHECK(t["attempts"] == 1);
+    CHECK(t["packets_timeout"] == 1);
+}
+
+TEST_CASE("NetProbe ping IPv6: a reply from another target counts an expired request", "[netprobe][unit]")
+{
+    UnitFixture fx;
+    pcpp::ICMPv6EchoLayer dead(pcpp::ICMPv6EchoLayer::REQUEST, 0x0103, 1, nullptr, 0);
+    fx.manager()->process_netprobe_icmpv6(&dead, "dead6", {100, 0});
+    pcpp::ICMPv6EchoLayer live(pcpp::ICMPv6EchoLayer::REQUEST, 0x0104, 1, nullptr, 0);
+    fx.manager()->process_netprobe_icmpv6(&live, "live6", {104, 0});
+    CHECK(target_json(fx.manager(), "dead6")["packets_timeout"] == 0);
+
+    pcpp::ICMPv6EchoLayer reply(pcpp::ICMPv6EchoLayer::REPLY, 0x0104, 1, nullptr, 0);
+    fx.manager()->process_netprobe_icmpv6(&reply, "live6", {104, 10'000'000});
+    CHECK(target_json(fx.manager(), "dead6")["packets_timeout"] == 1);
+    CHECK(target_json(fx.manager(), "live6")["successes"] == 1);
+}
+
+TEST_CASE("NetProbe ping: a reply in time counts no timeout", "[netprobe][unit]")
+{
+    UnitFixture fx;
+    ping_request(fx.manager(), 0x0201, "live", {100, 0});
+    ping_reply(fx.manager(), 0x0201, "live", {100, 12'000'000});
+
+    fx.proxy->heartbeat_cb({140, 0});
+    auto t = target_json(fx.manager(), "live");
+    CHECK(t["successes"] == 1);
+    CHECK(t["packets_timeout"] == 0);
+}
+
+TEST_CASE("NetProbe ping: a reply later than the timeout counts one timeout and no success", "[netprobe][unit]")
+{
+    UnitFixture fx;
+    ping_request(fx.manager(), 0x0251, "slow", {100, 0});
+    ping_reply(fx.manager(), 0x0251, "slow", {102, 500'000'000});
+
+    fx.proxy->heartbeat_cb({140, 0});
+    auto t = target_json(fx.manager(), "slow");
+    CHECK(t["successes"] == 0);
+    CHECK(t["packets_timeout"] == 1);
+}
+
+TEST_CASE("NetProbe ping: a reply after its request expired is not counted again", "[netprobe][unit]")
+{
+    UnitFixture fx;
+    ping_request(fx.manager(), 0x0301, "slow", {100, 0});
+    fx.proxy->heartbeat_cb({103, 0});
+    REQUIRE(target_json(fx.manager(), "slow")["packets_timeout"] == 1);
+
+    ping_reply(fx.manager(), 0x0301, "slow", {103, 500'000'000});
+    auto t = target_json(fx.manager(), "slow");
+    CHECK(t["successes"] == 0);
+    CHECK(t["packets_timeout"] == 1);
+}
+
+TEST_CASE("NetProbe ping: a reply received in time but delivered after the timeout is a success", "[netprobe][unit]")
+{
+    UnitFixture fx;
+    ping_request(fx.manager(), 0x0401, "edge", {100, 0});
+    // the receiver read the reply at 101.9 s and delivers it after a heartbeat at 102.5 s
+    fx.proxy->heartbeat_cb({102, 500'000'000});
+    ping_reply(fx.manager(), 0x0401, "edge", {101, 900'000'000});
+
+    fx.proxy->heartbeat_cb({140, 0});
+    auto t = target_json(fx.manager(), "edge");
+    CHECK(t["successes"] == 1);
+    CHECK(t["packets_timeout"] == 0);
+}
+
+TEST_CASE("NetProbe ping: a send does not expire a request whose reply is still to be delivered", "[netprobe][unit]")
+{
+    UnitFixture fx;
+    ping_request(fx.manager(), 0x0451, "a", {100, 0});
+    // the loop was held up, by a DNS lookup for b, before b's send and before a's reply, read at 100.02 s,
+    // reached the handler
+    ping_request(fx.manager(), 0x0452, "b", {104, 0});
+    ping_reply(fx.manager(), 0x0451, "a", {100, 20'000'000});
+
+    auto t = target_json(fx.manager(), "a");
+    CHECK(t["successes"] == 1);
+    CHECK(t["packets_timeout"] == 0);
+}
+
+TEST_CASE("NetProbe ping: a reply from another target counts an expired request, without a heartbeat", "[netprobe][unit]")
+{
+    UnitFixture fx;
+    ping_request(fx.manager(), 0x0501, "dead", {100, 0});
+    ping_request(fx.manager(), 0x0502, "live", {104, 0});
+    CHECK(target_json(fx.manager(), "dead")["packets_timeout"] == 0);
+
+    ping_reply(fx.manager(), 0x0502, "live", {104, 10'000'000});
+    CHECK(target_json(fx.manager(), "dead")["packets_timeout"] == 1);
+    CHECK(target_json(fx.manager(), "live")["successes"] == 1);
+    CHECK(target_json(fx.manager(), "live")["packets_timeout"] == 0);
+}
+
+TEST_CASE("NetProbe ping: a request still open at a window shift counts its timeout in the next window", "[netprobe][unit]")
+{
+    UnitFixture fx(2);
+    fx.manager()->set_start_tstamp({1000, 0});
+    ping_request(fx.manager(), 0x0601, "dead", {1059, 500'000'000});
+    // another target's request opens the next window
+    ping_request(fx.manager(), 0x0602, "live", {1060, 100'000'000});
+    REQUIRE(fx.manager()->current_periods() == 2);
+
+    fx.proxy->heartbeat_cb({1063, 0});
+    CHECK(target_json(fx.manager(), "dead", 1)["attempts"] == 1);
+    CHECK(target_json(fx.manager(), "dead", 1)["packets_timeout"] == 0);
+    CHECK(target_json(fx.manager(), "dead", 0)["packets_timeout"] == 1);
+}
+
+TEST_CASE("NetProbe ping: a request that expired before a heartbeat opens the next window counts in the closing one", "[netprobe][unit]")
+{
+    UnitFixture fx(2);
+    fx.manager()->set_start_tstamp({1000, 0});
+    ping_request(fx.manager(), 0x0701, "dead", {1050, 0});
+    fx.proxy->heartbeat_cb({1060, 0});
+    REQUIRE(fx.manager()->current_periods() == 2);
+
+    CHECK(target_json(fx.manager(), "dead", 1)["packets_timeout"] == 1);
+    CHECK(!target_json(fx.manager(), "dead", 0).is_object());
+}
+
+TEST_CASE("NetProbe ping: a request that expired before a reply opens the next window counts in the closing one", "[netprobe][unit]")
+{
+    UnitFixture fx(2);
+    fx.manager()->set_start_tstamp({1000, 0});
+    ping_request(fx.manager(), 0x0801, "dead", {1050, 0});
+    ping_request(fx.manager(), 0x0802, "live", {1059, 0});
+    ping_reply(fx.manager(), 0x0802, "live", {1060, 50'000'000});
+    REQUIRE(fx.manager()->current_periods() == 2);
+
+    CHECK(target_json(fx.manager(), "dead", 1)["packets_timeout"] == 1);
+    CHECK(!target_json(fx.manager(), "dead", 0).is_object());
+}
+
+namespace {
+using PingTransactions = TransactionManager<std::string, NetProbeTransaction, std::hash<std::string>>;
+
+timespec after(timespec start, int64_t ns)
+{
+    const int64_t at = static_cast<int64_t>(start.tv_sec) * 1'000'000'000 + start.tv_nsec + ns;
+    return {static_cast<time_t>(at / 1'000'000'000), static_cast<long>(at % 1'000'000'000)};
+}
+}
+
+TEST_CASE("TransactionManager expire_transactions ends a transaction at the age maybe_end_transaction times it out", "[netprobe][unit]")
+{
+    const timespec start{100, 250'000'000};
+    for (uint32_t ttl_ms : {0U, 500U, 1000U, 2000U, 2500U}) {
+        CAPTURE(ttl_ms);
+        const int64_t ttl_ns = static_cast<int64_t>(ttl_ms) * 1'000'000;
+
+        PingTransactions ended(ttl_ms);
+        if (ttl_ns > 0) {
+            ended.start_transaction("x", {{start, {0, 0}}, "t"});
+            CHECK(ended.maybe_end_transaction("x", after(start, ttl_ns - 1)).first == Result::Valid);
+        }
+        ended.start_transaction("x", {{start, {0, 0}}, "t"});
+        CHECK(ended.maybe_end_transaction("x", after(start, ttl_ns)).first == Result::TimedOut);
+
+        PingTransactions expiring(ttl_ms);
+        expiring.start_transaction("x", {{start, {0, 0}}, "t"});
+        std::vector<std::string> expired;
+        auto collect = [&expired](const NetProbeTransaction &xact) { expired.push_back(xact.target); };
+        if (ttl_ns > 0) {
+            CHECK(expiring.expire_transactions(after(start, ttl_ns - 1), collect) == 0);
+        }
+        CHECK(expiring.expire_transactions(after(start, ttl_ns), collect) == 1);
+        CHECK(expired == std::vector<std::string>{"t"});
+        CHECK(expiring.open_transaction_count() == 0);
+    }
+}
+
+TEST_CASE("TransactionManager expire_transactions finds a transaction after an older one ended", "[netprobe][unit]")
+{
+    PingTransactions m(2000);
+    size_t count{0};
+    auto counter = [&count](const NetProbeTransaction &) { ++count; };
+    m.start_transaction("a", {{{100, 0}, {0, 0}}, "a"});
+    m.start_transaction("b", {{{101, 0}, {0, 0}}, "b"});
+    REQUIRE(m.maybe_end_transaction("a", {100, 10'000'000}).first == Result::Valid);
+
+    CHECK(m.expire_transactions({102, 500'000'000}, counter) == 0);
+    CHECK(m.expire_transactions({103, 0}, counter) == 1);
+
+    m.start_transaction("c", {{{110, 0}, {0, 0}}, "c"});
+    CHECK(m.expire_transactions({111, 0}, counter) == 0);
+    CHECK(m.expire_transactions({112, 0}, counter) == 1);
+    CHECK(count == 2);
 }
 
 TEST_CASE("NetProbe ICMP v4 matching: single-target request+reply", "[netprobe][unit]")
