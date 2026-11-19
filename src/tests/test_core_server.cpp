@@ -276,6 +276,132 @@ TEST_CASE("Policy metrics skip a policy without the period under __all and answe
     CHECK_THAT(json::parse(res.body).value("error", ""), Catch::Matchers::ContainsSubstring("has not yet accumulated"));
 }
 
+// the largest period that fits in a signed 64-bit number, the next one, and one past every 64-bit number
+auto constexpr INT64_MAX_PERIOD = "9223372036854775807";
+auto constexpr PAST_INT64 = "9223372036854775808";
+auto constexpr PAST_UINT64 = "99999999999999999999";
+
+TEST_CASE("Policy metrics answer a period too large for 64 bits as they answer any period past the range", "[api][policies]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(load_tap(registry));
+    REQUIRE_NOTHROW(load_policy(registry, "edge"));
+
+    for (auto period : {"99", INT64_MAX_PERIOD, PAST_INT64, PAST_UINT64}) {
+        INFO("period " << period);
+        httplib::Response bucket;
+        api::get_policies_metrics(*registry.policy_manager(), {"edge"}, false, period, false, bucket);
+        CHECK(bucket.status == 425);
+        CHECK(json::parse(bucket.body) == json{{"error", "invalid metrics period, specify [0, 4]"}});
+
+        httplib::Response window;
+        api::get_policies_metrics(*registry.policy_manager(), {"edge"}, false, period, true, window);
+        CHECK(window.status == 425);
+        CHECK(json::parse(window.body) == json{{"error", "invalid metrics period, specify [2, 5]"}});
+    }
+
+    // the routes pass only digits, but a direct caller can pass anything
+    httplib::Response text;
+    api::get_policies_metrics(*registry.policy_manager(), {"edge"}, false, "1x", false, text);
+    CHECK(text.status == 425);
+    CHECK(json::parse(text.body) == json{{"error", "invalid metrics period '1x'"}});
+}
+
+TEST_CASE("Policy metrics under __all answer 425 for a period no policy keeps, and leave out one that has not reached it", "[api][policies]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(load_tap(registry));
+    // edge keeps 5 periods, wide keeps 10; both have accumulated only period 0
+    REQUIRE_NOTHROW(load_policy(registry, "edge"));
+    auto wide = policy("wide");
+    wide.replace(wide.find("      handlers:\n") + std::string("      handlers:\n").size(), 0, "        window_config:\n          num_periods: 10\n");
+    REQUIRE_NOTHROW(registry.policy_manager()->load_from_str(wide));
+    auto names = registry.policy_manager()->module_get_keys();
+
+    SECTION("a period past every policy's range")
+    {
+        for (auto period : {"10", "99", PAST_INT64, PAST_UINT64}) {
+            INFO("period " << period);
+            httplib::Response bucket;
+            api::get_policies_metrics(*registry.policy_manager(), names, true, period, false, bucket);
+            CHECK(bucket.status == 425);
+            auto j = json::parse(bucket.body);
+            CHECK(j.size() == 1);
+            CHECK_THAT(j.value("error", ""), Catch::Matchers::StartsWith("invalid metrics period"));
+        }
+        for (auto period : {"0", "1", "11", PAST_INT64}) {
+            INFO("window " << period);
+            httplib::Response window;
+            api::get_policies_metrics(*registry.policy_manager(), names, true, period, true, window);
+            CHECK(window.status == 425);
+            CHECK_THAT(json::parse(window.body).value("error", ""), Catch::Matchers::StartsWith("invalid metrics period"));
+        }
+    }
+
+    SECTION("a period inside one policy's range")
+    {
+        // past edge's range, kept by wide but not reached yet: wide may still have it, so nothing is refused
+        httplib::Response bucket;
+        api::get_policies_metrics(*registry.policy_manager(), names, true, "7", false, bucket);
+        CHECK(status(bucket) == 200);
+        CHECK(json::parse(bucket.body) == json::object());
+
+        // a window merges what wide holds so far
+        httplib::Response window;
+        api::get_policies_metrics(*registry.policy_manager(), names, true, "7", true, window);
+        CHECK(status(window) == 200);
+        auto j = json::parse(window.body);
+        CHECK(j.contains("wide"));
+        CHECK_FALSE(j.contains("edge"));
+    }
+
+    SECTION("no policy at all")
+    {
+        httplib::Response res;
+        api::get_policies_metrics(*registry.policy_manager(), {}, true, "99", false, res);
+        CHECK(status(res) == 200);
+        CHECK(json::parse(res.body) == json::object());
+    }
+}
+
+TEST_CASE("Default policy routes answer a period the default policy does not keep as the per-policy route does", "[api][policies]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(load_tap(registry));
+    REQUIRE_NOTHROW(load_policy(registry, "default"));
+
+    for (auto period : {"1", "99", PAST_INT64, PAST_UINT64}) {
+        INFO("bucket " << period);
+        httplib::Response per_policy;
+        api::get_policies_metrics(*registry.policy_manager(), {"default"}, false, period, false, per_policy);
+        httplib::Response res;
+        api::get_default_bucket(*registry.policy_manager(), period, res);
+        CHECK(res.status == 425);
+        CHECK(res.status == per_policy.status);
+        CHECK(json::parse(res.body) == json::parse(per_policy.body));
+    }
+    httplib::Response past;
+    api::get_default_bucket(*registry.policy_manager(), "99", past);
+    CHECK(json::parse(past.body) == json{{"error", "invalid metrics period, specify [0, 4]"}});
+
+    for (auto period : {"1", "99", PAST_INT64, PAST_UINT64}) {
+        INFO("window " << period);
+        httplib::Response per_policy;
+        api::get_policies_metrics(*registry.policy_manager(), {"default"}, false, period, true, per_policy);
+        httplib::Response res;
+        api::get_default_window(*registry.policy_manager(), period, res);
+        CHECK(res.status == 425);
+        CHECK(res.status == per_policy.status);
+        CHECK(json::parse(res.body) == json{{"error", "invalid metrics period, specify [2, 5]"}});
+    }
+}
+
 TEST_CASE("POST routes answer 201 with what they loaded and refuse a name already taken", "[api][taps][policies]")
 {
     CoreRegistry registry;
@@ -334,4 +460,24 @@ visor:
         CHECK(unmatched.status == 422);
         CHECK_FALSE(registry.policy_manager()->module_exists("core"));
     }
+}
+
+TEST_CASE("A policy POST naming a tap that does not exist answers 422 and creates nothing", "[api][policies]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    auto yaml = policy("core");
+    yaml.replace(yaml.find("tap: anycast"), std::string("tap: anycast").size(), "tap: nowhere");
+
+    httplib::Response res;
+    api::post_policies(*registry.policy_manager(), yaml, res);
+    CHECK(res.status == 422);
+    CHECK(json::parse(res.body) == json{{"error", "tap 'nowhere' does not exist"}});
+    CHECK_FALSE(registry.policy_manager()->module_exists("core"));
+
+    // nothing was left behind: the same body is refused the same way, not as a name in use
+    httplib::Response again;
+    api::post_policies(*registry.policy_manager(), yaml, again);
+    CHECK(again.status == 422);
 }

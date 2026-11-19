@@ -65,6 +65,12 @@ paths:
                 properties:
                   '1m':
                     $ref: '#/components/schemas/MetricsView'
+        '425':
+          description: 'The default policy does not hold that period: past the periods it keeps, or not accumulated yet. The body names the valid range in error'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '500':
           description: server error
   /api/v1/metrics/window/{periodCount}:
@@ -90,10 +96,23 @@ paths:
                 properties:
                   '{periodCount}m':
                     $ref: '#/components/schemas/MetricsView'
+        '425':
+          description: 'The count is outside the periods the default policy keeps. The body names the valid range in error'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '500':
           description: server error
 components:
   schemas:
+    Error:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
     AppInfo:
       type: object
       required:

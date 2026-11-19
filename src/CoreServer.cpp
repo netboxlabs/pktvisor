@@ -9,7 +9,9 @@
 #include "PrometheusSerializer.h"
 #include "Taps.h"
 #include "visor_config.h"
+#include <charconv>
 #include <chrono>
+#include <limits>
 #include <optional>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
@@ -222,6 +224,32 @@ void CoreServer::_setup_routes(const PrometheusConfig &prom_config)
 
 namespace api {
 
+namespace {
+
+// The routes match the period as digits. One too large for 64 bits is past every handler's range, as the largest
+// 64-bit number is, so it is read as that number and refused like any other period past the range.
+uint64_t parse_period(const std::string &period)
+{
+    uint64_t value{0};
+    auto end = period.data() + period.size();
+    auto [ptr, ec] = std::from_chars(period.data(), end, value);
+    if (ec == std::errc::result_out_of_range) {
+        return std::numeric_limits<uint64_t>::max();
+    }
+    if (ec != std::errc() || ptr != end) {
+        throw PeriodException(fmt::format("invalid metrics period '{}'", period), PeriodException::Reason::OutOfRange);
+    }
+    return value;
+}
+
+void period_error(const PeriodException &e, httplib::Response &res)
+{
+    res.status = 425; // 425 Too Early
+    res.set_content(json{{"error", e.what()}}.dump(), "text/json");
+}
+
+}
+
 void get_tap(TapManager &taps, const std::string &name, httplib::Response &res)
 {
     json j = json::object();
@@ -312,7 +340,7 @@ void get_default_bucket(PolicyManager &policies, const std::string &period, http
             res.set_content(j.dump(), "text/json");
             return;
         }
-        uint64_t period_value(std::stol(period));
+        auto period_value = parse_period(period);
         auto logger = spdlog::get("visor");
         for (auto &mod : policy->modules()) {
             auto hmod = dynamic_cast<StreamHandler *>(mod);
@@ -328,6 +356,8 @@ void get_default_bucket(PolicyManager &policies, const std::string &period, http
             }
         }
         res.set_content(j.dump(), "text/json");
+    } catch (const PeriodException &e) {
+        period_error(e, res);
     } catch (const std::exception &e) {
         res.status = 500;
         j["error"] = e.what();
@@ -346,7 +376,7 @@ void get_default_window(PolicyManager &policies, const std::string &period, http
             res.set_content(j.dump(), "text/json");
             return;
         }
-        uint64_t period_value(std::stol(period));
+        auto period_value = parse_period(period);
         auto logger = spdlog::get("visor");
         for (auto &mod : policy->modules()) {
             auto hmod = dynamic_cast<StreamHandler *>(mod);
@@ -358,6 +388,8 @@ void get_default_window(PolicyManager &policies, const std::string &period, http
             }
         }
         res.set_content(j.dump(), "text/json");
+    } catch (const PeriodException &e) {
+        period_error(e, res);
     } catch (const std::exception &e) {
         res.status = 500;
         j["error"] = e.what();
@@ -402,8 +434,12 @@ void get_policies_metrics(PolicyManager &policies, const std::vector<std::string
         // a single policy that does not exist answers 404 whatever the period, so its period is parsed once it is found
         std::optional<uint64_t> period_value;
         if (all) {
-            period_value = std::stol(period);
+            period_value = parse_period(period);
         }
+        // __all leaves out a policy that does not hold the period, and refuses the period only if no policy it
+        // found keeps it: a period one policy keeps but has not reached yet is still a period to ask for
+        bool kept{false};
+        std::optional<PeriodException> out_of_range;
         auto logger = spdlog::get("visor");
         for (const auto &name : names) {
             spdlog::stopwatch psw;
@@ -419,25 +455,32 @@ void get_policies_metrics(PolicyManager &policies, const std::vector<std::string
                 return;
             }
             if (!period_value) {
-                period_value = std::stol(period);
+                period_value = parse_period(period);
             }
             try {
                 policy->json_metrics(j, *period_value, merge);
-            } catch (const PeriodException &) {
+                kept = true;
+            } catch (const PeriodException &e) {
                 // if period is bad for a single policy in __all mode, skip it. otherwise fail
-                if (all) {
-                    j.erase(name);
-                    continue;
+                if (!all) {
+                    throw;
                 }
-                throw;
+                j.erase(name);
+                if (e.reason() == PeriodException::Reason::OutOfRange) {
+                    out_of_range = e;
+                } else {
+                    kept = true;
+                }
+                continue;
             }
             logger->debug("{} policy json metrics elapsed time: {}", name, psw);
         }
+        if (!kept && out_of_range) {
+            throw *out_of_range;
+        }
         res.set_content(j.dump(), "text/json");
     } catch (const PeriodException &e) {
-        res.status = 425; // 425 Too Early
-        j["error"] = e.what();
-        res.set_content(j.dump(), "text/json");
+        period_error(e, res);
     } catch (const std::exception &e) {
         res.status = 500;
         j["error"] = e.what();
