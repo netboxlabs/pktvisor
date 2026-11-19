@@ -76,14 +76,22 @@ std::vector<Tap *> TapManager::load(const YAML::Node &tap_yaml, bool strict, boo
             if (!it->second["config"].IsMap()) {
                 throw TapException("tap configuration is not a map");
             }
-            tap_module->config_set_yaml(it->second["config"]);
+            try {
+                tap_module->config_set_yaml(it->second["config"]);
+            } catch (const ConfigException &e) {
+                throw TapException(fmt::format("invalid tap config: {}", e.what()));
+            }
         }
 
         if (it->second["tags"]) {
             if (!it->second["tags"].IsMap()) {
                 throw TapException("tap tags is not a map");
             }
-            tap_module->tags_set_yaml(it->second["tags"]);
+            try {
+                tap_module->tags_set_yaml(it->second["tags"]);
+            } catch (const ConfigException &e) {
+                throw TapException(fmt::format("invalid tap tags: {}", e.what()));
+            }
         }
 
         if (info) {
@@ -181,8 +189,8 @@ bool Tap::tags_match_selector_yaml(const YAML::Node &tag_yaml, bool all)
 {
     bool any_match = false;
     for (YAML::const_iterator it = tag_yaml.begin(); it != tag_yaml.end(); ++it) {
-        // sequence
-        if (it->size() > 1) {
+        // sequence: read nothing from an item that is not one key and value
+        if (!it->IsMap() || it->size() != 1) {
             throw TapException("selector tag must contain only one key/value pair per sequence index");
         }
 
@@ -232,7 +240,13 @@ bool Tap::tags_match_selector_yaml(const YAML::Node &tag_yaml, bool all)
                 return false;
             }
         } else {
-            if (_tags->config_get<std::string>(key) == value) {
+            std::string tag_value;
+            try {
+                tag_value = _tags->config_get<std::string>(key);
+            } catch (ConfigException &e) {
+                throw TapException(fmt::format("Tap [{}]: tag and selector value types are different for key '{}'", name(), key));
+            }
+            if (tag_value == value) {
                 any_match = true;
             } else if (all) {
                 return false;

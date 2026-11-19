@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 #include <regex>
 #include <shared_mutex>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <variant>
@@ -41,7 +42,8 @@ public:
         : _name(name)
     {
         if (!std::regex_match(name, std::regex(MODULE_ID_REGEX))) {
-            throw std::runtime_error("invalid module name: " + name);
+            // every name the admin API loads comes from the request: an invalid_argument, which it answers 422
+            throw std::invalid_argument("invalid module name: " + name);
         }
     }
 

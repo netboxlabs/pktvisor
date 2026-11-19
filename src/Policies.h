@@ -35,11 +35,12 @@ class PrometheusSerializer;
 std::optional<std::vector<timespec>> next_merged_windows(const std::vector<StreamHandler *> &handlers,
     const std::vector<timespec> &last_starts);
 
-class PolicyException : public std::runtime_error
+// a policy that pktvisord refuses as written: an invalid_argument, which the admin API answers 422
+class PolicyException : public std::invalid_argument
 {
 public:
     explicit PolicyException(const std::string &msg)
-        : std::runtime_error(msg)
+        : std::invalid_argument(msg)
     {
     }
 };

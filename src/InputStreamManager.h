@@ -9,15 +9,16 @@
 
 namespace visor {
 
-class InputStreamException : public std::runtime_error
+// an input configuration that pktvisord refuses as written: an invalid_argument, which the admin API answers 422
+class InputStreamException : public std::invalid_argument
 {
 public:
     InputStreamException(const char *msg)
-        : std::runtime_error(msg)
+        : std::invalid_argument(msg)
     {
     }
     InputStreamException(const std::string &msg)
-        : std::runtime_error(msg)
+        : std::invalid_argument(msg)
     {
     }
 };

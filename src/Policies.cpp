@@ -164,7 +164,8 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
                         _registry->input_manager()->module_add(tap->instantiate(&input_config, &input_filter, input_stream_name));
                         added_inputs.push_back(input_stream_name);
                     } catch (std::runtime_error &e) {
-                        throw PolicyException(fmt::format("unable to instantiate tap '{}': {}", tap_name, e.what()));
+                        // not the request's fault, so not a PolicyException: the admin API answers 500
+                        throw std::runtime_error(fmt::format("unable to instantiate tap '{}': {}", tap_name, e.what()));
                     }
                 } else {
                     // a test holds the load on this message, between finding the input and taking it
@@ -181,12 +182,20 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
                     std::unique_ptr<StreamHandler> handler_module;
                     auto handler_plugin = _registry->handler_plugins().find(std::make_pair(handler_config.type, handler_config.version));
                     auto handler_name = policy_name + "-" + tap_name + "-" + handler_config.name;
-                    if (!handler_sequence || handler_modules.empty()) {
-                        handler_module = handler_plugin->second->instantiate(handler_name, input_event_proxy, &handler_config.config, &handler_config.filter);
-                    } else {
-                        // for sequence, use only previous handler
-                        handler_modules.back()->set_event_proxy(input_ptr->create_event_proxy(Configurable()));
-                        handler_module = handler_plugin->second->instantiate(handler_name, handler_modules.back()->get_event_proxy(), &handler_config.config, &handler_config.filter);
+                    try {
+                        if (!handler_sequence || handler_modules.empty()) {
+                            handler_module = handler_plugin->second->instantiate(handler_name, input_event_proxy, &handler_config.config, &handler_config.filter);
+                        } else {
+                            // for sequence, use only previous handler
+                            handler_modules.back()->set_event_proxy(input_ptr->create_event_proxy(Configurable()));
+                            handler_module = handler_plugin->second->instantiate(handler_name, handler_modules.back()->get_event_proxy(), &handler_config.config, &handler_config.filter);
+                        }
+                    } catch (const StreamHandlerException &e) {
+                        // a handler refuses as it is built an input it cannot read, or a config value of the wrong
+                        // type: both are the policy's
+                        throw HandlerException(e.what());
+                    } catch (const ConfigException &e) {
+                        throw HandlerException(e.what());
                     }
                     handler_module->set_version(handler_config.version);
                     policy_ptr->add_module(handler_module.get());
@@ -259,7 +268,9 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
             module_add(std::move(policy));
         } catch (const std::runtime_error &e) {
             rollback();
-            throw PolicyException(fmt::format("policy [{}] failed to start: {}", policy_name, e.what()));
+            // the admin API answers 500: an input or handler that refuses its config as it starts cannot be told
+            // apart here from a failure of the host, such as a port in use
+            throw std::runtime_error(fmt::format("policy [{}] failed to start: {}", policy_name, e.what()));
         } catch (...) {
             // anything else, such as a std::invalid_argument, is rethrown as it was so callers still tell it apart
             rollback();
@@ -313,7 +324,8 @@ std::string PolicyManager::_get_policy_name(YAML::const_iterator it)
     }
     // Ensure policy name isn't already defined
     if (module_exists(policy_name)) {
-        throw PolicyException(fmt::format("policy with name '{}' already defined", policy_name));
+        // a name in use, as the policy map refuses one: not a PolicyException, so the admin API answers 409
+        throw ModuleException(policy_name, fmt::format("policy with name '{}' already defined", policy_name));
     }
 
     // Policy kind defines schema

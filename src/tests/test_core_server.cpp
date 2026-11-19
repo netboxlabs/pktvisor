@@ -1,6 +1,8 @@
 #include "BuiltinPlugins.h"
 #include "CoreRegistry.h"
 #include "CoreServer.h"
+#include "HandlerManager.h"
+#include "InputStreamManager.h"
 #include "Policies.h"
 #include "Taps.h"
 
@@ -501,4 +503,152 @@ TEST_CASE("A policy POST naming a tap that does not exist answers 422 and create
     httplib::Response again;
     api::post_policies(*registry.policy_manager(), yaml, again);
     CHECK(again.status == 422);
+}
+
+namespace {
+
+// a policy named core with the input lines given, at the indentation of the keys under input, and the net handler
+// unless the handlers are given; extra is added after the handlers, at the indentation of the policy's keys
+std::string core_policy(const std::string &input, const std::string &handlers = "handlers:\n        modules:\n          core_net:\n            type: net\n", const std::string &extra = "")
+{
+    return "visor:\n  policies:\n    core:\n      kind: collection\n      input:\n" + input + "      " + handlers + extra;
+}
+
+auto constexpr ON_ANYCAST = "        tap: anycast\n        input_type: mock\n";
+
+}
+
+TEST_CASE("POST routes answer 422 for a body they refuse as written, and create nothing", "[api][taps][policies]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+
+    SECTION("POST /api/v1/taps")
+    {
+        const std::vector<std::pair<std::string, std::string>> refused{
+            {"", "empty data"},
+            {"visor:\n  policies: {}\n", "no taps found in schema"},
+            {"version: \"2.0\"\nvisor:\n  taps:\n    x:\n      input_type: mock\n", "unsupported version"},
+            {"visor:\n  taps:\n    x:\n      config: {}\n", "missing or invalid tap type key 'input_type'"},
+            {"visor:\n  taps:\n    x:\n      input_type: nope\n", "Tap 'x' requires input stream type 'nope' which is not available"},
+            {"visor:\n  taps:\n    x:\n      input_type: mock\n      config: 3\n", "tap configuration is not a map"},
+            {"visor:\n  taps:\n    x:\n      input_type: mock\n      config:\n        list:\n          - a: b\n", "invalid tap config: invalid value for sequence in key: list"},
+            {"visor:\n  taps:\n    x:\n      input_type: mock\n      tags:\n        list:\n          - a: b\n", "invalid tap tags: invalid value for sequence in key: list"},
+            {"visor:\n  taps:\n    x:\n      input_type: mock\n    y:\n      input_type: mock\n", "only a single tap expected but got 2"},
+            {"visor:\n  taps:\n    my tap:\n      input_type: mock\n", "invalid module name: my tap"},
+        };
+        for (const auto &[body, error] : refused) {
+            CAPTURE(body);
+            httplib::Response res;
+            api::post_taps(*registry.tap_manager(), body, res);
+            CHECK(res.status == 422);
+            CHECK(json::parse(res.body) == json{{"error", error}});
+        }
+
+        // a key yaml-cpp cannot read as the string the tap's config expects
+        httplib::Response shape;
+        api::post_taps(*registry.tap_manager(), "visor:\n  taps:\n    x:\n      input_type: mock\n      config:\n        ? [a, b]\n        : 1\n", shape);
+        CHECK(shape.status == 422);
+        CHECK_THAT(json::parse(shape.body)["error"].get<std::string>(), Catch::Matchers::ContainsSubstring("bad conversion"));
+
+        CHECK(registry.tap_manager()->module_get_keys().empty());
+    }
+
+    SECTION("POST /api/v1/policies")
+    {
+        REQUIRE_NOTHROW(load_tap(registry));
+        REQUIRE_NOTHROW(registry.tap_manager()->load_from_str("visor:\n  taps:\n    flows:\n      input_type: flow\n"));
+        REQUIRE_NOTHROW(registry.tap_manager()->load_from_str("visor:\n  taps:\n    numbered:\n      input_type: mock\n      tags:\n        site: 5\n"));
+        auto renamed = core_policy(ON_ANYCAST);
+        renamed.replace(renamed.find("    core:"), std::string("    core:").size(), "    1core:");
+        const std::vector<std::pair<std::string, std::string>> refused{
+            {"", "empty data"},
+            {"visor:\n  taps: {}\n", "no policies found in schema"},
+            {"version: \"2.0\"\n" + core_policy(ON_ANYCAST), "unsupported version"},
+            {"visor:\n  policies:\n    a:\n      kind: collection\n    b:\n      kind: collection\n", "only a single policy expected but got 2"},
+            {"visor:\n  policies:\n    core:\n      input: {}\n", "missing or invalid policy kind at key 'kind'"},
+            {"visor:\n  policies:\n    core:\n      kind: other\n", "unknown policy kind: other"},
+            {core_policy("        input_type: mock\n        config: 3\n        tap: anycast\n"), "input configuration is not a map"},
+            {core_policy(ON_ANYCAST + std::string("        tap_selector:\n          any:\n            - site: dc\n")), "input can have only key 'input.tap' or key 'input.tap_selector'"},
+            {core_policy("        input_type: mock\n"), "missing key 'input.tap' or key 'input.tap_selector'"},
+            {core_policy("        tap: [anycast]\n        input_type: mock\n"), "invalid tap at key 'input.tap'"},
+            {core_policy("        tap: flows\n        input_type: mock\n"), "input_type for policy specified tap 'flows' doesn't match tap's defined input type: mock/flow"},
+            {core_policy(ON_ANYCAST, "kind_of_handlers: {}\n"), "missing or invalid handler configuration at key 'handlers'"},
+            {core_policy(ON_ANYCAST, "handlers:\n        modules:\n          core_x:\n            type: nope\n"), "Policy 'core' requires stream handler type 'nope' and version '1.0' which is not available"},
+            {core_policy(ON_ANYCAST, "handlers:\n        modules:\n          core_net:\n            type: net\n", "      config: 3\n"), "policy configuration is not a map"},
+            {core_policy(ON_ANYCAST, "handlers:\n        modules:\n          core_net:\n            type: net\n", "      attributes: 3\n"), "attributes of policy 'core' is not a map"},
+            {renamed, "invalid module name: 1core"},
+            {core_policy(ON_ANYCAST, "handlers:\n        modules:\n          core.net:\n            type: net\n"), "invalid module name: core-anycast-core.net"},
+            // a sequence item that names no handler, and one that is not a map
+            {core_policy(ON_ANYCAST, "handlers:\n        modules:\n          - {}\n"), "expecting handler module identifier"},
+            {core_policy(ON_ANYCAST, "handlers:\n        modules:\n          - core_net\n"), "expecting handler module identifier"},
+            // a selector item that is not one key and value
+            {core_policy("        input_type: mock\n        tap_selector:\n          any:\n            - {}\n"), "selector tag must contain only one key/value pair per sequence index"},
+            {core_policy("        input_type: mock\n        tap_selector:\n          any:\n            - site\n"), "selector tag must contain only one key/value pair per sequence index"},
+            {core_policy("        input_type: mock\n        tap_selector:\n          any:\n            - site: dc\n"), "Tap [numbered]: tag and selector value types are different for key 'site'"},
+            // a config value of the wrong type, which the handler reads as it is built
+            {core_policy(ON_ANYCAST, "handlers:\n        window_config:\n          num_periods: abc\n        modules:\n          core_net:\n            type: net\n"), "wrong type for key: num_periods"},
+            {core_policy(ON_ANYCAST, "handlers:\n        window_config:\n          num_periods: 3\n        modules:\n          core_net:\n            type: net\n            config:\n              deep_sample_rate: abc\n"), "wrong type for key: deep_sample_rate"},
+        };
+        for (const auto &[body, error] : refused) {
+            CAPTURE(body);
+            httplib::Response res;
+            api::post_policies(*registry.policy_manager(), body, res);
+            CHECK(res.status == 422);
+            CHECK(json::parse(res.body) == json{{"error", error}});
+        }
+        // a handler that cannot read the tap's input refuses it as it is built
+        httplib::Response unreadable;
+        api::post_policies(*registry.policy_manager(), core_policy("        tap: flows\n        input_type: flow\n"), unreadable);
+        CHECK(unreadable.status == 422);
+        CHECK_THAT(json::parse(unreadable.body)["error"].get<std::string>(), Catch::Matchers::StartsWith("NetStreamHandler: unsupported input event proxy"));
+
+        CHECK(registry.policy_manager()->module_get_keys().empty());
+        CHECK(registry.input_manager()->module_get_keys().empty());
+        CHECK(registry.handler_manager()->module_get_keys().empty());
+
+        // nothing was left behind: a valid policy with the same name loads
+        httplib::Response valid;
+        api::post_policies(*registry.policy_manager(), core_policy(ON_ANYCAST), valid);
+        CHECK(valid.status == 201);
+    }
+}
+
+TEST_CASE("POST routes answer 400 for a body that is not YAML", "[api][taps][policies]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+
+    for (const std::string body : {"visor: [unclosed", R"({"visor": {"taps": )"}) {
+        CAPTURE(body);
+        httplib::Response tap;
+        api::post_taps(*registry.tap_manager(), body, tap);
+        CHECK(tap.status == 400);
+        CHECK_THAT(json::parse(tap.body)["error"].get<std::string>(), Catch::Matchers::StartsWith("yaml-cpp: error at line"));
+
+        httplib::Response policy;
+        api::post_policies(*registry.policy_manager(), body, policy);
+        CHECK(policy.status == 400);
+        CHECK_THAT(json::parse(policy.body)["error"].get<std::string>(), Catch::Matchers::StartsWith("yaml-cpp: error at line"));
+    }
+    CHECK(registry.tap_manager()->module_get_keys().empty());
+    CHECK(registry.policy_manager()->module_get_keys().empty());
+}
+
+TEST_CASE("A policy POST that passes the checks and fails to start still answers 500", "[api][policies]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    // only the input checks its test_type, as it starts: the API cannot tell this from a failure of the host
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(
+        "visor:\n  taps:\n    probes:\n      input_type: netprobe\n      config:\n        test_type: nope\n        targets:\n          a:\n            target: 127.0.0.1\n"));
+
+    httplib::Response res;
+    api::post_policies(*registry.policy_manager(), core_policy("        tap: probes\n        input_type: netprobe\n", "handlers:\n        modules:\n          core_probe:\n            type: netprobe\n"), res);
+    CHECK(res.status == 500);
+    CHECK_THAT(json::parse(res.body)["error"].get<std::string>(), Catch::Matchers::StartsWith("policy [core] failed to start: nope is an invalid/unsupported test type"));
+    CHECK_FALSE(registry.policy_manager()->module_exists("core"));
 }
