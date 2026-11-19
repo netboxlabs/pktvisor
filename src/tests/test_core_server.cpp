@@ -6,9 +6,11 @@
 #include "Policies.h"
 #include "Taps.h"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <fmt/format.h>
+#include <tuple>
 
 using namespace visor;
 
@@ -560,6 +562,8 @@ TEST_CASE("POST routes answer 422 for a body they refuse as written, and create 
         REQUIRE_NOTHROW(load_tap(registry));
         REQUIRE_NOTHROW(registry.tap_manager()->load_from_str("visor:\n  taps:\n    flows:\n      input_type: flow\n"));
         REQUIRE_NOTHROW(registry.tap_manager()->load_from_str("visor:\n  taps:\n    numbered:\n      input_type: mock\n      tags:\n        site: 5\n"));
+        REQUIRE_NOTHROW(registry.tap_manager()->load_from_str("visor:\n  taps:\n    resolvers:\n      input_type: dnstap\n"));
+        REQUIRE_NOTHROW(registry.tap_manager()->load_from_str("visor:\n  taps:\n    probes:\n      input_type: netprobe\n"));
         auto renamed = core_policy(ON_ANYCAST);
         renamed.replace(renamed.find("    core:"), std::string("    core:").size(), "    1core:");
         const std::vector<std::pair<std::string, std::string>> refused{
@@ -590,6 +594,11 @@ TEST_CASE("POST routes answer 422 for a body they refuse as written, and create 
             // a config value of the wrong type, which the handler reads as it is built
             {core_policy(ON_ANYCAST, "handlers:\n        window_config:\n          num_periods: abc\n        modules:\n          core_net:\n            type: net\n"), "wrong type for key: num_periods"},
             {core_policy(ON_ANYCAST, "handlers:\n        window_config:\n          num_periods: 3\n        modules:\n          core_net:\n            type: net\n            config:\n              deep_sample_rate: abc\n"), "wrong type for key: deep_sample_rate"},
+            // a filter the input cannot apply, which it reads as the policy is added to it
+            {core_policy("        tap: resolvers\n        input_type: dnstap\n        filter:\n          only_hosts:\n            - 192.168.0.0/24/12ac\n"), "invalid CIDR: 192.168.0.0/24/12ac"},
+            {core_policy("        tap: resolvers\n        input_type: dnstap\n        filter:\n          only_hosts:\n            - 192.168.0.0/99999999999\n"), "invalid CIDR: 192.168.0.0/99999999999"},
+            // netprobe reads its input's timeout_msec as it builds the filter's proxy
+            {core_policy("        tap: probes\n        input_type: netprobe\n        config:\n          timeout_msec: abc\n", "handlers:\n        modules:\n          core_probe:\n            type: netprobe\n"), "unable to create event proxy due to invalid input filter config: wrong type for key: timeout_msec"},
         };
         for (const auto &[body, error] : refused) {
             CAPTURE(body);
@@ -613,6 +622,67 @@ TEST_CASE("POST routes answer 422 for a body they refuse as written, and create 
         api::post_policies(*registry.policy_manager(), core_policy(ON_ANYCAST), valid);
         CHECK(valid.status == 201);
     }
+}
+
+TEST_CASE("A refused policy POST leaves an input it reuses as it found it", "[api][policies]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str("visor:\n  taps:\n    resolvers:\n      input_type: dnstap\n      config:\n        dnstap_file: inputs/dnstap/tests/fixtures/fixture.dnstap\n"));
+    // a net handler and the input's resources handler both consume a dnstap input
+    auto constexpr ON_RESOLVERS = "        tap: resolvers\n        input_type: dnstap\n";
+    auto edge = core_policy(ON_RESOLVERS);
+    edge.replace(edge.find("    core:"), std::string("    core:").size(), "    edge:");
+    REQUIRE_NOTHROW(registry.policy_manager()->load_from_str(edge));
+    REQUIRE(registry.policy_manager()->module_exists("edge"));
+
+    auto inputs = registry.input_manager()->module_get_keys();
+    REQUIRE(inputs.size() == 1);
+    InputStream *input = nullptr;
+    {
+        auto [module, lock] = registry.input_manager()->module_get_locked(inputs.front());
+        input = module;
+    }
+    const auto consumers = input->consumer_count();
+    REQUIRE(consumers > 0);
+    // edge's input, which each body below reuses with a filter of its own
+    const std::string on_edge_input = ON_RESOLVERS + std::string("        filter:\n          only_hosts:\n            - 10.0.0.0/8\n");
+    Config filter;
+    filter.config_set_yaml(YAML::Load("only_hosts:\n  - 10.0.0.0/8\n"));
+    auto sorted = [](std::vector<std::string> names) {
+        std::sort(names.begin(), names.end());
+        return names;
+    };
+    const auto handlers = sorted(registry.handler_manager()->module_get_keys());
+
+    const std::vector<std::tuple<std::string, int, std::string>> refused{
+        // by the checks, once the filter is on the input
+        {core_policy(on_edge_input, "handlers:\n        modules:\n          core_x:\n            type: nope\n"), 422, "Policy 'core' requires stream handler type 'nope'"},
+        // once its handlers are built
+        {core_policy(on_edge_input, "handlers:\n        modules:\n          core_net:\n            type: net\n", "      attributes:\n        policy: x\n"), 422, "attribute 'policy' of policy 'core' collides"},
+        // as it starts
+        {core_policy(on_edge_input, "handlers:\n        modules:\n          core_net:\n            type: net\n            config:\n              nope: 1\n"), 500, "policy [core] failed to start: nope is an invalid/unsupported config or filter"},
+    };
+    for (const auto &[body, code, error] : refused) {
+        CAPTURE(body);
+        httplib::Response res;
+        api::post_policies(*registry.policy_manager(), body, res);
+        CHECK(res.status == code);
+        CHECK_THAT(json::parse(res.body)["error"].get<std::string>(), Catch::Matchers::StartsWith(error));
+        CHECK_FALSE(registry.policy_manager()->module_exists("core"));
+        CHECK(sorted(registry.handler_manager()->module_get_keys()) == handlers);
+        CHECK_FALSE(input->has_event_proxy(filter));
+        CHECK(input->consumer_count() == consumers);
+    }
+
+    // a valid body brings the filter back, and its handler's consumers with it
+    httplib::Response valid;
+    api::post_policies(*registry.policy_manager(), core_policy(on_edge_input), valid);
+    CHECK(valid.status == 201);
+    CHECK(input->has_event_proxy(filter));
+    CHECK(input->consumer_count() > consumers);
+    CHECK(registry.input_manager()->module_get_keys() == inputs);
 }
 
 TEST_CASE("POST routes answer 400 for a body that is not YAML", "[api][taps][policies]")

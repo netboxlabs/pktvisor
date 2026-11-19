@@ -96,11 +96,14 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
         std::vector<std::string> attached_inputs;
         std::vector<std::unique_ptr<Policy>> resources_policies;
         std::vector<std::string> added_resources_policies;
+        // by input name: the event proxy this load added to an input it reuses, for a filter new to that input
+        std::vector<std::pair<std::string, const InputEventProxy *>> added_proxies;
         // Undo everything this load did, one step at a time, so that a step that fails neither skips the rest
         // nor replaces the exception that started the rollback. stop() undoes a completed start; after a
         // partial one, Policy::start has already stopped the handlers, and the input manager stops the inputs
         // it removes. The policy is detached from the inputs it was attached to: a reused input outlives this
-        // load and must not keep counting it, and an input it reached but never joined is left alone.
+        // load and must not keep counting it, and an input it reached but never joined is left alone, but for
+        // a filter this load added to it.
         auto rollback = [&]() {
             auto step = [&policy_name](auto &&undo) {
                 try {
@@ -141,6 +144,13 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
             for (auto &m : added_handlers) {
                 step([&] { _registry->handler_manager()->module_remove(m); });
             }
+            // after the handlers that were given the proxy: none is left to use it
+            for (auto &added : added_proxies) {
+                step([&] {
+                    auto [input, input_lock] = _registry->input_manager()->module_get_locked(added.first);
+                    input->remove_event_proxy(added.second);
+                });
+            }
             for (auto &p : added_inputs) {
                 step([&] { _registry->input_manager()->module_remove(p); });
             }
@@ -158,7 +168,8 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
 
                 std::string input_stream_name = tap->get_input_name(input_config, input_filter);
                 // removals wait for the load, so an input found here is still there to reuse below
-                if (!_registry->input_manager()->module_exists(input_stream_name)) {
+                const bool reused = _registry->input_manager()->module_exists(input_stream_name);
+                if (!reused) {
                     try {
                         spdlog::get("visor")->info("policy [{}]: creating input stream: {}", policy_name, input_stream_name);
                         _registry->input_manager()->module_add(tap->instantiate(&input_config, &input_filter, input_stream_name));
@@ -173,7 +184,19 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
                 }
 
                 auto [input_ptr, input_lock] = _registry->input_manager()->module_get_locked(input_stream_name);
-                InputEventProxy *input_event_proxy = input_ptr->add_event_proxy(input_filter);
+                // only loads add proxies, one at a time, so a filter not found here is added by this load
+                const bool new_filter = reused && !input_ptr->has_event_proxy(input_filter);
+                InputEventProxy *input_event_proxy = nullptr;
+                try {
+                    input_event_proxy = input_ptr->add_event_proxy(input_filter);
+                } catch (const std::runtime_error &e) {
+                    // a filter the input cannot apply, such as a dnstap only_hosts entry that is not an address, or
+                    // an input config value the proxy reads, such as a netprobe timeout_msec that is not a number
+                    throw InputStreamException(e.what());
+                }
+                if (new_filter) {
+                    added_proxies.emplace_back(input_stream_name, input_event_proxy);
+                }
                 policy_ptr->add_input_stream(input_ptr);
 
                 std::vector<std::unique_ptr<StreamHandler>> handler_modules;
