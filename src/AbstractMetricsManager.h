@@ -31,14 +31,40 @@ using json = nlohmann::json;
 class PeriodException : public std::runtime_error
 {
 public:
-    PeriodException(const char *msg)
+    enum class Reason {
+        // the period is in range but not held: not accumulated yet, or no longer held
+        NotHeld,
+        // the period is outside the periods the handler keeps, so it is never held
+        OutOfRange,
+    };
+
+    PeriodException(const char *msg, Reason reason = Reason::NotHeld, uint64_t last_period = 0)
         : std::runtime_error(msg)
+        , _reason(reason)
+        , _last_period(last_period)
     {
     }
-    PeriodException(const std::string &msg)
+    PeriodException(const std::string &msg, Reason reason = Reason::NotHeld, uint64_t last_period = 0)
         : std::runtime_error(msg)
+        , _reason(reason)
+        , _last_period(last_period)
     {
     }
+
+    Reason reason() const
+    {
+        return _reason;
+    }
+
+    // for OutOfRange, the last period in the range the message names
+    uint64_t last_period() const
+    {
+        return _last_period;
+    }
+
+private:
+    Reason _reason;
+    uint64_t _last_period;
 };
 
 using namespace std::chrono;
@@ -538,7 +564,7 @@ public:
         if (period >= _num_periods) {
             std::stringstream err;
             err << "invalid metrics period, specify [0, " << _num_periods - 1 << "]";
-            throw PeriodException(err.str());
+            throw PeriodException(err.str(), PeriodException::Reason::OutOfRange, _num_periods - 1);
         }
         if (period >= _metric_buckets.size()) {
             std::stringstream err;
@@ -564,7 +590,7 @@ public:
         if (period >= _num_periods) {
             std::stringstream err;
             err << "invalid metrics period, specify [0, " << _num_periods - 1 << "]";
-            throw PeriodException(err.str());
+            throw PeriodException(err.str(), PeriodException::Reason::OutOfRange, _num_periods - 1);
         }
         if (period >= _metric_buckets.size()) {
             std::stringstream err;
@@ -591,7 +617,7 @@ public:
         if (period >= _num_periods) {
             std::stringstream err;
             err << "invalid metrics period, specify [0, " << _num_periods - 1 << "]";
-            throw PeriodException(err.str());
+            throw PeriodException(err.str(), PeriodException::Reason::OutOfRange, _num_periods - 1);
         }
         if (period >= _metric_buckets.size()) {
             std::stringstream err;
@@ -697,7 +723,7 @@ public:
         if (period <= 1 || period > _num_periods) {
             std::stringstream err;
             err << "invalid metrics period, specify [2, " << _num_periods << "]";
-            throw PeriodException(err.str());
+            throw PeriodException(err.str(), PeriodException::Reason::OutOfRange, _num_periods);
         }
 
         if (_groups && _groups->none()) {
@@ -745,7 +771,7 @@ public:
         if (period >= _num_periods) {
             std::stringstream err;
             err << "invalid metrics period, specify [0, " << _num_periods - 1 << "]";
-            throw PeriodException(err.str());
+            throw PeriodException(err.str(), PeriodException::Reason::OutOfRange, _num_periods - 1);
         }
         if (period >= _metric_buckets.size()) {
             std::stringstream err;
@@ -797,7 +823,7 @@ public:
         if (period <= 1 || period > _num_periods) {
             std::stringstream err;
             err << "invalid metrics period, specify [2, " << _num_periods << "]";
-            throw PeriodException(err.str());
+            throw PeriodException(err.str(), PeriodException::Reason::OutOfRange, _num_periods);
         }
 
         auto merged = std::make_unique<MetricsBucketClass>();

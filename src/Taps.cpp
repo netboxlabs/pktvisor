@@ -113,7 +113,8 @@ std::vector<std::string> TapManager::get_input_taps_name(const YAML::Node &input
         }
         auto tap_name = input_node["tap"].as<std::string>();
         if (!_registry->tap_manager()->module_exists(tap_name)) {
-            throw TapException(fmt::format("tap '{}' does not exist", tap_name));
+            // like a selector that matches no tap: the policy names taps that do not exist, which the API answers 422
+            throw std::invalid_argument(fmt::format("tap '{}' does not exist", tap_name));
         }
         taps_name.push_back(tap_name);
     } else if (input_node["tap_selector"]) {
