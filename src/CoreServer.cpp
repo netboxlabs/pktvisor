@@ -437,7 +437,8 @@ void get_policies_metrics(PolicyManager &policies, const std::vector<std::string
             period_value = parse_period(period);
         }
         // __all leaves out a policy that does not hold the period, and refuses the period only if no policy it
-        // found keeps it: a period one policy keeps but has not reached yet is still a period to ask for
+        // found keeps it: a period one policy keeps but has not reached yet is still a period to ask for. It then
+        // names the widest range any policy keeps, since a client can read the range from the message
         bool kept{false};
         std::optional<PeriodException> out_of_range;
         auto logger = spdlog::get("visor");
@@ -459,17 +460,20 @@ void get_policies_metrics(PolicyManager &policies, const std::vector<std::string
             }
             try {
                 policy->json_metrics(j, *period_value, merge);
-                kept = true;
+                // a policy without stream handlers writes nothing: it holds no period, and refuses none
+                if (j.contains(name)) {
+                    kept = true;
+                }
             } catch (const PeriodException &e) {
                 // if period is bad for a single policy in __all mode, skip it. otherwise fail
                 if (!all) {
                     throw;
                 }
                 j.erase(name);
-                if (e.reason() == PeriodException::Reason::OutOfRange) {
-                    out_of_range = e;
-                } else {
+                if (e.reason() != PeriodException::Reason::OutOfRange) {
                     kept = true;
+                } else if (!out_of_range || e.last_period() > out_of_range->last_period()) {
+                    out_of_range = e;
                 }
                 continue;
             }

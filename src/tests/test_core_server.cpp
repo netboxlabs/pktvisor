@@ -324,22 +324,43 @@ TEST_CASE("Policy metrics under __all answer 425 for a period no policy keeps, a
 
     SECTION("a period past every policy's range")
     {
-        for (auto period : {"10", "99", PAST_INT64, PAST_UINT64}) {
-            INFO("period " << period);
-            httplib::Response bucket;
-            api::get_policies_metrics(*registry.policy_manager(), names, true, period, false, bucket);
-            CHECK(bucket.status == 425);
-            auto j = json::parse(bucket.body);
-            CHECK(j.size() == 1);
-            CHECK_THAT(j.value("error", ""), Catch::Matchers::StartsWith("invalid metrics period"));
+        // the widest range any policy keeps, whichever policy is looked up last: a client reads the range from it
+        for (auto order : {names, std::vector<std::string>(names.rbegin(), names.rend())}) {
+            for (auto period : {"10", "99", PAST_INT64, PAST_UINT64}) {
+                INFO("period " << period);
+                httplib::Response bucket;
+                api::get_policies_metrics(*registry.policy_manager(), order, true, period, false, bucket);
+                CHECK(bucket.status == 425);
+                CHECK(json::parse(bucket.body) == json{{"error", "invalid metrics period, specify [0, 9]"}});
+            }
+            for (auto period : {"0", "1", "11", PAST_INT64}) {
+                INFO("window " << period);
+                httplib::Response window;
+                api::get_policies_metrics(*registry.policy_manager(), order, true, period, true, window);
+                CHECK(window.status == 425);
+                CHECK(json::parse(window.body) == json{{"error", "invalid metrics period, specify [2, 10]"}});
+            }
         }
-        for (auto period : {"0", "1", "11", PAST_INT64}) {
-            INFO("window " << period);
-            httplib::Response window;
-            api::get_policies_metrics(*registry.policy_manager(), names, true, period, true, window);
-            CHECK(window.status == 425);
-            CHECK_THAT(json::parse(window.body).value("error", ""), Catch::Matchers::StartsWith("invalid metrics period"));
-        }
+    }
+
+    SECTION("a policy without handlers holds no period")
+    {
+        auto bare = policy("bare");
+        auto modules = bare.find("        modules:\n");
+        bare.replace(modules, std::string::npos, "        modules: {}\n");
+        REQUIRE_NOTHROW(registry.policy_manager()->load_from_str(bare));
+        registry.policy_manager()->remove_policy("wide");
+
+        httplib::Response res;
+        api::get_policies_metrics(*registry.policy_manager(), registry.policy_manager()->module_get_keys(), true, "99", false, res);
+        CHECK(res.status == 425);
+        CHECK(json::parse(res.body) == json{{"error", "invalid metrics period, specify [0, 4]"}});
+
+        // alone, it refuses nothing either
+        httplib::Response alone;
+        api::get_policies_metrics(*registry.policy_manager(), {"bare"}, true, "99", false, alone);
+        CHECK(status(alone) == 200);
+        CHECK(json::parse(alone.body) == json::object());
     }
 
     SECTION("a period inside one policy's range")
