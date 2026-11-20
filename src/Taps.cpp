@@ -195,11 +195,11 @@ bool Tap::tags_match_selector_yaml(const YAML::Node &tag_yaml, bool all)
         }
 
         const auto it_module = it->begin();
-        const auto &key = it_module->first.as<std::string>();
-
+        // before the key is read as a string, which a key that is not a scalar cannot be
         if (!it_module->first.IsScalar()) {
-            throw TapException(fmt::format("tag key '{}' have be scalar", key));
+            throw TapException("selector tag key must be a scalar");
         }
+        const auto &key = it_module->first.as<std::string>();
         if (!it_module->second.IsScalar()) {
             throw TapException(fmt::format("tag key '{}' must have scalar value", key));
         }

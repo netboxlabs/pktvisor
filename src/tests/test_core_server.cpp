@@ -590,6 +590,7 @@ TEST_CASE("POST routes answer 422 for a body they refuse as written, and create 
             // a selector item that is not one key and value
             {core_policy("        input_type: mock\n        tap_selector:\n          any:\n            - {}\n"), "selector tag must contain only one key/value pair per sequence index"},
             {core_policy("        input_type: mock\n        tap_selector:\n          any:\n            - site\n"), "selector tag must contain only one key/value pair per sequence index"},
+            {core_policy("        input_type: mock\n        tap_selector:\n          any:\n            - ? {a: b}\n              : c\n"), "selector tag key must be a scalar"},
             {core_policy("        input_type: mock\n        tap_selector:\n          any:\n            - site: dc\n"), "Tap [numbered]: tag and selector value types are different for key 'site'"},
             // a config value of the wrong type, which the handler reads as it is built
             {core_policy(ON_ANYCAST, "handlers:\n        window_config:\n          num_periods: abc\n        modules:\n          core_net:\n            type: net\n"), "wrong type for key: num_periods"},
