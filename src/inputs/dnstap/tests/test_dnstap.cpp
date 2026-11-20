@@ -825,6 +825,18 @@ TEST_CASE("dnstap invalid filters", "[dnstap][tcp][filter]")
         REQUIRE_THROWS_WITH(stream.add_event_proxy(filter), "invalid CIDR: 192.168.0.0/64");
     }
 
+    SECTION("ipv4 cidr without a prefix length")
+    {
+        filter.config_set<visor::Configurable::StringList>("only_hosts", {"192.168.0.0/"});
+        REQUIRE_THROWS_WITH(stream.add_event_proxy(filter), "invalid CIDR: 192.168.0.0/");
+    }
+
+    SECTION("cidr past the range of an int")
+    {
+        filter.config_set<visor::Configurable::StringList>("only_hosts", {"192.168.0.0/99999999999"});
+        REQUIRE_THROWS_WITH(stream.add_event_proxy(filter), "invalid CIDR: 192.168.0.0/99999999999");
+    }
+
     SECTION("invalid ipv4 ip")
     {
         filter.config_set<visor::Configurable::StringList>("only_hosts", {"192.168.AE.0/24"});

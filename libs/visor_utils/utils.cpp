@@ -141,11 +141,17 @@ void parse_host_specs(const std::vector<std::string> &host_list, IPv4subnetList 
         auto cidr = host.substr(++delimiter);
         auto not_number = std::count_if(cidr.begin(), cidr.end(),
             [](unsigned char c) { return !std::isdigit(c); });
-        if (not_number) {
+        if (cidr.empty() || not_number) {
             throw UtilsException(fmt::format("invalid CIDR: {}", host));
         }
 
-        auto cidr_number = std::stoi(cidr);
+        // digits only, so stoi fails only on a number too large for an int, which is past any prefix length
+        int cidr_number;
+        try {
+            cidr_number = std::stoi(cidr);
+        } catch (const std::out_of_range &) {
+            throw UtilsException(fmt::format("invalid CIDR: {}", host));
+        }
         if (ip.find(':') != std::string::npos) {
             if (cidr_number < 0 || cidr_number > 128) {
                 throw UtilsException(fmt::format("invalid CIDR: {}", host));

@@ -15,15 +15,16 @@ namespace visor {
 class InputStream;
 class Policy;
 
-class TapException : public std::runtime_error
+// a tap that pktvisord refuses as written: an invalid_argument, which the admin API answers 422
+class TapException : public std::invalid_argument
 {
 public:
     TapException(const char *msg)
-        : std::runtime_error(msg)
+        : std::invalid_argument(msg)
     {
     }
     TapException(const std::string &msg)
-        : std::runtime_error(msg)
+        : std::invalid_argument(msg)
     {
     }
 };

@@ -3031,3 +3031,26 @@ TEST_CASE("POSTs and DELETEs of policies sharing one input", "[policies][api][co
     }
     check_no_modules(registry);
 }
+
+TEST_CASE("An input's consumers are those of every filter it serves", "[policies][input]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    Config config;
+    Config no_filter;
+    Config filter;
+    filter.config_set<std::string>("only", "core");
+    auto input = registry.input_plugins()[std::make_pair("mock", "1.0")]->instantiate("mymock", &config, &no_filter);
+    auto unfiltered = input->add_event_proxy(no_filter);
+    auto filtered = input->add_event_proxy(filter);
+    REQUIRE(unfiltered != filtered);
+    CHECK(input->consumer_count() == 0);
+
+    auto heartbeat = unfiltered->heartbeat_signal.connect([](const timespec) {});
+    auto policies = unfiltered->policy_signal.connect([](const Policy *, Action) {});
+    CHECK(input->consumer_count() == 2);
+
+    auto filtered_heartbeat = filtered->heartbeat_signal.connect([](const timespec) {});
+    CHECK(input->consumer_count() == 3);
+}

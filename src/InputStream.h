@@ -75,10 +75,18 @@ public:
     {
         std::shared_lock lock(_input_mutex);
         size_t count = 0;
+        // one proxy per filter, each with its own consumers
         for (auto const &proxy : _event_proxies) {
-            count = proxy->consumer_count();
+            count += proxy->consumer_count();
         }
         return count;
+    }
+
+    bool has_event_proxy(const Configurable &filter) const
+    {
+        std::shared_lock lock(_input_mutex);
+        auto hash = filter.config_hash();
+        return std::any_of(_event_proxies.begin(), _event_proxies.end(), [&hash](const auto &proxy) { return proxy->hash() == hash; });
     }
 
     InputEventProxy *add_event_proxy(const Configurable &filter)
@@ -96,6 +104,14 @@ public:
             throw ConfigException(fmt::format("unable to create event proxy due to invalid input filter config: {}", e.what()));
         }
         return _event_proxies.back().get();
+    }
+
+    // for a policy load that failed: the proxy it added for a filter new to this input, which only that load's
+    // handlers, gone by now, were given
+    void remove_event_proxy(const InputEventProxy *proxy)
+    {
+        std::unique_lock lock(_input_mutex);
+        _event_proxies.erase(std::remove_if(_event_proxies.begin(), _event_proxies.end(), [proxy](const auto &p) { return p.get() == proxy; }), _event_proxies.end());
     }
 
     virtual std::unique_ptr<InputEventProxy> create_event_proxy(const Configurable &filter) = 0;
