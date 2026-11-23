@@ -358,29 +358,26 @@ TEST_CASE("NetProbe Boundaries", "[netprobe]")
         CHECK_THROWS_WITH(stream.start(), "timeout_msec [5000] cannot be greater than interval_msec [2000]");
     }
 
-    SECTION("no timeout for ping")
+    SECTION("no timeout, for every test type")
     {
-        // with 0, every ping request would count as a timeout, however fast its reply
-        stream.config_set<uint64_t>("timeout_msec", 0);
-        CHECK_THROWS_WITH(stream.start(), "timeout_msec needs to be greater than 0 for test_type ping");
+        // with 0, every ping or tcp request would count as a timeout, however fast its reply, and an http or doh
+        // request to a server that accepts the connection and never answers would stay open and never be reported
+        for (const std::string type : {"ping", "tcp", "http", "doh", "udp"}) {
+            stream.config_set("test_type", type);
+            stream.config_set<uint64_t>("timeout_msec", 0);
+            CHECK_THROWS_WITH(stream.start(), "timeout_msec needs to be greater than 0 for test_type " + type);
+        }
     }
 
-    SECTION("no timeout for tcp")
+    SECTION("a timeout of 1 passes the timeout check, for every test type")
     {
-        stream.config_set("test_type", "tcp");
-        stream.config_set<uint64_t>("timeout_msec", 0);
-        CHECK_THROWS_WITH(stream.start(), "timeout_msec needs to be greater than 0 for test_type tcp");
-    }
-
-    SECTION("a timeout of 1 for ping, and of 0 for http, pass the timeout check")
-    {
-        // http hands the timeout to libcurl, where 0 means none. Each body fails on the next check instead
+        // each body fails on the next check instead
         stream.config_set<uint64_t>("packets_per_test", 0);
         stream.config_set<uint64_t>("timeout_msec", 1);
-        CHECK_THROWS_WITH(stream.start(), "packets_per_test needs to be greater than 0");
-        stream.config_set("test_type", "http");
-        stream.config_set<uint64_t>("timeout_msec", 0);
-        CHECK_THROWS_WITH(stream.start(), "packets_per_test needs to be greater than 0");
+        for (const std::string type : {"ping", "tcp", "http", "doh", "udp"}) {
+            stream.config_set("test_type", type);
+            CHECK_THROWS_WITH(stream.start(), "packets_per_test needs to be greater than 0");
+        }
     }
 
     SECTION("huge payload size")

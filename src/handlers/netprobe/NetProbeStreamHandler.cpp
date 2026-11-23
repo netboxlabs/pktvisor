@@ -41,7 +41,7 @@ void NetProbeStreamHandler::start()
 
     // The TTL in milliseconds: the handler's xact_ttl_ms, else its xact_ttl_secs, else the input's timeout_msec.
     // With 0, every ping request and every tcp connect would count as a timeout, so the handler's keys refuse it;
-    // the input refuses a timeout_msec of 0 for the test types that use it. A TTL too large for the transaction
+    // the input refuses a timeout_msec of 0 for every test type. A TTL too large for the transaction
     // manager is kept at its largest, about 49 days, not cut to a small one
     constexpr uint64_t max_ttl = std::numeric_limits<uint32_t>::max();
     std::optional<uint64_t> ttl;

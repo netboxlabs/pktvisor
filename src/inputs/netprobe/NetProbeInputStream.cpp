@@ -136,8 +136,9 @@ void NetProbeInputStream::start()
     }
 
     // ping and tcp count a reply as a timeout once timeout_msec has passed, so with 0 every request would be one.
-    // http and doh hand the timeout to libcurl, where 0 means none
-    if (!_timeout_msec && (_type == TestType::Ping || _type == TestType::TCP)) {
+    // http and doh hand the timeout to libcurl, where 0 means none: a request to a server that accepts the connection
+    // and never answers would stay open and never be reported, and the next interval would open another
+    if (!_timeout_msec) {
         throw NetProbeException(fmt::format("timeout_msec needs to be greater than 0 for test_type {}", config_get<std::string>("test_type")));
     }
 
