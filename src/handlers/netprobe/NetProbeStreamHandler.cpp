@@ -5,6 +5,9 @@
 #include "NetProbeStreamHandler.h"
 #include "PrometheusSerializer.h"
 #include "dns.h"
+#include <algorithm>
+#include <limits>
+#include <optional>
 
 namespace visor::handler::netprobe {
 
@@ -36,15 +39,28 @@ void NetProbeStreamHandler::start()
         _metrics->set_recorded_stream();
     }
 
+    // The TTL in milliseconds: the handler's xact_ttl_ms, else its xact_ttl_secs, else the input's timeout_msec.
+    // With 0, every ping request and every tcp connect would count as a timeout, so the handler's keys refuse it;
+    // the input refuses a timeout_msec of 0 for the test types that use it. A TTL too large for the transaction
+    // manager is kept at its largest, about 49 days, not cut to a small one
+    constexpr uint64_t max_ttl = std::numeric_limits<uint32_t>::max();
+    std::optional<uint64_t> ttl;
     if (config_exists("xact_ttl_ms")) {
-        auto ttl = config_get<uint64_t>("xact_ttl_ms");
-        _metrics->set_xact_ttl(static_cast<uint32_t>(ttl));
+        ttl = config_get<uint64_t>("xact_ttl_ms");
+        if (!*ttl) {
+            throw ConfigException("xact_ttl_ms needs to be greater than 0");
+        }
     } else if (config_exists("xact_ttl_secs")) {
-        auto ttl = config_get<uint64_t>("xact_ttl_secs");
-        _metrics->set_xact_ttl(static_cast<uint32_t>(ttl) * 1000);
+        auto secs = config_get<uint64_t>("xact_ttl_secs");
+        if (!secs) {
+            throw ConfigException("xact_ttl_secs needs to be greater than 0");
+        }
+        ttl = secs > max_ttl / 1000 ? max_ttl : secs * 1000;
     } else if (_netprobe_proxy->config_exists("xact_ttl_ms")) {
-        auto ttl = _netprobe_proxy->config_get<uint64_t>("xact_ttl_ms");
-        _metrics->set_xact_ttl(static_cast<uint32_t>(ttl));
+        ttl = _netprobe_proxy->config_get<uint64_t>("xact_ttl_ms");
+    }
+    if (ttl) {
+        _metrics->set_xact_ttl(static_cast<uint32_t>(std::min(*ttl, max_ttl)));
     }
 
     if (_netprobe_proxy) {

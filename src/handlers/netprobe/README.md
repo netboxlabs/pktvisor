@@ -19,12 +19,24 @@ A request with no reply within `timeout_msec` (or the handler's `xact_ttl_ms` / 
 set) counts once in `packets_timeout`, and its reply, if one comes later, counts nowhere. It is counted
 at the next ICMP packet the host receives after the timeout, or at the input's next heartbeat (every
 30 seconds) at least a second after it, whichever comes first. A request sent near the end of a window
-can therefore count its timeout in the next window. With `timeout_msec: 0`, every request counts as a
-timeout.
+can therefore count its timeout in the next window.
+
+With a timeout of 0, every request would count as a timeout, so pktvisord refuses it:
+
+- `timeout_msec: 0` for `ping`, even when the handler sets its own TTL. The policy fails to start with
+  `timeout_msec needs to be greater than 0 for test_type ping`.
+- A handler `xact_ttl_ms` of 0, or an `xact_ttl_secs` of 0 when no `xact_ttl_ms` is set, for every test
+  type: `<key> needs to be greater than 0`.
+
+A timeout longer than 4294967295 ms (about 49 days) counts as 4294967295 ms.
 
 ### tcp
 
 Opens a TCP connection to the configured target host+port and measures connect latency.
+
+A connect that completes after `timeout_msec` (or the handler's `xact_ttl_ms` / `xact_ttl_secs`, when set)
+counts in `packets_timeout`, not as a success. pktvisord refuses `timeout_msec: 0` for `tcp`, as for
+`ping`, and a handler TTL of 0 in the same way.
 
 ### http
 
