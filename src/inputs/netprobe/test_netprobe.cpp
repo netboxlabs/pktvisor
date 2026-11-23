@@ -321,6 +321,26 @@ TEST_CASE("NetProbe handler transaction TTL is the input's timeout_msec", "[netp
     CHECK(proxy->config_get<uint64_t>("xact_ttl_ms") == 500);
 }
 
+TEST_CASE("NetProbe input serves each filter with one proxy, whatever its timeout_msec", "[netprobe][config]")
+{
+    // policies sharing the input with the same filter share its proxy, as on every other input
+    NetProbeInputStream stream{"net-probe-shared"};
+    stream.config_set("test_type", "tcp");
+    stream.config_set<uint64_t>("timeout_msec", 500);
+    visor::Config filter;
+    filter.config_set<std::string>("only", "core");
+
+    auto *unfiltered = stream.add_event_proxy(visor::Configurable());
+    auto *filtered = stream.add_event_proxy(filter);
+
+    CHECK(stream.has_event_proxy(visor::Configurable()));
+    CHECK(stream.has_event_proxy(filter));
+    CHECK(stream.add_event_proxy(visor::Configurable()) == unfiltered);
+    CHECK(stream.add_event_proxy(filter) == filtered);
+    CHECK(unfiltered != filtered);
+    CHECK(filtered->config_get<uint64_t>("xact_ttl_ms") == 500);
+}
+
 TEST_CASE("NetProbe Boundaries", "[netprobe]")
 {
     NetProbeInputStream stream{"net-probe-test"};

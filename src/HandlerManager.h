@@ -10,15 +10,16 @@
 
 namespace visor {
 
-class HandlerException : public std::runtime_error
+// a handler configuration that pktvisord refuses as written: an invalid_argument, which the admin API answers 422
+class HandlerException : public std::invalid_argument
 {
 public:
     HandlerException(const char *msg)
-        : std::runtime_error(msg)
+        : std::invalid_argument(msg)
     {
     }
     HandlerException(const std::string &msg)
-        : std::runtime_error(msg)
+        : std::invalid_argument(msg)
     {
     }
 };
@@ -149,7 +150,8 @@ public:
 
         HandlerData handler;
         if (sequence) {
-            if (!it_module.begin()->first.IsScalar()) {
+            // each item names its handler, as its first key: read nothing from an item without one
+            if (!it_module.IsMap() || it_module.size() == 0 || !it_module.begin()->first.IsScalar()) {
                 throw HandlerException("expecting handler module identifier");
             }
             handler.name = it_module.begin()->first.as<std::string>();

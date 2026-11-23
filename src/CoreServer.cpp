@@ -248,6 +248,24 @@ void period_error(const PeriodException &e, httplib::Response &res)
     res.set_content(json{{"error", e.what()}}.dump(), "text/json");
 }
 
+// A POST the load refused. The load's checks throw an invalid_argument for a body they refuse as written, and
+// yaml-cpp throws for a body that is not YAML or holds a value of the wrong shape: these routes read no YAML
+// but the body. A name in use says "already". Anything else, such as a policy that does not start, is not
+// the request's fault.
+void load_error(const std::exception &e, httplib::Response &res)
+{
+    if (dynamic_cast<const YAML::ParserException *>(&e)) {
+        res.status = 400;
+    } else if (dynamic_cast<const std::invalid_argument *>(&e) || dynamic_cast<const YAML::Exception *>(&e)) {
+        res.status = 422;
+    } else if (std::string(e.what()).find("already") != std::string::npos) {
+        res.status = 409;
+    } else {
+        res.status = 500;
+    }
+    res.set_content(json{{"error", e.what()}}.dump(), "text/json");
+}
+
 }
 
 void get_tap(TapManager &taps, const std::string &name, httplib::Response &res)
@@ -522,35 +540,25 @@ void get_policies_prometheus(PolicyManager &policies, const std::vector<std::str
 // both answer with what the load rendered: a concurrent DELETE can free what it returns as soon as it returns
 void post_taps(TapManager &taps, const std::string &body, httplib::Response &res)
 {
-    json j = json::object();
     try {
         json loaded = json::object();
         taps.load_from_str(body, &loaded);
         res.status = 201;
         res.set_content(loaded.dump(), "text/json");
     } catch (const std::exception &e) {
-        (std::string(e.what()).find("already") != std::string::npos) ? res.status = 409 : res.status = 500;
-        j["error"] = e.what();
-        res.set_content(j.dump(), "text/json");
+        load_error(e, res);
     }
 }
 
 void post_policies(PolicyManager &policies, const std::string &body, httplib::Response &res)
 {
-    json j = json::object();
     try {
         json loaded = json::object();
         policies.load_from_str(body, &loaded);
         res.status = 201;
         res.set_content(loaded.dump(), "text/json");
-    } catch (const std::invalid_argument &e) {
-        res.status = 422;
-        j["error"] = e.what();
-        res.set_content(j.dump(), "text/json");
     } catch (const std::exception &e) {
-        (std::string(e.what()).find("already") != std::string::npos) ? res.status = 409 : res.status = 500;
-        j["error"] = e.what();
-        res.set_content(j.dump(), "text/json");
+        load_error(e, res);
     }
 }
 
