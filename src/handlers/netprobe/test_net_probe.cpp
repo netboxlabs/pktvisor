@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers.hpp>
 #include <catch2/catch_test_visor.hpp>
 #include <catch2/otel_helpers.hpp>
 
@@ -141,6 +142,94 @@ TEST_CASE("Net Probe ping tests", "[netprobe][ping]")
     netprobe_handler.metrics()->bucket(0)->to_json(j);
 
     CHECK(j["targets"]["my_target"]["attempts"] >= 0);
+}
+
+TEST_CASE("NetProbe handler refuses a transaction TTL of 0", "[netprobe][unit]")
+{
+    // with 0, every ping request and every tcp connect would count as a timeout, however fast its reply
+    NetProbeInputStream stream{"net-probe-ttl"};
+    stream.config_set("test_type", "tcp");
+    visor::Config filter;
+    auto stream_proxy = stream.add_event_proxy(filter);
+    for (const std::string key : {"xact_ttl_ms", "xact_ttl_secs"}) {
+        CAPTURE(key);
+        visor::Config c;
+        NetProbeStreamHandler netprobe_handler{"net-probe-ttl", stream_proxy, &c};
+        netprobe_handler.config_set<uint64_t>(key, 0);
+        CHECK_THROWS_WITH(netprobe_handler.start(), key + " needs to be greater than 0");
+        CHECK_FALSE(netprobe_handler.running());
+        // refused before it connects to the input
+        CHECK(stream_proxy->consumer_count() == 0);
+    }
+}
+
+TEST_CASE("NetProbe handler TTL is the one in use, and one too large for the transaction manager is kept at its largest", "[netprobe][unit]")
+{
+    // a tcp connect that completes within the TTL is a success, and one that completes after it a timeout
+    auto replies = [](NetProbeStreamHandler &handler, std::initializer_list<long> after_ms) {
+        json j;
+        long id = 0;
+        for (auto ms : after_ms) {
+            auto target = "t" + std::to_string(id++);
+            // as UnitFixture::manager does
+            auto manager = const_cast<NetProbeMetricsManager *>(handler.metrics());
+            manager->process_netprobe_tcp(true, target, timespec{100, 0});
+            manager->process_netprobe_tcp(false, target, timespec{100 + ms / 1000, (ms % 1000) * 1'000'000});
+        }
+        handler.metrics()->bucket(0)->to_json(j);
+        std::pair<uint64_t, uint64_t> counts{0, 0};
+        for (auto &[name, target] : j["targets"].items()) {
+            counts.first += target.value("successes", 0);
+            counts.second += target.value("packets_timeout", 0);
+        }
+        return counts;
+    };
+    NetProbeInputStream stream{"net-probe-ttl"};
+    stream.config_set("test_type", "tcp");
+    visor::Config filter;
+    auto stream_proxy = stream.add_event_proxy(filter);
+    visor::Config c;
+
+    SECTION("xact_ttl_ms is in use, so xact_ttl_secs is not read")
+    {
+        NetProbeStreamHandler handler{"net-probe-ttl", stream_proxy, &c};
+        handler.config_set<uint64_t>("xact_ttl_ms", 1000);
+        handler.config_set<uint64_t>("xact_ttl_secs", 0);
+        REQUIRE_NOTHROW(handler.start());
+        auto [successes, timeouts] = replies(handler, {900, 1100});
+        CHECK(successes == 1);
+        CHECK(timeouts == 1);
+        handler.stop();
+    }
+
+    SECTION("a handler TTL past 2^32 ms is not cut to a small one")
+    {
+        // 536870912 s is 2^29 * 1000 ms, which a 32-bit TTL wraps to 0; 4294968 s wraps to 704 ms
+        for (const auto &[key, value] : std::vector<std::pair<std::string, uint64_t>>{
+                 {"xact_ttl_secs", 536870912}, {"xact_ttl_secs", 4294968}, {"xact_ttl_ms", 4294967296}}) {
+            CAPTURE(key, value);
+            NetProbeStreamHandler handler{"net-probe-ttl", stream_proxy, &c};
+            handler.config_set<uint64_t>(key, value);
+            REQUIRE_NOTHROW(handler.start());
+            auto [successes, timeouts] = replies(handler, {900, 2000});
+            CHECK(successes == 2);
+            CHECK(timeouts == 0);
+            handler.stop();
+        }
+    }
+
+    SECTION("an input timeout_msec past 2^32 is not cut to a small one")
+    {
+        NetProbeInputStream large{"net-probe-large"};
+        large.config_set("test_type", "tcp");
+        large.config_set<uint64_t>("timeout_msec", 4294967296);
+        NetProbeStreamHandler handler{"net-probe-ttl", large.add_event_proxy(filter), &c};
+        REQUIRE_NOTHROW(handler.start());
+        auto [successes, timeouts] = replies(handler, {900, 2000});
+        CHECK(successes == 2);
+        CHECK(timeouts == 0);
+        handler.stop();
+    }
 }
 
 TEST_CASE("NetProbe metrics process_failure each ErrorType", "[netprobe][unit]")

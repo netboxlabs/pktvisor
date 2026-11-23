@@ -10,6 +10,15 @@ It can attach to netprobe input streams to summarize probe traffic.
 
 ## Test Types
 
+pktvisord refuses a timeout of 0 for every test type, and the policy fails to start:
+
+- `timeout_msec: 0`, even when the handler sets its own TTL: `timeout_msec needs to be greater than 0 for test_type <type>`.
+  With 0, every `ping` or `tcp` request would count as a timeout, however fast its reply. An `http` or `doh` request
+  would have no timeout: one to a server that accepts the connection and never answers would stay open and never be
+  reported, and each interval would open another.
+- A handler `xact_ttl_ms` of 0, or an `xact_ttl_secs` of 0 when no `xact_ttl_ms` is set:
+  `<key> needs to be greater than 0`.
+
 ### ping
 
 Sends ICMP echo requests to the configured targets and measures round-trip latency.
@@ -19,12 +28,17 @@ A request with no reply within `timeout_msec` (or the handler's `xact_ttl_ms` / 
 set) counts once in `packets_timeout`, and its reply, if one comes later, counts nowhere. It is counted
 at the next ICMP packet the host receives after the timeout, or at the input's next heartbeat (every
 30 seconds) at least a second after it, whichever comes first. A request sent near the end of a window
-can therefore count its timeout in the next window. With `timeout_msec: 0`, every request counts as a
-timeout.
+can therefore count its timeout in the next window.
+
+A timeout longer than 4294967295 ms (about 49 days) counts as 4294967295 ms.
 
 ### tcp
 
 Opens a TCP connection to the configured target host+port and measures connect latency.
+
+A connect that completes after `timeout_msec` (or the handler's `xact_ttl_ms` / `xact_ttl_secs`, when set)
+counts in `packets_timeout`, not as a success. A timeout longer than 4294967295 ms counts as 4294967295 ms, as
+for `ping`.
 
 ### http
 
@@ -38,7 +52,7 @@ Unlike ping/tcp, HTTP targets are specified as full URLs.
 | `test_type` | string | — | Set to `"http"` to enable HTTP probing |
 | `targets.<name>.target` | string | — | Full URL to probe, e.g. `http://example.com/health` |
 | `interval_msec` | uint64 | 5000 | How often to issue a probe, in milliseconds |
-| `timeout_msec` | uint64 | 2000 | Per-request timeout in milliseconds (must not exceed `interval_msec`). `0` disables the per-request timeout — not recommended for HTTP, where a slow/stalled server could leave a transfer pending; keep the default. |
+| `timeout_msec` | uint64 | 2000 | Per-request timeout in milliseconds, from 1 to `interval_msec`. `0` is refused (see [Test Types](#test-types)). |
 | `http_method` | string | `"GET"` | HTTP method to use for all targets (`GET`, `HEAD`, `POST`, `PUT`, `PATCH`, …) |
 | `expected_status` | list of strings | *(unset)* | Status codes/classes that count as a **success**. Entries: exact code (`"200"`), a class shorthand (`"2xx"`), or a range (`"200-299"`). When unset, the default is any `2xx`/`3xx` status. Overridden per-response by `failure_status` (see below). |
 | `failure_status` | list of strings | *(unset)* | Status codes/classes that **always** count as a failure (`http_status_failures`), even if they also match `expected_status` or the default 2xx/3xx range. Same grammar as `expected_status`. Evaluation order per response: `failure_status` is checked first; if it matches, the response fails regardless of anything else. |
@@ -93,7 +107,7 @@ Like `http`, targets are specified as full URLs (e.g. `https://1.1.1.1/dns-query
 | `qname` | string | **required** | DNS name to query (e.g. `example.com`) |
 | `qtype` | string | `"A"` | DNS query type (e.g. `A`, `AAAA`, `MX`, `TXT`) |
 | `interval_msec` | uint64 | 5000 | How often to issue a probe, in milliseconds |
-| `timeout_msec` | uint64 | 2000 | Per-request timeout in milliseconds (must not exceed `interval_msec`) |
+| `timeout_msec` | uint64 | 2000 | Per-request timeout in milliseconds, from 1 to `interval_msec`. `0` is refused (see [Test Types](#test-types)). |
 | `http_method` | string | `"POST"` | HTTP method to use for the DoH wire-format query (`POST` or `GET`) |
 | `proxy` | string | *(unset)* | Same as the `http` test type — see above. |
 | `tls.verify` / `tls.ca_file` / `tls.cert_file` / `tls.key_file` | — | *(unset)* | Same as the `http` test type — see above. |
