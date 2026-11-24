@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdexcept>
+#include <string>
 
 namespace visor::input::netprobe {
 

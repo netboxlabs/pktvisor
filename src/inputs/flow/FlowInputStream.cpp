@@ -65,7 +65,7 @@ void FlowInputStream::start()
         } else if (flow_type == "netflow" || flow_type == "ipfix") {
             _flow_type = Type::NETFLOW;
         } else {
-            throw FlowException(fmt::format("invalid flow_type \"{}\". Supported types: \"sflow\", \"netflow\" and \"ipfix\"", flow_type));
+            throw ConfigException(fmt::format("invalid flow_type \"{}\". Supported types: \"sflow\", \"netflow\" and \"ipfix\"", flow_type));
         }
     } else {
         _logger->warn("flow_type not specified, using sflow");
@@ -79,7 +79,7 @@ void FlowInputStream::start()
     } else if (config_exists("port") && config_exists("bind")) {
         _create_frame_stream_udp_socket();
     } else {
-        throw FlowException("flow config must specify port and bind");
+        throw ConfigException("flow config must specify port and bind");
     }
 
     _running = true;
@@ -154,13 +154,13 @@ void FlowInputStream::_create_frame_stream_udp_socket()
     auto port = config_get<uint64_t>("port");
     // port 0 would bind an ephemeral port no exporter sends to
     if (port == 0 || port > 65535) {
-        throw FlowException(fmt::format("flow port {} is out of range 1-65535", port));
+        throw ConfigException(fmt::format("flow port {} is out of range 1-65535", port));
     }
     // built here rather than by uvw's bind(ip, port), which cuts an IPv6 address down to a 16-byte sockaddr
     sockaddr_storage bind_addr{};
     if (uv_ip4_addr(bind.c_str(), static_cast<int>(port), reinterpret_cast<sockaddr_in *>(&bind_addr)) != 0
         && uv_ip6_addr(bind.c_str(), static_cast<int>(port), reinterpret_cast<sockaddr_in6 *>(&bind_addr)) != 0) {
-        throw FlowException(fmt::format("flow bind \"{}\" is not an IPv4 or IPv6 address", bind));
+        throw ConfigException(fmt::format("flow bind \"{}\" is not an IPv4 or IPv6 address", bind));
     }
     // main io loop, run in its own thread
     _io_loop = uvw::loop::create();

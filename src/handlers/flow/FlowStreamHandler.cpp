@@ -15,6 +15,17 @@
 
 namespace visor::handler::flow {
 
+// an address or CIDR list in the handler's config: an entry that is neither is the policy's, which the admin API
+// answers 422
+static void parse_config_host_specs(const std::vector<std::string> &specs, lib::utils::IPv4subnetList &ipv4, lib::utils::IPv6subnetList &ipv6)
+{
+    try {
+        lib::utils::parse_host_specs(specs, ipv4, ipv6);
+    } catch (const lib::utils::UtilsException &e) {
+        throw ConfigException(e.what());
+    }
+}
+
 static std::string ip_summarization(const pcpp::IPAddress &ip, SummaryData *summary)
 {
     if (summary && summary->type != IpSummary::None) {
@@ -128,7 +139,13 @@ void FlowStreamHandler::start()
             }
             auto interfaces = device_map->config_get<std::shared_ptr<Configurable>>("interfaces");
             for (auto const &interface : interfaces->get_all_keys()) {
-                auto if_index = static_cast<uint32_t>(std::stol(interface));
+                uint32_t if_index{0};
+                try {
+                    if_index = static_cast<uint32_t>(std::stol(interface));
+                } catch (const std::logic_error &) {
+                    // stol's invalid_argument or out_of_range
+                    throw StreamHandlerException(fmt::format("FlowHandler: 'device_map' config with device IP {} has an invalid interface index: {}", device, interface));
+                }
                 auto interface_map = interfaces->config_get<std::shared_ptr<Configurable>>(interface);
                 if (!interface_map->config_exists("name")) {
                     throw StreamHandlerException(fmt::format("FlowHandler: 'device_map' config with device IP {} does not have 'name' key", device));
@@ -153,7 +170,7 @@ void FlowStreamHandler::start()
 
     SummaryData summary_data;
     if (config_exists("exclude_ips_from_summarization")) {
-        parse_host_specs(config_get<StringList>("exclude_ips_from_summarization"), summary_data.ipv4_exclude_summary, summary_data.ipv6_exclude_summary);
+        parse_config_host_specs(config_get<StringList>("exclude_ips_from_summarization"), summary_data.ipv4_exclude_summary, summary_data.ipv6_exclude_summary);
     }
     if (config_exists("summarize_ips_by_asn") && config_get<bool>("summarize_ips_by_asn")) {
         summary_data.type = IpSummary::ByASN;
@@ -170,7 +187,7 @@ void FlowStreamHandler::start()
         if (summary_data.type == IpSummary::None) {
             summary_data.type = IpSummary::BySubnet;
         }
-        parse_host_specs(config_get<StringList>("subnets_for_summarization"), summary_data.ipv4_summary, summary_data.ipv6_summary);
+        parse_config_host_specs(config_get<StringList>("subnets_for_summarization"), summary_data.ipv4_summary, summary_data.ipv6_summary);
         // check ipv4 wildcard
         auto it_v4_remove = summary_data.ipv4_summary.end();
         for (auto it = summary_data.ipv4_summary.begin(); it != summary_data.ipv4_summary.end(); it++) {
@@ -214,7 +231,7 @@ void FlowStreamHandler::start()
 
     // Setup Filters
     if (config_exists("only_ips")) {
-        parse_host_specs(config_get<StringList>("only_ips"), _only_ipv4_list, _only_ipv6_list);
+        parse_config_host_specs(config_get<StringList>("only_ips"), _only_ipv4_list, _only_ipv6_list);
         _f_enabled.set(Filters::OnlyIps);
     }
 

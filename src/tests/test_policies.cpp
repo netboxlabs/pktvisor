@@ -15,6 +15,7 @@
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
+#include <catch2/matchers/catch_matchers_exception.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <chrono>
 #include <cstdio>
@@ -1340,8 +1341,9 @@ visor:
         // fails after the policy and its input have started
         auto taken = input_name + "-resources";
         REQUIRE_NOTHROW(registry.policy_manager()->load_from_str(policy_on(taken, "two")));
-        REQUIRE_THROWS_WITH(registry.policy_manager()->load_from_str(policy_on("clash_view", "one")),
-            fmt::format("policy [clash_view] failed to start: module name '{}' already exists", taken));
+        // a name in use, so the admin API answers 409
+        REQUIRE_THROWS_MATCHES(registry.policy_manager()->load_from_str(policy_on("clash_view", "one")), ModuleExistsException,
+            Catch::Matchers::Message(fmt::format("policy [clash_view] failed to start: module name '{}' already exists", taken)));
 
         // the rollback removes what the load made, and leaves the policy that owns the name alone
         CHECK_FALSE(registry.policy_manager()->module_exists("clash_view"));

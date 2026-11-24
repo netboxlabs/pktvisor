@@ -72,7 +72,7 @@ std::string scalar_config_to_string(const visor::Configurable &cfg, const std::s
         return cfg.config_get<bool>(key) ? "true" : "false";
     } catch (const visor::ConfigException &) {
     }
-    throw NetProbeException(fmt::format("netprobe: {} '{}' has an unsupported value type", what, key));
+    throw ConfigException(fmt::format("netprobe: {} '{}' has an unsupported value type", what, key));
 }
 
 // Join a per-target "headers" sub-Configurable entry into its "name: value" string.
@@ -109,6 +109,8 @@ void NetProbeInputStream::start()
         return;
     }
 
+    // a config value refused as written is a ConfigException, which the admin API answers 422; a failure of this
+    // host, such as a TLS file it does not have, is a NetProbeException, answered 500
     validate_configs(_config_defs);
 
     std::vector<std::string> valid_tests;
@@ -118,11 +120,11 @@ void NetProbeInputStream::start()
 
     // Configs
     if (!config_exists("test_type")) {
-        throw NetProbeException(fmt::format("'test_type' config not specified. The valid test types are: {}", fmt::join(valid_tests, ", ")));
+        throw ConfigException(fmt::format("'test_type' config not specified. The valid test types are: {}", fmt::join(valid_tests, ", ")));
     } else {
         auto it = _test_defs.find(config_get<std::string>("test_type"));
         if (it == _test_defs.end()) {
-            throw NetProbeException(fmt::format("{} is an invalid/unsupported test type. The valid test types are: {}", config_get<std::string>("test_type"), fmt::join(valid_tests, ", ")));
+            throw ConfigException(fmt::format("{} is an invalid/unsupported test type. The valid test types are: {}", config_get<std::string>("test_type"), fmt::join(valid_tests, ", ")));
         }
         _type = it->second;
     }
@@ -139,17 +141,17 @@ void NetProbeInputStream::start()
     // http and doh hand the timeout to libcurl, where 0 means none: a request to a server that accepts the connection
     // and never answers would stay open and never be reported, and the next interval would open another
     if (!_timeout_msec) {
-        throw NetProbeException(fmt::format("timeout_msec needs to be greater than 0 for test_type {}", config_get<std::string>("test_type")));
+        throw ConfigException(fmt::format("timeout_msec needs to be greater than 0 for test_type {}", config_get<std::string>("test_type")));
     }
 
     if (_timeout_msec > _interval_msec) {
-        throw NetProbeException(fmt::format("timeout_msec [{}] cannot be greater than interval_msec [{}]", _timeout_msec, _interval_msec));
+        throw ConfigException(fmt::format("timeout_msec [{}] cannot be greater than interval_msec [{}]", _timeout_msec, _interval_msec));
     }
 
     if (config_exists("packets_per_test")) {
         _packets_per_test = config_get<uint64_t>("packets_per_test");
         if (!_packets_per_test) {
-            throw NetProbeException("packets_per_test needs to be greater than 0");
+            throw ConfigException("packets_per_test needs to be greater than 0");
         }
     }
 
@@ -158,13 +160,13 @@ void NetProbeInputStream::start()
     }
 
     if (_packets_per_test * _packets_interval_msec > _interval_msec) {
-        throw NetProbeException(fmt::format("packets_per_test [{}] times packets_interval_msec [{}] cannot be greater than packets_interval_msec [{}]", _packets_per_test, _packets_interval_msec, _interval_msec));
+        throw ConfigException(fmt::format("packets_per_test [{}] times packets_interval_msec [{}] cannot be greater than packets_interval_msec [{}]", _packets_per_test, _packets_interval_msec, _interval_msec));
     }
 
     if (config_exists("packet_payload_size")) {
         _packet_payload_size = config_get<uint64_t>("packet_payload_size");
         if (_packet_payload_size > MAX_PAYLOAD_SIZE) {
-            throw NetProbeException(fmt::format("packet_payload_size was set to {} but max supported size is {}", _packet_payload_size, MAX_PAYLOAD_SIZE));
+            throw ConfigException(fmt::format("packet_payload_size was set to {} but max supported size is {}", _packet_payload_size, MAX_PAYLOAD_SIZE));
         }
     }
 
@@ -196,7 +198,7 @@ void NetProbeInputStream::start()
     if (_type == TestType::DOH) {
         _doh_method = config_exists("http_method") ? config_get<std::string>("http_method") : "POST";
         if (_doh_method != "GET" && _doh_method != "POST") {
-            throw NetProbeException(fmt::format("unsupported http_method '{}' for doh (use GET or POST)", _doh_method));
+            throw ConfigException(fmt::format("unsupported http_method '{}' for doh (use GET or POST)", _doh_method));
         }
     }
 
@@ -205,14 +207,14 @@ void NetProbeInputStream::start()
         try {
             _http_opts.expected_status = visor::http::StatusMatcher::parse(config_get<StringList>("expected_status"));
         } catch (const std::invalid_argument &e) {
-            throw NetProbeException(fmt::format("netprobe: expected_status: {}", e.what()));
+            throw ConfigException(fmt::format("netprobe: expected_status: {}", e.what()));
         }
     }
     if (config_exists("failure_status")) {
         try {
             _http_opts.failure_status = visor::http::StatusMatcher::parse(config_get<StringList>("failure_status"));
         } catch (const std::invalid_argument &e) {
-            throw NetProbeException(fmt::format("netprobe: failure_status: {}", e.what()));
+            throw ConfigException(fmt::format("netprobe: failure_status: {}", e.what()));
         }
     }
     {
@@ -223,7 +225,7 @@ void NetProbeInputStream::start()
         try {
             _http_opts.body_check = visor::http::BodyCheck::compile(sub, rx);
         } catch (const std::invalid_argument &e) {
-            throw NetProbeException(fmt::format("netprobe: {}", e.what()));
+            throw ConfigException(fmt::format("netprobe: {}", e.what()));
         }
     }
     if (config_exists("body")) {
@@ -232,7 +234,7 @@ void NetProbeInputStream::start()
     if (config_exists("body_check_max_bytes")) {
         auto n = config_get<uint64_t>("body_check_max_bytes");
         if (n == 0) {
-            throw NetProbeException("netprobe: body_check_max_bytes must be greater than 0");
+            throw ConfigException("netprobe: body_check_max_bytes must be greater than 0");
         }
         _http_opts.body_check_max_bytes = static_cast<size_t>(n);
     }
@@ -261,13 +263,13 @@ void NetProbeInputStream::start()
         bool has_eq = config_exists("json_equals");
         std::string je = has_eq ? scalar_config_to_string(*this, "json_equals", "config") : "";
         if (has_eq && jp.empty()) {
-            throw NetProbeException("netprobe: 'json_equals' requires 'json_path'");
+            throw ConfigException("netprobe: 'json_equals' requires 'json_path'");
         }
         if (!jp.empty()) {
             try {
                 _http_opts.json_check = visor::http::JsonPointerCheck::compile(jp, je, has_eq);
             } catch (const std::invalid_argument &e) {
-                throw NetProbeException(fmt::format("netprobe: {}", e.what()));
+                throw ConfigException(fmt::format("netprobe: {}", e.what()));
             }
         }
     }
@@ -277,7 +279,7 @@ void NetProbeInputStream::start()
         try {
             _http_opts.body_negative = visor::http::BodyNegativeCheck::compile(ns, nr);
         } catch (const std::invalid_argument &e) {
-            throw NetProbeException(fmt::format("netprobe: {}", e.what()));
+            throw ConfigException(fmt::format("netprobe: {}", e.what()));
         }
     }
     if (config_exists("min_response_size_bytes")) {
@@ -288,7 +290,7 @@ void NetProbeInputStream::start()
     }
     if (_http_opts.min_response_size && _http_opts.max_response_size
         && *_http_opts.min_response_size > *_http_opts.max_response_size) {
-        throw NetProbeException("netprobe: min_response_size_bytes must not exceed max_response_size_bytes");
+        throw ConfigException("netprobe: min_response_size_bytes must not exceed max_response_size_bytes");
     }
     if (config_exists("max_last_modified_diff_secs")) {
         _http_opts.max_last_modified_diff = config_get<uint64_t>("max_last_modified_diff_secs");
@@ -296,7 +298,7 @@ void NetProbeInputStream::start()
     if (config_exists("valid_http_versions")) {
         for (const auto &v : config_get<Configurable::StringList>("valid_http_versions")) {
             if (v != "1.0" && v != "1.1" && v != "2" && v != "3") {
-                throw NetProbeException(fmt::format("netprobe: invalid valid_http_versions entry '{}' (use 1.0, 1.1, 2, or 3)", v));
+                throw ConfigException(fmt::format("netprobe: invalid valid_http_versions entry '{}' (use 1.0, 1.1, 2, or 3)", v));
             }
             _http_opts.valid_http_versions.push_back(v);
         }
@@ -318,7 +320,7 @@ void NetProbeInputStream::start()
         try {
             _http_opts.header_matchers = visor::http::HeaderMatchers::compile(fm, fnm);
         } catch (const std::invalid_argument &e) {
-            throw NetProbeException(fmt::format("netprobe: {}", e.what()));
+            throw ConfigException(fmt::format("netprobe: {}", e.what()));
         }
     }
 
@@ -331,7 +333,7 @@ void NetProbeInputStream::start()
         if (config->config_exists("ip_version")) {
             auto v = config->config_get<uint64_t>("ip_version");
             if (v != 4 && v != 6) {
-                throw NetProbeException("ip_version must be 4 or 6");
+                throw ConfigException("ip_version must be 4 or 6");
             }
             _http_target_ipresolve[key] = (v == 6) ? CURL_IPRESOLVE_V6 : CURL_IPRESOLVE_V4;
         }
@@ -347,7 +349,7 @@ void NetProbeInputStream::start()
                     ok = !port.empty() && port.find_first_not_of("0123456789") == std::string::npos;
                 }
                 if (!ok) {
-                    throw NetProbeException(fmt::format("netprobe: target '{}' has an invalid resolve entry '{}' (expected host:port:address)", key, e));
+                    throw ConfigException(fmt::format("netprobe: target '{}' has an invalid resolve entry '{}' (expected host:port:address)", key, e));
                 }
                 entries.push_back(e);
             }
@@ -356,19 +358,19 @@ void NetProbeInputStream::start()
     };
 
     if (!config_exists("targets")) {
-        throw NetProbeException("no targets specified");
+        throw ConfigException("no targets specified");
     } else {
         auto targets = config_get<std::shared_ptr<Configurable>>("targets");
         auto keys = targets->get_all_keys();
         for (const auto &key : keys) {
             auto config = targets->config_get<std::shared_ptr<Configurable>>(key);
             if (!config->config_exists("target")) {
-                throw NetProbeException(fmt::format("'{}' does not have key 'target' which is required", key));
+                throw ConfigException(fmt::format("'{}' does not have key 'target' which is required", key));
             }
             if (_type == TestType::HTTP) {
                 auto url = config->config_get<std::string>("target");
                 if (auto err = visor::http::validate_http_url(url)) {
-                    throw NetProbeException(fmt::format("target '{}' {}", key, *err));
+                    throw ConfigException(fmt::format("target '{}' {}", key, *err));
                 }
                 _http_targets[key] = url;
                 if (config->config_exists("headers")) {
@@ -389,10 +391,10 @@ void NetProbeInputStream::start()
             if (_type == TestType::DOH) {
                 auto url = config->config_get<std::string>("target");
                 if (auto err = visor::http::validate_http_url(url)) {
-                    throw NetProbeException(fmt::format("target '{}' {}", key, *err));
+                    throw ConfigException(fmt::format("target '{}' {}", key, *err));
                 }
                 if (config->config_exists("headers")) {
-                    throw NetProbeException("per-target 'headers' is not supported for test_type 'doh'");
+                    throw ConfigException("per-target 'headers' is not supported for test_type 'doh'");
                 }
                 _doh_targets[key] = url;
                 parse_target_ip_resolve(config, key);
@@ -400,7 +402,7 @@ void NetProbeInputStream::start()
             }
             uint32_t port{0};
             if (!config->config_exists("port") && _type == TestType::TCP) {
-                throw NetProbeException(fmt::format("'{}' does not have key 'port' which is required", key));
+                throw ConfigException(fmt::format("'{}' does not have key 'port' which is required", key));
             } else if (config->config_exists("port")) {
                 port = static_cast<uint32_t>(config->config_get<uint64_t>("port"));
             }
@@ -409,7 +411,7 @@ void NetProbeInputStream::start()
             if (config->config_exists("ip_version")) {
                 auto v = config->config_get<uint64_t>("ip_version");
                 if (v != 4 && v != 6) {
-                    throw NetProbeException("ip_version must be 4 or 6");
+                    throw ConfigException("ip_version must be 4 or 6");
                 }
                 force_ipv6 = (v == 6);
             }
@@ -418,7 +420,7 @@ void NetProbeInputStream::start()
             if (pcpp::IPv4Address::isValidIPv4Address(target) || pcpp::IPv6Address::isValidIPv6Address(target)) {
                 bool literal_v6 = pcpp::IPv6Address::isValidIPv6Address(target);
                 if (force_ipv6.has_value() && *force_ipv6 != literal_v6) {
-                    throw NetProbeException(fmt::format("target {} is {} but ip_version is set to {}",
+                    throw ConfigException(fmt::format("target {} is {} but ip_version is set to {}",
                         target, literal_v6 ? "IPv6" : "IPv4", *force_ipv6 ? 6 : 4));
                 }
                 _ip_list[key] = IpEntry{pcpp::IPAddress(target), port};
@@ -426,7 +428,7 @@ void NetProbeInputStream::start()
             }
             auto dot = target.find(".");
             if (dot == std::string::npos && target != "localhost") {
-                throw NetProbeException(fmt::format("{} is an invalid/unsupported DNS", target));
+                throw ConfigException(fmt::format("{} is an invalid/unsupported DNS", target));
             }
             _dns_list[key] = DnsEntry{target, port, force_ipv6};
         }
@@ -434,12 +436,12 @@ void NetProbeInputStream::start()
 
     if (_type == TestType::DOH) {
         if (_doh_qname.empty()) {
-            throw NetProbeException("netprobe: 'qname' is required when test_type is 'doh'");
+            throw ConfigException("netprobe: 'qname' is required when test_type is 'doh'");
         }
         // Reject names outside DNS limits (RFC 1035): total presentation length <= 253, each label
         // 1..63 chars. An invalid name would otherwise make DnsLayer::addQuery() fail at probe start.
         if (_doh_qname.size() > 253) {
-            throw NetProbeException(fmt::format("netprobe: qname '{}' exceeds the 253-character DNS name limit", _doh_qname));
+            throw ConfigException(fmt::format("netprobe: qname '{}' exceeds the 253-character DNS name limit", _doh_qname));
         }
         // "." is the DNS root — a valid name with no labels (e.g. probing the root NS set). Skip the
         // per-label checks for it; DohProbe builds the root query from an empty name.
@@ -448,19 +450,19 @@ void NetProbeInputStream::start()
             for (char ch : _doh_qname) {
                 if (ch == '.') {
                     if (label_len == 0) {
-                        throw NetProbeException(fmt::format("netprobe: qname '{}' has an empty DNS label", _doh_qname));
+                        throw ConfigException(fmt::format("netprobe: qname '{}' has an empty DNS label", _doh_qname));
                     }
                     label_len = 0;
                 } else if (++label_len > 63) {
-                    throw NetProbeException(fmt::format("netprobe: qname '{}' has a DNS label longer than 63 characters", _doh_qname));
+                    throw ConfigException(fmt::format("netprobe: qname '{}' has a DNS label longer than 63 characters", _doh_qname));
                 }
             }
             if (label_len == 0) {
-                throw NetProbeException(fmt::format("netprobe: qname '{}' has an empty DNS label", _doh_qname));
+                throw ConfigException(fmt::format("netprobe: qname '{}' has an empty DNS label", _doh_qname));
             }
         }
         if (visor::lib::dns::QTypeNumbers.find(_doh_qtype) == visor::lib::dns::QTypeNumbers.end()) {
-            throw NetProbeException(fmt::format("netprobe: unknown qtype '{}'", _doh_qtype));
+            throw ConfigException(fmt::format("netprobe: unknown qtype '{}'", _doh_qtype));
         }
     }
 
@@ -476,7 +478,7 @@ void NetProbeInputStream::start()
         if (_type != TestType::HTTP) {
             for (const auto &key : http_only_keys) {
                 if (config_exists(key)) {
-                    throw NetProbeException(fmt::format("'{}' is not supported for test_type '{}'", key, test_type_name(_type)));
+                    throw ConfigException(fmt::format("'{}' is not supported for test_type '{}'", key, test_type_name(_type)));
                 }
             }
         }
@@ -484,21 +486,21 @@ void NetProbeInputStream::start()
     // proxy/tls are shared http+doh transport options; not meaningful for ping/tcp/udp.
     if (_type != TestType::HTTP && _type != TestType::DOH) {
         if (config_exists("proxy")) {
-            throw NetProbeException("'proxy' is only supported for test_type 'http' or 'doh'");
+            throw ConfigException("'proxy' is only supported for test_type 'http' or 'doh'");
         }
         if (config_exists("tls")) {
-            throw NetProbeException("'tls' is only supported for test_type 'http' or 'doh'");
+            throw ConfigException("'tls' is only supported for test_type 'http' or 'doh'");
         }
     }
     // request body only makes sense paired with a method that carries one.
     if (_type == TestType::HTTP && !_http_opts.request_body.empty()) {
         if (_http_method != "POST" && _http_method != "PUT" && _http_method != "PATCH") {
-            throw NetProbeException("'body' requires http_method POST, PUT, or PATCH");
+            throw ConfigException("'body' requires http_method POST, PUT, or PATCH");
         }
     }
     // client cert + key must be configured together (curl requires both or neither).
     if (_http_opts.cert_file.empty() != _http_opts.key_file.empty()) {
-        throw NetProbeException("tls.cert_file and tls.key_file must be set together");
+        throw ConfigException("tls.cert_file and tls.key_file must be set together");
     }
     // configured TLS files must exist. std::filesystem (not access()/<unistd.h>) so this stays
     // portable to the MSVC/win64 netprobe build.
@@ -509,6 +511,7 @@ void NetProbeInputStream::start()
         }
         std::error_code ec;
         if (!std::filesystem::exists(path, ec)) {
+            // the path may be right for another host: this one does not have it
             throw NetProbeException(fmt::format("netprobe: tls.{} '{}' does not exist", label, path));
         }
     }
@@ -524,8 +527,12 @@ void NetProbeInputStream::start()
             }
         }
         if (has_cntrl || trim(_http_opts.proxy).empty()) {
-            throw NetProbeException("netprobe: 'proxy' value is invalid");
+            throw ConfigException("netprobe: 'proxy' value is invalid");
         }
+    }
+    // a valid test_type that no probe runs yet: refused before the loop is created
+    if (_type == TestType::UDP) {
+        throw ConfigException("Test type currently not supported");
     }
 
     _create_netprobe_loop();
