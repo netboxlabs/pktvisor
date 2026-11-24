@@ -1,3 +1,4 @@
+#include "NetProbeException.h"
 #include "NetProbeInputStream.h"
 #include "NetProbeStreamHandler.h"
 #include "PingProbe.h"
@@ -5,6 +6,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
+#include <catch2/matchers/catch_matchers_exception.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/catch_test_visor.hpp>
 #include <algorithm>
@@ -749,6 +751,53 @@ TEST_CASE("NetProbe v2 config: tls.ca_file must exist", "[netprobe][config][http
     tls->config_set("ca_file", std::string("/nonexistent/ca.pem"));
     stream.config_set<std::shared_ptr<visor::Configurable>>("tls", tls);
     CHECK_THROWS_WITH(stream.start(), Catch::Matchers::ContainsSubstring("/nonexistent/ca.pem"));
+}
+
+TEST_CASE("NetProbe refuses its config as a ConfigException, and a TLS file this host lacks as a NetProbeException", "[netprobe][config]")
+{
+    // the admin API answers 422 for a ConfigException a policy's input throws as it starts, and 500 for anything else
+    auto make_stream = [](const std::string &type, const std::string &target_value) {
+        auto s = std::make_unique<NetProbeInputStream>("net-probe-test-config-refused");
+        s->config_set("test_type", type);
+        auto targets = std::make_shared<visor::Configurable>();
+        auto target = std::make_shared<visor::Configurable>();
+        target->config_set("target", target_value);
+        targets->config_set<std::shared_ptr<visor::Configurable>>("t", target);
+        s->config_set<std::shared_ptr<visor::Configurable>>("targets", targets);
+        return s;
+    };
+    using Catch::Matchers::Message;
+
+    SECTION("an unknown test_type")
+    {
+        auto s = make_stream("nope", "127.0.0.1");
+        CHECK_THROWS_MATCHES(s->start(), visor::ConfigException, Message("nope is an invalid/unsupported test type. The valid test types are: doh, http, ping, tcp, udp"));
+    }
+    SECTION("a timeout of 0")
+    {
+        auto s = make_stream("ping", "127.0.0.1");
+        s->config_set<uint64_t>("timeout_msec", 0);
+        CHECK_THROWS_MATCHES(s->start(), visor::ConfigException, Message("timeout_msec needs to be greater than 0 for test_type ping"));
+    }
+    SECTION("no targets")
+    {
+        NetProbeInputStream s{"net-probe-test-config-refused"};
+        s.config_set("test_type", "ping");
+        CHECK_THROWS_MATCHES(s.start(), visor::ConfigException, Message("no targets specified"));
+    }
+    SECTION("udp, which no probe runs yet")
+    {
+        auto s = make_stream("udp", "127.0.0.1");
+        CHECK_THROWS_MATCHES(s->start(), visor::ConfigException, Message("Test type currently not supported"));
+    }
+    SECTION("a TLS file this host does not have")
+    {
+        auto s = make_stream("http", "https://example.com/");
+        auto tls = std::make_shared<visor::Configurable>();
+        tls->config_set("ca_file", std::string("/nonexistent/ca.pem"));
+        s->config_set<std::shared_ptr<visor::Configurable>>("tls", tls);
+        CHECK_THROWS_MATCHES(s->start(), NetProbeException, Message("netprobe: tls.ca_file '/nonexistent/ca.pem' does not exist"));
+    }
 }
 
 TEST_CASE("NetProbe v2 config: proxy and tls are not supported for tcp", "[netprobe][config][tcp]")

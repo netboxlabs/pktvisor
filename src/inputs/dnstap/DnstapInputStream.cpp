@@ -150,7 +150,7 @@ void DnstapInputStream::start()
     } else if (config_exists("tcp")) {
         _create_frame_stream_tcp_socket();
     } else {
-        throw DnstapException("config must specify one of: socket, dnstap_file");
+        throw ConfigException("config must specify one of: socket, dnstap_file");
     }
 
     _running = true;
@@ -163,7 +163,7 @@ void DnstapInputStream::_create_frame_stream_tcp_socket()
     // split address and port
     auto tcp_config = config_get<std::string>("tcp");
     if (tcp_config.find(':') == std::string::npos) {
-        throw DnstapException("invalid tcp address specification, use HOST:PORT");
+        throw ConfigException("invalid tcp address specification, use HOST:PORT");
     }
 
     std::string host;
@@ -172,7 +172,13 @@ void DnstapInputStream::_create_frame_stream_tcp_socket()
         host = tcp_config.substr(0, tcp_config.find(':'));
         port = std::stoul(tcp_config.substr(tcp_config.find(':') + 1, std::string::npos));
     } catch (std::exception &err) {
-        throw DnstapException("unable to parse tcp address specification, use HOST:PORT");
+        throw ConfigException("unable to parse tcp address specification, use HOST:PORT");
+    }
+    // the server binds an address, not a host name
+    sockaddr_storage bind_addr{};
+    if (uv_ip4_addr(host.c_str(), static_cast<int>(port), reinterpret_cast<sockaddr_in *>(&bind_addr)) != 0
+        && uv_ip6_addr(host.c_str(), static_cast<int>(port), reinterpret_cast<sockaddr_in6 *>(&bind_addr)) != 0) {
+        throw ConfigException(fmt::format("dnstap tcp host \"{}\" is not an IPv4 or IPv6 address", host));
     }
 
     // main io loop, run in its own thread

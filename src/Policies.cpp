@@ -289,10 +289,20 @@ std::vector<Policy *> PolicyManager::load(const YAML::Node &policy_yaml, bool si
                 policy_ptr->info_json((*info)[policy_name]);
             }
             module_add(std::move(policy));
+        } catch (const ModuleExistsException &e) {
+            rollback();
+            // a name this load needs is in use, such as the one its resources policy takes: the admin API answers 409
+            throw ModuleExistsException(e.name(), fmt::format("policy [{}] failed to start: {}", policy_name, e.what()));
+        } catch (const ConfigException &e) {
+            rollback();
+            // an input or handler refuses its config as it starts: the policy's, so the admin API answers 422
+            throw PolicyException(fmt::format("policy [{}] failed to start: {}", policy_name, e.what()));
+        } catch (const StreamHandlerException &e) {
+            rollback();
+            throw PolicyException(fmt::format("policy [{}] failed to start: {}", policy_name, e.what()));
         } catch (const std::runtime_error &e) {
             rollback();
-            // the admin API answers 500: an input or handler that refuses its config as it starts cannot be told
-            // apart here from a failure of the host, such as a port in use
+            // a failure of the host, such as a port in use or a file it does not have: the admin API answers 500
             throw std::runtime_error(fmt::format("policy [{}] failed to start: {}", policy_name, e.what()));
         } catch (...) {
             // anything else, such as a std::invalid_argument, is rethrown as it was so callers still tell it apart
@@ -347,8 +357,8 @@ std::string PolicyManager::_get_policy_name(YAML::const_iterator it)
     }
     // Ensure policy name isn't already defined
     if (module_exists(policy_name)) {
-        // a name in use, as the policy map refuses one: not a PolicyException, so the admin API answers 409
-        throw ModuleException(policy_name, fmt::format("policy with name '{}' already defined", policy_name));
+        // a name in use, as the policy map refuses one: the admin API answers 409
+        throw ModuleExistsException(policy_name, fmt::format("policy with name '{}' already defined", policy_name));
     }
 
     // Policy kind defines schema

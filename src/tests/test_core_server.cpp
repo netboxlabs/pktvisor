@@ -663,7 +663,7 @@ TEST_CASE("A refused policy POST leaves an input it reuses as it found it", "[ap
         // once its handlers are built
         {core_policy(on_edge_input, "handlers:\n        modules:\n          core_net:\n            type: net\n", "      attributes:\n        policy: x\n"), 422, "attribute 'policy' of policy 'core' collides"},
         // as it starts
-        {core_policy(on_edge_input, "handlers:\n        modules:\n          core_net:\n            type: net\n            config:\n              nope: 1\n"), 500, "policy [core] failed to start: nope is an invalid/unsupported config or filter"},
+        {core_policy(on_edge_input, "handlers:\n        modules:\n          core_net:\n            type: net\n            config:\n              nope: 1\n"), 422, "policy [core] failed to start: nope is an invalid/unsupported config or filter"},
     };
     for (const auto &[body, code, error] : refused) {
         CAPTURE(body);
@@ -708,18 +708,103 @@ TEST_CASE("POST routes answer 400 for a body that is not YAML", "[api][taps][pol
     CHECK(registry.policy_manager()->module_get_keys().empty());
 }
 
-TEST_CASE("A policy POST that passes the checks and fails to start still answers 500", "[api][policies]")
+namespace {
+
+// the body with the policy core renamed
+std::string renamed(std::string body, const std::string &name)
+{
+    body.replace(body.find("    core:"), std::string("    core:").size(), "    " + name + ":");
+    return body;
+}
+
+}
+
+TEST_CASE("A policy POST its input or handler refuses as it starts answers 422, whatever its name, and creates nothing", "[api][policies]")
 {
     CoreRegistry registry;
     visor::load_builtin_plugins(registry);
     registry.start(nullptr);
-    // only the input checks its test_type, as it starts: the API cannot tell this from a failure of the host
     REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(
-        "visor:\n  taps:\n    probes:\n      input_type: netprobe\n      config:\n        test_type: nope\n        targets:\n          a:\n            target: 127.0.0.1\n"));
+        "visor:\n  taps:\n    probes:\n      input_type: netprobe\n      config:\n        test_type: ping\n        targets:\n          a:\n            target: 127.0.0.1\n"));
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str("visor:\n  taps:\n    flows:\n      input_type: flow\n      config:\n        port: 30001\n        bind: 127.0.0.1\n"));
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str("visor:\n  taps:\n    resolvers:\n      input_type: dnstap\n      config:\n        dnstap_file: inputs/dnstap/tests/fixtures/fixture.dnstap\n"));
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str("visor:\n  taps:\n    listeners:\n      input_type: dnstap\n"));
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str("visor:\n  taps:\n    captures:\n      input_type: pcap\n      config:\n        pcap_file: tests/fixtures/dns_ipv4_udp.pcap\n"));
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str("visor:\n  taps:\n    mocked:\n      input_type: pcap\n      config:\n        pcap_source: mock\n"));
+    // taps are not checked until a policy starts on them
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str(
+        "visor:\n  taps:\n    bad_probes:\n      input_type: netprobe\n      config:\n        test_type: nope\n        targets:\n          a:\n            target: 127.0.0.1\n"));
+    auto constexpr ON_PROBES = "        tap: probes\n        input_type: netprobe\n";
+    auto constexpr ON_FLOWS = "        tap: flows\n        input_type: flow\n";
+    auto constexpr ON_RESOLVERS = "        tap: resolvers\n        input_type: dnstap\n";
+    auto constexpr PROBE_HANDLER = "handlers:\n        modules:\n          core_probe:\n            type: netprobe\n";
+    auto constexpr FLOW_HANDLER = "handlers:\n        modules:\n          core_flow:\n            type: flow\n";
+    auto flow_handler = [](const std::string &section) {
+        return "handlers:\n        modules:\n          core_flow:\n            type: flow\n" + section;
+    };
+    auto dns_handler = [](const std::string &version, const std::string &filter) {
+        return "handlers:\n        modules:\n          core_dns:\n            type: dns\n            require_version: \"" + version + "\"\n            filter:\n" + filter;
+    };
+    auto constexpr PAST_ULONG = "99999999999999999999999";
 
-    httplib::Response res;
-    api::post_policies(*registry.policy_manager(), core_policy("        tap: probes\n        input_type: netprobe\n", "handlers:\n        modules:\n          core_probe:\n            type: netprobe\n"), res);
-    CHECK(res.status == 500);
-    CHECK_THAT(json::parse(res.body)["error"].get<std::string>(), Catch::Matchers::StartsWith("policy [core] failed to start: nope is an invalid/unsupported test type"));
-    CHECK_FALSE(registry.policy_manager()->module_exists("core"));
+    // each is read only as the policy starts: its handlers, then its input
+    const std::vector<std::pair<std::string, std::string>> refused{
+        {core_policy(ON_PROBES + std::string("        config:\n          test_type: nope\n"), PROBE_HANDLER), "nope is an invalid/unsupported test type. The valid test types are: doh, http, ping, tcp, udp"},
+        {core_policy(ON_PROBES + std::string("        config:\n          nope: 1\n"), PROBE_HANDLER), "nope is an invalid/unsupported config or filter"},
+        {core_policy(ON_FLOWS + std::string("        config:\n          flow_type: nope\n"), FLOW_HANDLER), "invalid flow_type \"nope\""},
+        {core_policy(ON_FLOWS, flow_handler("            config:\n              sample_rate_scaling: abc\n")), "wrong type for key: sample_rate_scaling"},
+        {core_policy(ON_PROBES, "handlers:\n        modules:\n          core_probe:\n            type: netprobe\n            config:\n              nope: 1\n"), "nope is an invalid/unsupported config or filter"},
+        // a value in the tap the policy names, rather than in the body: nothing the host lacks either
+        {core_policy("        tap: bad_probes\n        input_type: netprobe\n", PROBE_HANDLER), "nope is an invalid/unsupported test type"},
+        // an address or CIDR list
+        {core_policy(ON_FLOWS, flow_handler("            filter:\n              only_ips:\n                - nope\n")), "invalid CIDR: nope"},
+        {core_policy(ON_FLOWS, flow_handler("            config:\n              subnets_for_summarization:\n                - 10.0.0.0/99\n")), "invalid CIDR: 10.0.0.0/99"},
+        {core_policy(ON_FLOWS, flow_handler("            config:\n              exclude_ips_from_summarization:\n                - x/1\n")), "invalid IPv4 address: x"},
+        {core_policy("        tap: mocked\n        input_type: pcap\n        config:\n          host_spec: 10.0.0.0/99\n"), "invalid CIDR: 10.0.0.0/99"},
+        // a number too large to read, or none at all
+        {core_policy(ON_FLOWS, flow_handler("            config:\n              device_map:\n                10.0.0.1:\n                  name: r1\n                  interfaces:\n                    " + std::string(PAST_ULONG) + ":\n                      name: x\n")), "FlowHandler: 'device_map' config with device IP 10.0.0.1 has an invalid interface index: " + std::string(PAST_ULONG)},
+        {core_policy(ON_FLOWS, flow_handler("            config:\n              device_map:\n                10.0.0.1:\n                  name: r1\n                  interfaces:\n                    abc:\n                      name: x\n")), "FlowHandler: 'device_map' config with device IP 10.0.0.1 has an invalid interface index: abc"},
+        {core_policy(ON_RESOLVERS, dns_handler("1.0", "              only_qtype:\n                - \"" + std::string(PAST_ULONG) + "\"\n")), "DnsStreamHandler: only_qtype filter contained an invalid/unsupported qtype: " + std::string(PAST_ULONG)},
+        {core_policy(ON_RESOLVERS, dns_handler("2.0", "              only_qtype:\n                - \"" + std::string(PAST_ULONG) + "\"\n")), "DnsStreamHandler: only_qtype filter contained an invalid/unsupported qtype: " + std::string(PAST_ULONG)},
+        {core_policy(ON_RESOLVERS, dns_handler("1.0", "              only_rcode:\n                - \"" + std::string(PAST_ULONG) + "\"\n")), "DnsStreamHandler: only_rcode filter contained an invalid/unsupported rcode: " + std::string(PAST_ULONG)},
+        {core_policy(ON_RESOLVERS, dns_handler("2.0", "              only_rcode:\n                - \"" + std::string(PAST_ULONG) + "\"\n")), "DnsStreamHandler: only_rcode filter contained an invalid/unsupported rcode: " + std::string(PAST_ULONG)},
+        {core_policy(ON_RESOLVERS, dns_handler("1.0", "              only_qtype:\n                - \"\"\n")), "DnsStreamHandler: only_qtype filter contained an invalid/unsupported qtype: "},
+        {core_policy(ON_RESOLVERS, dns_handler("2.0", "              only_rcode:\n                - \"\"\n")), "DnsStreamHandler: only_rcode filter contained an invalid/unsupported rcode: "},
+        // a listener address that is not one
+        {core_policy("        tap: listeners\n        input_type: dnstap\n        config:\n          tcp: localhost:30131\n"), "dnstap tcp host \"localhost\" is not an IPv4 or IPv6 address"},
+        // a BPF filter no capture can compile
+        {core_policy("        tap: captures\n        input_type: pcap\n        config:\n          bpf: not a ((( filter\n"), "bpf \"not a ((( filter\" is not a valid filter"},
+    };
+    // a name that contains "already" is not taken for a name in use
+    for (const std::string name : {"core", "already_x"}) {
+        for (const auto &[body, error] : refused) {
+            CAPTURE(name, body);
+            httplib::Response res;
+            api::post_policies(*registry.policy_manager(), renamed(body, name), res);
+            CHECK(res.status == 422);
+            CHECK_THAT(json::parse(res.body)["error"].get<std::string>(), Catch::Matchers::StartsWith(fmt::format("policy [{}] failed to start: {}", name, error)));
+        }
+    }
+    CHECK(registry.policy_manager()->module_get_keys().empty());
+    CHECK(registry.input_manager()->module_get_keys().empty());
+    CHECK(registry.handler_manager()->module_get_keys().empty());
+}
+
+TEST_CASE("A policy POST that fails to start for a reason of the host answers 500, whatever its name", "[api][policies]")
+{
+    CoreRegistry registry;
+    visor::load_builtin_plugins(registry);
+    registry.start(nullptr);
+    // a value pcap reads, but this host has no such file
+    REQUIRE_NOTHROW(registry.tap_manager()->load_from_str("visor:\n  taps:\n    captures:\n      input_type: pcap\n      config:\n        pcap_file: does/not/exist.pcap\n"));
+
+    for (const std::string name : {"core", "already_x"}) {
+        CAPTURE(name);
+        httplib::Response res;
+        api::post_policies(*registry.policy_manager(), renamed(core_policy("        tap: captures\n        input_type: pcap\n"), name), res);
+        CHECK(res.status == 500);
+        CHECK(json::parse(res.body) == json{{"error", fmt::format("policy [{}] failed to start: Cannot open pcap/pcapng file", name)}});
+    }
+    CHECK(registry.policy_manager()->module_get_keys().empty());
+    CHECK(registry.input_manager()->module_get_keys().empty());
 }

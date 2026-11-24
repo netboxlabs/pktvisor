@@ -84,8 +84,14 @@ void DnsStreamHandler::start()
             _register_predicate_filter(Filters::OnlyRCode, "only_rcode", std::to_string(want_code));
         } else {
             for (const auto &rcode : rcodes) {
-                if (std::all_of(rcode.begin(), rcode.end(), ::isdigit)) {
-                    auto value = std::stoul(rcode);
+                // an empty value is looked up as a name, and refused as one
+                if (!rcode.empty() && std::all_of(rcode.begin(), rcode.end(), ::isdigit)) {
+                    unsigned long value{0};
+                    try {
+                        value = std::stoul(rcode);
+                    } catch (const std::out_of_range &) {
+                        throw ConfigException(fmt::format("DnsStreamHandler: only_rcode filter contained an invalid/unsupported rcode: {}", rcode));
+                    }
                     if (RCodeNames.find(value) == RCodeNames.end()) {
                         throw ConfigException(fmt::format("DnsStreamHandler: only_rcode filter contained an invalid/unsupported rcode: {}", value));
                     }
@@ -126,8 +132,14 @@ void DnsStreamHandler::start()
     if (config_exists("only_qtype")) {
         _f_enabled.set(Filters::OnlyQtype);
         for (const auto &qtype : config_get<StringList>("only_qtype")) {
-            if (std::all_of(qtype.begin(), qtype.end(), ::isdigit)) {
-                auto value = std::stoul(qtype);
+            // an empty value is looked up as a name, and refused as one
+            if (!qtype.empty() && std::all_of(qtype.begin(), qtype.end(), ::isdigit)) {
+                unsigned long value{0};
+                try {
+                    value = std::stoul(qtype);
+                } catch (const std::out_of_range &) {
+                    throw ConfigException(fmt::format("DnsStreamHandler: only_qtype filter contained an invalid/unsupported qtype: {}", qtype));
+                }
                 if (QTypeNames.find(value) == QTypeNames.end()) {
                     throw ConfigException(fmt::format("DnsStreamHandler: only_qtype filter contained an invalid/unsupported qtype: {}", value));
                 }

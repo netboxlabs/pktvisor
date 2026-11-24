@@ -248,17 +248,17 @@ void period_error(const PeriodException &e, httplib::Response &res)
     res.set_content(json{{"error", e.what()}}.dump(), "text/json");
 }
 
-// A POST the load refused. The load's checks throw an invalid_argument for a body they refuse as written, and
-// yaml-cpp throws for a body that is not YAML or holds a value of the wrong shape: these routes read no YAML
-// but the body. A name in use says "already". Anything else, such as a policy that does not start, is not
-// the request's fault.
+// A POST the load refused. The load throws an invalid_argument for a body it refuses, as written or as the policy
+// starts, and yaml-cpp throws for a body that is not YAML or holds a value of the wrong shape: these routes read no
+// YAML but the body. A name in use is a ModuleExistsException, told by its type, since the message holds names the
+// body chose. Anything else, such as a port in use as a policy starts, is not the request's fault.
 void load_error(const std::exception &e, httplib::Response &res)
 {
     if (dynamic_cast<const YAML::ParserException *>(&e)) {
         res.status = 400;
     } else if (dynamic_cast<const std::invalid_argument *>(&e) || dynamic_cast<const YAML::Exception *>(&e)) {
         res.status = 422;
-    } else if (std::string(e.what()).find("already") != std::string::npos) {
+    } else if (dynamic_cast<const ModuleExistsException *>(&e)) {
         res.status = 409;
     } else {
         res.status = 500;

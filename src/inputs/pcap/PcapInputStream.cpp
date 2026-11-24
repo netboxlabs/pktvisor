@@ -22,6 +22,7 @@
 #include <pcapplusplus/Logger.h>
 #include <pcapplusplus/PacketUtils.h>
 #include <pcapplusplus/PcapFileDevice.h>
+#include <pcapplusplus/PcapFilter.h>
 #include <pcapplusplus/SystemUtils.h>
 #ifdef __GNUC__
 #pragma GCC diagnostic pop
@@ -36,6 +37,16 @@
 using namespace std::chrono;
 
 namespace visor::input::pcap {
+
+// a BPF filter the capture refused: one that compiles for no capture is the config's, which the admin API answers
+// 422; one that fails only for this capture, such as for its link type, is the host's
+[[noreturn]] static void refuse_bpf(const std::string &filter, const char *msg)
+{
+    if (!pcpp::BPFStringFilter(filter).verifyFilter()) {
+        throw ConfigException(fmt::format("bpf \"{}\" is not a valid filter", filter));
+    }
+    throw PcapException(msg);
+}
 
 // static callbacks for PcapPlusPlus
 static void _tcp_message_ready_cb(int8_t side, const pcpp::TcpStreamData &tcpData, void *cookie)
@@ -131,18 +142,23 @@ void PcapInputStream::start()
         } else if (req_source == "mock") {
             _cur_pcap_source = PcapSource::mock;
         } else {
-            throw PcapException("unknown pcap source");
+            throw ConfigException("unknown pcap source");
         }
     }
 
-    parse_host_spec();
+    try {
+        parse_host_spec();
+    } catch (const lib::utils::UtilsException &e) {
+        // a host_spec entry that is not an address or a CIDR: the config's, which the admin API answers 422
+        throw ConfigException(e.what());
+    }
 
     std::string TARGET;
     pcpp::IPv4Address interfaceIP4;
     pcpp::IPv6Address interfaceIP6;
     if (_cur_pcap_source == PcapSource::libpcap || _cur_pcap_source == PcapSource::af_packet) {
         if (!config_exists("iface")) {
-            throw PcapException("no iface was specified for live capture");
+            throw ConfigException("no iface was specified for live capture");
         }
         if (!config_exists("bpf")) {
             config_set("bpf", "");
@@ -490,7 +506,7 @@ void PcapInputStream::_open_pcap(const std::string &fileName, const std::string 
     // set BPF filter if set by the user
     if (bpfFilter != "") {
         if (!reader->setFilter(bpfFilter))
-            throw PcapException("Cannot set BPF filter to pcap file");
+            refuse_bpf(bpfFilter, "Cannot set BPF filter to pcap file");
     }
 
     pcpp::RawPacket rawPacket;
@@ -571,7 +587,7 @@ void PcapInputStream::_open_libpcap_iface(const std::string &bpfFilter)
 
     // set BPF filter if set by the user
     if (bpfFilter != "" && !_pcapDevice->setFilter(bpfFilter)) {
-        throw PcapException("Cannot set BPF filter to interface");
+        refuse_bpf(bpfFilter, "Cannot set BPF filter to interface");
     }
 
     // start capturing packets with stats info

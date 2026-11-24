@@ -1,7 +1,9 @@
+#include "FlowException.h"
 #include "FlowInputStream.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
+#include <catch2/matchers/catch_matchers_exception.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/catch_test_visor.hpp>
 
@@ -186,7 +188,19 @@ TEST_CASE("sflow udp socket without bind", "[flow][sflow][udp]")
     FlowInputStream stream{"sflow-test"};
     stream.config_set("flow_type", "sflow");
 
-    CHECK_THROWS_WITH(stream.start(), "flow config must specify port and bind");
+    // a ConfigException: the policy's config, so the admin API answers 422
+    CHECK_THROWS_MATCHES(stream.start(), visor::ConfigException, Catch::Matchers::Message("flow config must specify port and bind"));
+}
+
+TEST_CASE("flow refuses an unknown flow_type", "[flow]")
+{
+    FlowInputStream stream{"flow-type-test"};
+    stream.config_set("flow_type", "nope");
+    stream.config_set("bind", "127.0.0.1");
+    stream.config_set("port", static_cast<uint64_t>(6349));
+
+    CHECK_THROWS_MATCHES(stream.start(), visor::ConfigException, Catch::Matchers::Message("invalid flow_type \"nope\". Supported types: \"sflow\", \"netflow\" and \"ipfix\""));
+    CHECK_FALSE(stream.running());
 }
 
 TEST_CASE("flow udp socket on a port in use fails to start", "[flow][udp]")
@@ -205,6 +219,8 @@ TEST_CASE("flow udp socket on a port in use fails to start", "[flow][udp]")
     second.config_set("flow_type", "netflow");
     second.config_set("bind", bind);
     second.config_set("port", port);
+    // not a ConfigException: the host's, so the admin API answers 500
+    CHECK_THROWS_AS(second.start(), FlowException);
     CHECK_THROWS_WITH(second.start(), Catch::Matchers::StartsWith("unable to bind flow UDP server on 127.0.0.1:6345: ") && Catch::Matchers::ContainsSubstring("address already in use"));
     CHECK_FALSE(second.running());
     CHECK_NOTHROW(second.stop());
@@ -356,7 +372,7 @@ TEST_CASE("flow udp socket bind must be an address", "[flow][udp]")
     stream.config_set("bind", "localhost");
     stream.config_set("port", static_cast<uint64_t>(6348));
 
-    CHECK_THROWS_WITH(stream.start(), "flow bind \"localhost\" is not an IPv4 or IPv6 address");
+    CHECK_THROWS_MATCHES(stream.start(), visor::ConfigException, Catch::Matchers::Message("flow bind \"localhost\" is not an IPv4 or IPv6 address"));
     CHECK_FALSE(stream.running());
 }
 
@@ -368,7 +384,7 @@ TEST_CASE("flow udp socket port must be 1-65535", "[flow][udp]")
         stream.config_set("bind", "127.0.0.1");
         stream.config_set("port", port);
 
-        CHECK_THROWS_WITH(stream.start(), fmt::format("flow port {} is out of range 1-65535", port));
+        CHECK_THROWS_MATCHES(stream.start(), visor::ConfigException, Catch::Matchers::Message(fmt::format("flow port {} is out of range 1-65535", port)));
         CHECK_FALSE(stream.running());
     }
 }

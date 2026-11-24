@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <stdexcept>
+#include <string>
+
 namespace visor::input::flow {
 
 class FlowException : public std::runtime_error

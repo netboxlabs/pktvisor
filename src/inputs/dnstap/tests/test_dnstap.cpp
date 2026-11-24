@@ -2,6 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
+#include <catch2/matchers/catch_matchers_exception.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include <catch2/catch_test_visor.hpp>
 #include <cstring>
@@ -601,6 +602,36 @@ TEST_CASE("dnstap unix socket another server listens on is refused", "[dnstap][u
     CHECK(fd >= 0);
     ::close(fd);
     CHECK_NOTHROW(first.stop());
+}
+
+TEST_CASE("dnstap refuses its config as a ConfigException", "[dnstap]")
+{
+    // the admin API answers 422 for a ConfigException a policy's input throws as it starts, and 500 for anything else
+    using Catch::Matchers::Message;
+    SECTION("neither socket, tcp nor dnstap_file")
+    {
+        DnstapInputStream stream{"dnstap-test"};
+        CHECK_THROWS_MATCHES(stream.start(), visor::ConfigException, Message("config must specify one of: socket, dnstap_file"));
+    }
+    SECTION("a tcp address without a port")
+    {
+        DnstapInputStream stream{"dnstap-test"};
+        stream.config_set("tcp", "127.0.0.1");
+        CHECK_THROWS_MATCHES(stream.start(), visor::ConfigException, Message("invalid tcp address specification, use HOST:PORT"));
+    }
+    SECTION("a tcp port that is not a number")
+    {
+        DnstapInputStream stream{"dnstap-test"};
+        stream.config_set("tcp", "127.0.0.1:abc");
+        CHECK_THROWS_MATCHES(stream.start(), visor::ConfigException, Message("unable to parse tcp address specification, use HOST:PORT"));
+    }
+    SECTION("a tcp host that is not an address")
+    {
+        DnstapInputStream stream{"dnstap-test"};
+        stream.config_set("tcp", "localhost:30131");
+        CHECK_THROWS_MATCHES(stream.start(), visor::ConfigException, Message("dnstap tcp host \"localhost\" is not an IPv4 or IPv6 address"));
+        CHECK_FALSE(stream.running());
+    }
 }
 
 TEST_CASE("dnstap unix socket path that is not a socket is refused", "[dnstap][unix]")

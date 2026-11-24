@@ -26,10 +26,17 @@ public:
     {
     }
 
-    const std::string &name()
+    const std::string &name() const
     {
         return _name;
     }
+};
+
+// a name in use: the admin API answers 409
+class ModuleExistsException : public ModuleException
+{
+public:
+    using ModuleException::ModuleException;
 };
 
 /**
@@ -78,7 +85,7 @@ public:
     {
         std::unique_lock lock(_map_mutex);
         if (_map.count(m->name())) {
-            throw ModuleException(m->name(), fmt::format("module name '{}' already exists", m->name()));
+            throw ModuleExistsException(m->name(), fmt::format("module name '{}' already exists", m->name()));
         }
         _map.emplace(m->name(), std::move(m));
     }
